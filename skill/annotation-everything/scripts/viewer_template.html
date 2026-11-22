@@ -213,8 +213,12 @@ body.focus-mode.focus-composer #focusHint{display:none}
 .keys{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-18)}
 .notes{margin:0}
 .finalize-all{padding:var(--ae-space);border-bottom:1px solid var(--ae-line)}
-.finalize-all[hidden],#finalizeAllBtn[hidden]{display:none}
+.finalize-all[hidden],#finalizeAllBtn[hidden],#videoBatchTools[hidden],#videoBatchBlocked[hidden]{display:none}
+.finalize-all-row{display:flex;gap:var(--ae-gap-6);align-items:center;flex-wrap:wrap}
+#videoBatchTools{display:flex;gap:var(--ae-gap-6);align-items:center;flex-wrap:wrap}
+#videoBatchTools button{font:inherit;font-size:var(--ae-small)}
 #finalizeAllInfo{font-size:var(--ae-small);color:var(--ae-mut);white-space:pre-line}
+#videoBatchBlocked{font-size:var(--ae-small);color:var(--ae-warning);white-space:pre-line;margin-top:2px}
 .note{border:1px solid var(--ae-danger-line);background:var(--ae-danger-bg);border-radius:var(--ae-radius-md);padding:var(--ae-space) var(--ae-gap-10);margin-bottom:var(--ae-space);font-size:var(--ae-body);line-height:1.65}
 .note.done{background:var(--ae-success-bg);border-color:var(--ae-success-line)}
 .note.done .body{text-decoration:line-through;color:var(--ae-mut)}
@@ -243,6 +247,12 @@ body.focus-mode.focus-composer #focusHint{display:none}
 .vr-hist{font-size:var(--ae-small);color:var(--ae-mut)}
 .vr-hist ul{margin:var(--ae-gap-3) 0 0;padding-left:16px}
 .vr-hist li{margin:2px 0}
+.vr-head{display:flex;align-items:center;gap:var(--ae-gap-5);flex-wrap:wrap}
+.vr-pick{display:inline-flex;align-items:center;gap:4px;margin-left:auto;font-size:var(--ae-small);color:var(--ae-navy);cursor:pointer}
+.vr-reply{color:var(--ae-accent);font-size:var(--ae-small)}
+.vr-ok{color:var(--ae-green);font-size:var(--ae-small);font-weight:600}
+.vr-form{display:flex;flex-direction:column;gap:var(--ae-gap-4);margin-top:2px}
+.vr-form textarea{min-height:46px;font-size:var(--ae-small)}
 .note.drafted{border-color:var(--ae-warm-line)}.note .trail{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-3)}
 .note .trail b{font-weight:600;color:var(--ae-amber)}
 .form{display:flex;flex-direction:column;gap:var(--ae-gap-6);margin-top:var(--ae-space)}
@@ -570,7 +580,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
     <section id="bottomPanel" data-aria="viewer.layout.panel" data-p-key="&#92;">
       <section id="analysisPanel" hidden><div class="pane-head"><div id="analysisPanelTabs" role="tablist"><button role="tab" data-analysis-tab="timeline" aria-controls="analysisTimeline" data-msg="viewer.analysis.timeline"></button><button role="tab" data-analysis-tab="assumptions" aria-controls="analysisAssumptions" data-msg="viewer.life.assumptions"></button><button role="tab" data-analysis-tab="parked" aria-controls="analysisParked" data-msg="viewer.life.parked"></button><button role="tab" data-analysis-tab="facts" aria-controls="analysisFacts" data-msg="viewer.life.facts"></button></div><button data-layout-toggle="panel" data-title="viewer.layout.panel" data-p-key="&#92;" aria-controls="analysisPanelLists" data-msg="viewer.layout.panel"></button></div><div id="analysisPanelLists"><ol id="analysisTimeline" role="tabpanel"></ol><ol id="analysisAssumptions" role="tabpanel" hidden></ol><ol id="analysisParked" role="tabpanel" hidden></ol><ol id="analysisFacts" role="tabpanel" hidden></ol></div></section>
       <div class="panel-tabs">        <button data-act="seelist" id="seeList" data-title="viewer.seeListTitle"><span id="seeListLabel" data-msg="viewer.seeList">本页批注</span> <span id="nhere">0</span></button><button id="allTab" data-msg="viewer.allTitle"></button><button id="batchesTab" data-msg="viewer.batch.title"></button><button  class="icon-button" data-layout-toggle="panel" data-title="viewer.layout.panel" data-aria="viewer.layout.panel" data-p-key="&#92;" aria-controls="panelBody"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15h18"/></svg></button></div>
-      <div id="panelBody"><div class="notes"><div id="finalizeAllBar" class="finalize-all" hidden><button id="finalizeAllBtn" hidden></button><div id="finalizeAllInfo" role="status" aria-live="polite"></div></div><div id="nlist"></div></div>
+      <div id="panelBody"><div class="notes"><div id="finalizeAllBar" class="finalize-all" hidden><div class="finalize-all-row"><button id="finalizeAllBtn" hidden></button><span id="videoBatchTools" hidden><button id="videoBatchSelectAll" type="button"></button><button id="videoBatchClear" type="button"></button><span id="videoBatchCount" class="hint"></span></span></div><div id="finalizeAllInfo" role="status" aria-live="polite"></div><div id="videoBatchBlocked" hidden></div></div><div id="nlist"></div></div>
     <div class="form" id="nform"><div class="quote" id="qbox"></div><span id="styleChip"></span><span id="pptxChip"></span>
       <textarea id="ntext" rows="1" placeholder="写修改意见（C）。可先选中报告或讲稿里的文字：直接删除（D）、改为（R），或作为引用写批注；也可以先「在报告上标注」（单击放点、拖动框选）。"></textarea>
       <div class="row"><span id="targetLabel" class="sr-only">对象</span> <select id="ntarget" aria-labelledby="targetLabel"><option value="报告">报告</option><option value="讲稿">讲稿</option><option value="报告和讲稿">报告和讲稿</option></select>
@@ -895,7 +905,7 @@ const isDraft=x=>x.status==="drafted";   // 两段流程：初改完成、等复
 let flight=new Set();                    // 已交给 Agent、还在路上（等待接收 / 处理中 / 等待复核 / 复核中）的批注
 const inFlight=x=>!isDone(x)&&!isDraft(x)&&flight.has(x.id);
 const TRAIL_ACTION={drafted:"viewer.batch.trail.action.drafted",resolved:"viewer.batch.trail.action.resolved",finalized:"viewer.batch.trail.action.finalized",approved:"viewer.batch.trail.action.approved",revised:"viewer.batch.trail.action.revised",returned:"viewer.batch.trail.action.returned",reopened:"viewer.batch.trail.action.reopened",accepted:"viewer.batch.trail.action.accepted"};
-const videoTrailAction={missing_evidence:"viewer.batch.trail.action.missingEvidence",question:"viewer.batch.trail.action.question",relocate:"viewer.batch.trail.action.relocate",relocated:"viewer.batch.trail.action.relocated",failed:"viewer.batch.trail.action.failed"};
+const videoTrailAction={missing_evidence:"viewer.batch.trail.action.missingEvidence",question:"viewer.batch.trail.action.question",replied:"viewer.batch.trail.action.replied",relocate:"viewer.batch.trail.action.relocate",relocated:"viewer.batch.trail.action.relocated",failed:"viewer.batch.trail.action.failed"};
 // 痕迹动作名与「第 N 批」按当前语言，执行者名称和理由保持原文
 function trailText(x,last){const t=Array.isArray(x.trail)?x.trail.slice(-(last||4)):[];
   return t.filter(e=>e&&typeof e==="object").map(e=>{const who=e.by==="page"?tMsg("viewer.batch.trail.whoPage"):e.by==="claude"?"Claude":String(e.by||"");
@@ -1033,6 +1043,7 @@ ${RCSS}
 #handPick .hp-head button{font:inherit}
 #handPick .hp-item{display:flex;gap:8px;align-items:baseline;margin:2px 0;font-size:12px}
 #handPick .hp-loc{white-space:nowrap;color:var(--ae-dim,#888)}
+#handPick .hp-tag{font-size:11px;padding:0 5px;border-radius:3px;background:rgba(128,128,128,.16);white-space:nowrap}
 #handPick .hp-text{overflow:hidden;text-overflow:ellipsis}
 #videoError,#videoFailureBanner{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
 #videoFailureBanner{padding:4px 8px;background:rgba(160,40,30,.35);border:1px solid #d9776c;border-radius:4px}
@@ -1064,10 +1075,19 @@ ${RCSS}
 .vc-reloc-row .vc-grow input{flex:1;min-width:120px}
 #videoRelocateErr{color:#ffb4a8;font-size:12px}
 #videoRelocateErr[hidden]{display:none}
+#videoCompareReturnBox,#videoCompareReplyBox{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px;background:#1e232b;border:1px solid #3c4657;border-radius:6px}
+#videoCompareReturnBox[hidden],#videoCompareReplyBox[hidden],#videoCompareDecisionErr[hidden]{display:none}
+#videoCompareReturnBox input,#videoCompareReplyBox input{flex:1;min-width:180px;font:inherit}
+#videoCompareReturnBox button,#videoCompareReplyBox button{font:inherit;background:#2d3440;color:#fff;border:1px solid #4d5666;border-radius:4px;padding:2px 8px;cursor:pointer}
+#videoCompareReturnBox button.primary,#videoCompareReplyBox button.primary{background:#2a78d6;border-color:#3b89e8}
+#videoCompareDecisionErr{color:#ffb4a8;font-size:12px;padding:0 4px}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"><section id="videoStage" hidden>
 <div id="videoViewport"><video id="videoPlayer" controls playsinline preload="metadata"></video><div id="videoMarkLayer"></div></div>
 <div id="videoCompareStage" hidden>
-<div id="videoCompareHead"><div class="vc-head-info"><span id="videoCompareState" class="chip"></span><span id="videoCompareNoteText"></span></div><div class="vc-head-acts"><button id="videoCompareApprove" type="button" class="primary" hidden></button><button id="videoCompareToggleRelocate" type="button" hidden></button><button id="videoCompareClose" type="button"></button></div></div>
+<div id="videoCompareHead"><div class="vc-head-info"><span id="videoCompareState" class="chip"></span><span id="videoCompareNoteText"></span></div><div class="vc-head-acts"><button id="videoCompareApprove" type="button" class="primary" hidden></button><button id="videoCompareReturnBtn" type="button" hidden></button><button id="videoCompareToggleRelocate" type="button" hidden></button><button id="videoCompareClose" type="button"></button></div></div>
+<div id="videoCompareReturnBox" hidden><span id="videoCompareReturnLbl"></span><input id="videoCompareReturnReason" type="text"><button id="videoCompareReturnSave" type="button" class="primary"></button><button id="videoCompareReturnCancel" type="button"></button></div>
+<div id="videoCompareReplyBox" hidden><span id="videoCompareReplyLbl"></span><input id="videoCompareReplyInput" type="text"><button id="videoCompareReplySave" type="button" class="primary"></button></div>
+<div id="videoCompareDecisionErr" role="alert" hidden></div>
 <div id="videoCompareGrid">
 <div id="videoCompareBeforePane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareBeforeTitle"></strong><span id="videoCompareBeforeInfo"></span></div><div id="videoCompareBeforeBox" class="vc-box"><video id="videoCompareBefore" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareBeforeMarks" class="vc-marks"></div></div><div id="videoCompareBeforeBar" class="vc-bar"><button id="videoComparePlayBefore" type="button"></button><button id="videoComparePauseBefore" type="button"></button><span id="videoCompareBeforeTime"></span></div></div>
 <div id="videoCompareAfterPane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareAfterTitle"></strong><span id="videoCompareAfterInfo"></span></div><div id="videoCompareAfterBox" class="vc-box"><video id="videoCompareAfter" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareAfterMarks" class="vc-marks"></div></div><div id="videoCompareAfterBar" class="vc-bar"><button id="videoComparePlayAfter" type="button"></button><button id="videoComparePauseAfter" type="button"></button><span id="videoCompareAfterTime"></span></div><div id="videoCompareAfterReason" class="vc-reason" hidden></div></div>
@@ -1662,6 +1682,7 @@ function applyServer(d,quietHand){
   if(d.handoff)setHand(d.handoff,quietHand);else if(!quietHand)renderHand();
   if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0){idx0=d.indexMtime;$("reloadBanner").hidden=false;fit()}
   if(d.rev!==rev){setDoc(d);pend.get().forEach(op=>{if(op.kind!=="handoff")applyLocal(op)});refreshList()}
+  if(typeof videoSyncApproveSel==="function")videoSyncApproveSel();
   if(typeof videoCompareSync==="function")videoCompareSync();
   if(!resumeReady){resumeReady=true;renderResume()}}
 async function poll(){
@@ -1905,6 +1926,8 @@ function videoReceiptReady(note,manifest){
   const versions=(manifest&&Array.isArray(manifest.versions))?manifest.versions:[];
   const version=versions.find(v=>v&&v.versionId===verId);if(!version)return false;
   return videoTargetValid(vr.target,version)}
+function videoBatchApprovable(note,manifest){
+  return !!(note&&note.status==="drafted"&&videoReceiptReady(note,manifest)&&videoNoteState(note)==="pending_review")}
 function videoTargetText(target,fallbackVersionId){
   if(!target||typeof target!=="object")return"";
   const ver=String(target.versionId||fallbackVersionId||"");
@@ -1946,6 +1969,14 @@ function videoTimelineHistory(note){
       const reason=e.reason||e.summary||"";
       const text=reason?tMsg("viewer.video.historyRelocateReason",{by:e.by||"page",from,to,reason}):tMsg("viewer.video.historyRelocate",{by:e.by||"page",from,to});
       return{...e,text}}
+    if(e.source==="decision"){
+      const act=e.action||e.decision||"",by=e.by||"page";
+      if(act==="approve"||act==="approved"){
+        return{...e,text:tMsg("viewer.video.historyApproved",{by,version:e.versionId||"—",batch:e.batch!=null?e.batch:"—"})}}
+      if(act==="return"||act==="returned"){
+        return{...e,text:tMsg("viewer.video.historyReturned",{by,reason:e.returnReason||e.reason||""})}}
+      if(act==="reply"||act==="replied"){
+        return{...e,text:tMsg("viewer.video.historyReplied",{by,reply:e.reply||""})}}}
     const st=tMsg("viewer.video.state."+(e.state||"pending_review")),ver=e.versionId||"—";
     const tgt=e.target?videoTargetText(e.target,e.versionId):"";
     const detail=[tgt,e.summary||e.question||e.relocateReason||e.failure||""].filter(Boolean).join(" · ");
@@ -1962,12 +1993,15 @@ function videoComparePair(note,manifest){
   const afterVerId=(vr&&vr.target&&vr.target.versionId)||(vr&&vr.versionId)||(m&&m.currentVersionId)||(beforeVer&&beforeVer.versionId)||null;
   const afterVer=findVer(afterVerId)||vers[0]||null;
   const afterSpec=vr&&vr.target?videoTargetPlaySpec(vr.target,afterVer||vr.target):null;
-  const canRelocate=!!(note.status!=="resolved"&&(vr||note.status==="drafted"||vers.length>1));
+  const approved=note.status==="resolved"||(vr&&vr.decision==="approved");
+  const canRelocate=!!(!approved&&(vr||note.status==="drafted"||vers.length>1));
   return{noteId:note.id||"",text:note.text||"",state:videoNoteState(note),ready:videoReceiptReady(note,m),canRelocate,
+    batch:vr&&vr.batch!=null?vr.batch:(note.draftBatch!=null?note.draftBatch:null),
+    versionId:vr&&vr.versionId||null,
     before:{version:beforeVer,versionId:beforeVer&&beforeVer.versionId||null,url:beforeVer&&beforeVer.url||null,anchor:orig,spec:beforeSpec,mark:orig&&orig.mark||null},
     after:{version:afterVer,versionId:afterVer&&afterVer.versionId||afterVerId||null,url:afterVer&&afterVer.url||null,target:vr&&vr.target||null,spec:afterSpec,mark:vr&&vr.target&&vr.target.mark||null,
-      outcome:vr&&vr.outcome||null,summary:vr&&vr.summary||"",question:vr&&vr.question||"",relocateReason:vr&&vr.relocateReason||"",relocatedReason:vr&&vr.relocatedReason||"",
-      failure:vr&&vr.failure||"",returnReason:vr&&vr.returnReason||"",relocatedFrom:vr&&vr.relocatedFrom||null,history:videoTimelineHistory(note)}}}
+      outcome:vr&&vr.outcome||null,summary:vr&&vr.summary||"",question:vr&&vr.question||"",reply:vr&&vr.reply||"",relocateReason:vr&&vr.relocateReason||"",relocatedReason:vr&&vr.relocatedReason||"",
+      failure:vr&&vr.failure||"",returnReason:vr&&vr.returnReason||"",decision:vr&&vr.decision||null,decisionBatch:vr&&vr.decisionBatch||null,decidedBy:vr&&vr.decidedBy||"",relocatedFrom:vr&&vr.relocatedFrom||null,history:videoTimelineHistory(note)}}}
 function videoPriorSummary(rf){
   if(!rf||typeof rf!=="object")return"";
   const parts=[];
@@ -1976,30 +2010,45 @@ function videoPriorSummary(rf){
   else if(rf.versionId)parts.push(rf.versionId);
   if(rf.relocateReason)parts.push(rf.relocateReason);
   return parts.filter(Boolean).join(" · ")}
-function videoReceiptCardHtml(note,manifest){
+function videoReceiptCardHtml(note,manifest,opts){
   if(!note||typeof note!=="object")return"";
   const m=manifest||(typeof videoManifest==="function"?videoManifest():null);
   const eid=escH(note.id||""),st=videoNoteState(note),vr=note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
   const stateText=tMsg("viewer.video.state."+st),verTag=vr&&vr.versionId?" · "+escH(vr.versionId):"";
   const delTag=vr&&vr.outcome==="deleted"?`<span class="vr-del-tag">${escH(tMsg("viewer.video.deletedShotTag"))}</span>`:"";
-  const parts=[`<div class="vr-box"><div><span class="chip vr-chip vr-${escH(st)}">${escH(stateText)}${verTag}</span>${delTag}</div>`];
+  const batchPickable=videoBatchApprovable(note,m);
+  const selSet=(opts&&opts.batchSel)!==undefined?opts.batchSel:(typeof videoApproveSel!=="undefined"?videoApproveSel:null);
+  const picked=batchPickable&&selSet&&typeof selSet.has==="function"&&selSet.has(note.id);
+  const pickHtml=batchPickable?`<label class="vr-pick"><input type="checkbox" data-act="video-batch-pick" data-id="${eid}"${picked?" checked":""}><span>${escH(tMsg("viewer.video.batchPickItem"))}</span></label>`:"";
+  const parts=[`<div class="vr-box"><div class="vr-head"><span class="chip vr-chip vr-${escH(st)}">${escH(stateText)}${verTag}</span>${delTag}${pickHtml}</div>`];
   if(note.video){parts.push(`<div class="vr-row"><span>${escH(tMsg("viewer.video.originalLoc",{loc:videoLocText(note.video)}))}</span><button type="button" class="vr-jump" data-act="video-jump-orig" data-id="${eid}">${escH(tMsg("viewer.video.jumpOriginal"))}</button></div>`)}
   if(vr){
     if(vr.target){const nt=videoTargetText(vr.target,vr.versionId);
       if(nt)parts.push(`<div class="vr-row"><span>${escH(tMsg("viewer.video.newLoc",{loc:nt}))}</span><button type="button" class="vr-jump" data-act="video-jump-target" data-id="${eid}">${escH(tMsg("viewer.video.jumpNew"))}</button></div>`)}
     if(vr.summary)parts.push(`<div class="vr-sum">${escH(tMsg("viewer.video.changeSummary",{version:vr.versionId||"—",summary:vr.summary})).replace(/\n/g,"<br>")}</div>`);
     if(vr.question)parts.push(`<div class="vr-q">${escH(tMsg("viewer.video.questionLabel",{question:vr.question}))}</div>`);
+    if(vr.reply)parts.push(`<div class="vr-reply">${escH(tMsg("viewer.video.replyLabel",{reply:vr.reply}))}</div>`);
     if(vr.relocateReason)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.relocateLabel",{reason:vr.relocateReason}))}</div>`);
     if(vr.relocatedReason)parts.push(`<div class="vr-reloc">${escH(tMsg("viewer.video.relocatedReason",{reason:vr.relocatedReason}))}</div>`);
     if(vr.relocatedFrom){const prior=videoPriorSummary(vr.relocatedFrom);if(prior)parts.push(`<div class="vr-reloc">${escH(tMsg("viewer.video.relocatedFrom",{detail:prior}))}</div>`)}
     if(vr.failure)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.failureLabel",{reason:vr.failure}))}</div>`);
     if(vr.returnReason)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.returnLabel",{reason:vr.returnReason}))}</div>`);
+    if(st==="approved"&&vr.decision==="approved"){
+      parts.push(`<div class="vr-ok">${escH(tMsg("viewer.video.approvedInfo",{version:vr.versionId||"—",batch:vr.decisionBatch!=null?vr.decisionBatch:(vr.batch!=null?vr.batch:"—"),by:vr.decidedBy||"page"}))}</div>`)}
     if(st==="missing_evidence")parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.missingEvidenceHint"))}</div>`);
+    if(st==="needs_reply"&&note.status!=="resolved"){
+      const rDraft=(typeof videoReplyBuf!=="undefined"&&videoReplyBuf&&note.id in videoReplyBuf)?videoReplyBuf[note.id]:(vr.reply||"");
+      parts.push(`<div class="vr-form"><textarea data-vid-reply="${eid}" placeholder="${escH(tMsg("viewer.video.replyPlaceholder"))}">${escH(rDraft)}</textarea><div class="vr-acts"><button type="button" class="vr-jump" data-act="video-reply-save" data-id="${eid}">${escH(tMsg("viewer.video.replySaveBtn"))}</button></div></div>`)}
+    const isRetOpen=typeof videoReturnOpen!=="undefined"&&videoReturnOpen===note.id&&st!=="approved";
+    if(isRetOpen){
+      const retDraft=(typeof videoReturnBuf!=="undefined"&&videoReturnBuf&&note.id in videoReturnBuf)?videoReturnBuf[note.id]:(vr.returnReason||"");
+      parts.push(`<div class="vr-form"><textarea data-vid-return="${eid}" placeholder="${escH(tMsg("viewer.video.returnPlaceholder"))}">${escH(retDraft)}</textarea><div class="vr-acts"><button type="button" class="vr-jump" data-act="video-return-save" data-id="${eid}">${escH(tMsg("viewer.video.returnSaveBtn"))}</button><button type="button" class="vr-jump" data-act="video-return-cancel" data-id="${eid}">${escH(tMsg("viewer.cancel"))}</button></div></div>`)}
     const hist=videoTimelineHistory(note);
-    if(hist.length>1||(hist.length>0&&vr.relocatedFrom))
+    if(hist.length>1||(hist.length>0&&(vr.relocatedFrom||st==="returned"||st==="approved"||!!vr.reply||hist.some(h=>h.source==="decision"||h.source==="relocate"))))
       parts.push(`<details class="vr-hist"><summary>${escH(tMsg("viewer.video.historyToggle",{count:hist.length}))}</summary><ul>${hist.map(h=>`<li>${escH(h.text)}</li>`).join("")}</ul></details>`)}
   const vers=m&&Array.isArray(m.versions)?m.versions:[];
-  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!(note.status!=="resolved"&&(vr||note.status==="drafted"||vers.length>1));
+  const approvedDone=st==="approved";
+  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!(!approvedDone&&note.status!=="resolved"&&(vr||note.status==="drafted"||vers.length>1));
   if(canCompare||canRelocate)
     parts.push(`<div class="vr-acts">${canCompare?`<button type="button" class="vr-jump" data-act="video-compare" data-id="${eid}">${escH(tMsg("viewer.video.compareBtn"))}</button>`:""}${canRelocate?`<button type="button" class="vr-jump" data-act="video-relocate" data-id="${eid}">${escH(tMsg("viewer.video.relocateBtn"))}</button>`:""}</div>`);
   parts.push("</div>");return parts.join("")}
@@ -2090,9 +2139,43 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
   videoLayout()}
 
 // ---------- 视频对照与重定位 ----------
-let videoServerFeatures=new Set(),videoCompareNoteId=null,videoCompareEnds={before:null,after:null},videoComparePairState=null,videoRelocateOpen=false,videoCompareSig="";
+let videoServerFeatures=new Set(),videoCompareNoteId=null,videoCompareEnds={before:null,after:null},videoComparePairState=null,videoRelocateOpen=false,videoCompareReturnOpen=false,videoCompareSig="";
 function setVideoServerFeatures(d){videoServerFeatures=new Set(Array.isArray(d&&d.features)?d.features:[])}
 function serverSupports(name){return mode==="server"&&videoServerFeatures.has(name)}
+function videoDecisionError(err){return err&&err.message?err.message:tMsg("viewer.video.decisionOldService")}
+async function submitVideoDecision(noteId,action,opts={}){
+  if(!noteId)return null;
+  const onErr=typeof opts.onErr==="function"?opts.onErr:(msg=>toast(msg,6000));
+  if(mode!=="server"){onErr(tMsg("viewer.video.decisionNeedServer"));return null}
+  if(!serverSupports("video-decisions")){onErr(tMsg("viewer.video.decisionOldService"));return null}
+  const note=(typeof notes!=="undefined"&&Array.isArray(notes))?notes.find(n=>n.id===noteId):null;
+  const vr=note&&note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
+  const body={action};
+  if(action==="return"){
+    const rsn=String(opts.reason||"").trim();
+    if(!rsn){onErr(tMsg("viewer.video.returnNeedReason"));return null}
+    body.reason=rsn}
+  if(action==="reply"){
+    const rep=String(opts.reply||"").trim();
+    if(!rep){onErr(tMsg("viewer.video.replyNeedText"));return null}
+    body.reply=rep}
+  const expBatch=opts.expectedBatch!=null?opts.expectedBatch:(vr&&vr.batch!=null?vr.batch:(note&&note.draftBatch!=null?note.draftBatch:null));
+  const expVer=opts.expectedVersion!=null?opts.expectedVersion:(vr&&vr.versionId||null);
+  if(Number.isInteger(expBatch)&&expBatch>0)body.expectedBatch=expBatch;
+  if(typeof expVer==="string"&&expVer)body.expectedVersion=expVer;
+  try{
+    const res=await api("POST","/api/notes/"+encodeURIComponent(noteId)+"/video-decision",body);
+    if(action==="return"&&typeof videoReturnOpen!=="undefined"&&videoReturnOpen===noteId){
+      videoReturnOpen=null;if(typeof videoReturnBuf!=="undefined")delete videoReturnBuf[noteId]}
+    if(action==="reply"&&typeof videoReplyBuf!=="undefined")delete videoReplyBuf[noteId];
+    if(res&&res.doc&&typeof applyServer==="function")applyServer({...res.doc,...(res.handoff?{handoff:res.handoff}:{})},true);
+    if(typeof refreshList==="function")refreshList(true);
+    if(res&&res.replayed)toast(tMsg("viewer.video.decisionReplayed"),3500);
+    else{
+      const key=action==="approve"?"viewer.video.decisionSavedApprove":action==="return"?"viewer.video.decisionSavedReturn":"viewer.video.decisionSavedReply";
+      toast(tMsg(key),4000)}
+    return res;
+  }catch(e){onErr(videoDecisionError(e));return null}}
 function videoCompareEl(side){return sr.getElementById(side==="before"?"videoCompareBefore":"videoCompareAfter")}
 function videoCompareMarksEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeMarks":"videoCompareAfterMarks")}
 function videoCompareBoxEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeBox":"videoCompareAfterBox")}
@@ -2124,6 +2207,10 @@ function videoCompareRenderLabels(){
   setText("videoComparePauseBefore","viewer.video.compare.pause");
   setText("videoComparePauseAfter","viewer.video.compare.pause");
   setText("videoCompareApprove","viewer.video.approveBtn");
+  setText("videoCompareReturnBtn","viewer.video.returnBtn");
+  setText("videoCompareReturnSave","viewer.video.returnSaveBtn");
+  setText("videoCompareReturnCancel","viewer.cancel");
+  setText("videoCompareReplySave","viewer.video.replySaveBtn");
   setText("videoCompareToggleRelocate","viewer.video.relocateBtn");
   setText("videoRelocateVerLbl","viewer.video.relocate.version");
   setText("videoRelocateKindLbl","viewer.video.relocate.kind");
@@ -2199,7 +2286,20 @@ function videoCompareOpen(note,openRelocate=false){
   const stEl=sr.getElementById("videoCompareState");
   if(stEl){stEl.className="chip vr-chip vr-"+pair.state;stEl.textContent=tMsg("viewer.video.state."+pair.state)+(pair.after.versionId?" · "+pair.after.versionId:"")}
   const ntEl=sr.getElementById("videoCompareNoteText");if(ntEl)ntEl.textContent=pair.text||"";
-  const appBtn=sr.getElementById("videoCompareApprove");if(appBtn)appBtn.hidden=!(note.status!=="resolved"&&pair.ready);
+  const approvedDone=note.status==="resolved"||pair.state==="approved";
+  const appBtn=sr.getElementById("videoCompareApprove");if(appBtn)appBtn.hidden=!(!approvedDone&&pair.ready);
+  const retBtn=sr.getElementById("videoCompareReturnBtn");
+  if(retBtn){retBtn.hidden=!(!approvedDone&&note.videoReview&&pair.state!=="needs_reply");
+    retBtn.textContent=tMsg(pair.state==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn")}
+  const retBox=sr.getElementById("videoCompareReturnBox"),retIn=sr.getElementById("videoCompareReturnReason"),retLbl=sr.getElementById("videoCompareReturnLbl");
+  if(retLbl)retLbl.textContent=tMsg("viewer.video.returnBtn");
+  if(retIn){retIn.placeholder=tMsg("viewer.video.returnPlaceholder");if(!videoCompareReturnOpen)retIn.value=pair.after.returnReason||""}
+  if(retBox)retBox.hidden=!(videoCompareReturnOpen&&!approvedDone&&!!note.videoReview);
+  const repBox=sr.getElementById("videoCompareReplyBox"),repIn=sr.getElementById("videoCompareReplyInput"),repLbl=sr.getElementById("videoCompareReplyLbl");
+  if(repLbl)repLbl.textContent=tMsg("viewer.video.replySaveBtn");
+  if(repIn){repIn.placeholder=tMsg("viewer.video.replyPlaceholder");repIn.value=pair.after.reply||""}
+  if(repBox)repBox.hidden=!(!approvedDone&&pair.state==="needs_reply");
+  const decErr=sr.getElementById("videoCompareDecisionErr");if(decErr){decErr.hidden=true;decErr.textContent=""}
   const relBtn=sr.getElementById("videoCompareToggleRelocate");if(relBtn)relBtn.hidden=!pair.canRelocate;
   const bInfo=sr.getElementById("videoCompareBeforeInfo"),bTime=sr.getElementById("videoCompareBeforeTime"),bPlay=sr.getElementById("videoComparePlayBefore");
   const bText=videoCompareFormatReadout(pair.before.versionId,pair.before.spec,pair.before.version);
@@ -2217,8 +2317,11 @@ function videoCompareOpen(note,openRelocate=false){
     if(pair.after.relocatedReason)notesOut.push(tMsg("viewer.video.relocatedReason",{reason:pair.after.relocatedReason}));
     if(pair.after.relocatedFrom){const prior=videoPriorSummary(pair.after.relocatedFrom);if(prior)notesOut.push(tMsg("viewer.video.relocatedFrom",{detail:prior}))}
     if(pair.after.question)notesOut.push(tMsg("viewer.video.questionLabel",{question:pair.after.question}));
+    if(pair.after.reply)notesOut.push(tMsg("viewer.video.replyLabel",{reply:pair.after.reply}));
     if(pair.after.failure)notesOut.push(tMsg("viewer.video.failureLabel",{reason:pair.after.failure}));
     if(pair.after.returnReason)notesOut.push(tMsg("viewer.video.returnLabel",{reason:pair.after.returnReason}));
+    if(pair.state==="approved"&&pair.after.decision==="approved")
+      notesOut.push(tMsg("viewer.video.approvedInfo",{version:pair.after.versionId||"—",batch:pair.after.decisionBatch!=null?pair.after.decisionBatch:(pair.batch!=null?pair.batch:"—"),by:pair.after.decidedBy||"page"}));
     reasonEl.hidden=!notesOut.length;reasonEl.textContent=notesOut.join(" · ")}
   const histEl=sr.getElementById("videoCompareHistory");
   if(histEl){const items=pair.after.history||[];histEl.hidden=!items.length;histEl.textContent=items.map(h=>h.text).join(" | ")}
@@ -2231,7 +2334,7 @@ function videoCompareClose(){
   if(!videoCompareNoteId)return;
   const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");
   if(bEl)bEl.pause();if(aEl)aEl.pause();
-  videoCompareNoteId=null;videoComparePairState=null;videoRelocateOpen=false;videoCompareSig="";videoCompareEnds={before:null,after:null};
+  videoCompareNoteId=null;videoComparePairState=null;videoRelocateOpen=false;videoCompareReturnOpen=false;videoCompareSig="";videoCompareEnds={before:null,after:null};
   const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage");
   if(cs)cs.hidden=true;if(vp)vp.hidden=false;if(ctrl)ctrl.hidden=false;
   videoLayout()}
@@ -2298,10 +2401,29 @@ async function videoRelocateSave(){
     toast(tMsg("viewer.video.relocate.saved"));
     return res;
   }catch(e){setErr(e&&e.message?e.message:tMsg("viewer.video.relocate.badTarget"));return null}}
+async function videoCompareDecision(action){
+  if(!videoCompareNoteId)return null;
+  const errEl=sr.getElementById("videoCompareDecisionErr");
+  const setErr=msg=>{if(errEl){errEl.textContent=msg;errEl.hidden=!msg}};
+  setErr("");
+  const pair=videoComparePairState;
+  const reason=action==="return"?String((sr.getElementById("videoCompareReturnReason")||{}).value||"").trim():"";
+  const reply=action==="reply"?String((sr.getElementById("videoCompareReplyInput")||{}).value||"").trim():"";
+  const res=await submitVideoDecision(videoCompareNoteId,action,{
+    reason,reply,expectedBatch:pair?pair.batch:null,expectedVersion:pair?pair.versionId:null,onErr:setErr});
+  if(res&&res.note){
+    if(action!=="reply")videoCompareReturnOpen=false;
+    videoCompareOpen(res.note,false)}
+  return res}
 function videoCompareInit(){
   const closeBtn=sr.getElementById("videoCompareClose");if(closeBtn)closeBtn.onclick=()=>videoCompareClose();
   const toggleRel=sr.getElementById("videoCompareToggleRelocate");if(toggleRel)toggleRel.onclick=()=>videoRelocatePopulate(videoComparePairState,!videoRelocateOpen);
-  const approveBtn=sr.getElementById("videoCompareApprove");if(approveBtn)approveBtn.onclick=()=>{if(videoCompareNoteId)mutate({kind:"patch",id:videoCompareNoteId,body:{status:"resolved"}})};
+  const approveBtn=sr.getElementById("videoCompareApprove");if(approveBtn)approveBtn.onclick=()=>videoCompareDecision("approve");
+  const retBtn=sr.getElementById("videoCompareReturnBtn"),retBox=sr.getElementById("videoCompareReturnBox");
+  if(retBtn)retBtn.onclick=()=>{videoCompareReturnOpen=!videoCompareReturnOpen;if(retBox)retBox.hidden=!videoCompareReturnOpen};
+  const retSave=sr.getElementById("videoCompareReturnSave");if(retSave)retSave.onclick=()=>videoCompareDecision("return");
+  const retCancel=sr.getElementById("videoCompareReturnCancel");if(retCancel)retCancel.onclick=()=>{videoCompareReturnOpen=false;if(retBox)retBox.hidden=true};
+  const repSave=sr.getElementById("videoCompareReplySave");if(repSave)repSave.onclick=()=>videoCompareDecision("reply");
   const pBefore=sr.getElementById("videoComparePlayBefore");if(pBefore)pBefore.onclick=()=>videoComparePlay("before").catch(()=>{});
   const sBefore=sr.getElementById("videoComparePauseBefore");if(sBefore)sBefore.onclick=()=>videoComparePause("before");
   const pAfter=sr.getElementById("videoComparePlayAfter");if(pAfter)pAfter.onclick=()=>videoComparePlay("after").catch(()=>{});
@@ -2352,10 +2474,14 @@ function noteHtml(x){
   const done=isDone(x), held=isHeld(x), dr=isDraft(x), fl=inFlight(x), id=escH(x.id), qe=editOf(x);
   const changed=held&&x.hold==="结论已变";
   const ed=editingId===x.id&&!changed;
-  const vrReady=!VIDEO||videoReceiptReady(x,videoManifest());
+  const isVid=typeof VIDEO!=="undefined"&&!!VIDEO;
+  const vr=isVid&&x.videoReview&&typeof x.videoReview==="object"?x.videoReview:null;
+  const vidState=isVid&&typeof videoNoteState==="function"?videoNoteState(x):"";
+  const vidApproved=!!(isVid&&vr&&(done||vr.decision==="approved"));
+  const vrReady=typeof VIDEO==="undefined"||!VIDEO||videoReceiptReady(x,videoManifest());
   const acts=changed?(editingId===x.id?`<button data-act="cancel">${tMsg("viewer.cancel")}</button>`:""):ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
-    :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${dr?`${vrReady?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${VIDEO?tMsg("viewer.video.approveBtn"):tMsg("viewer.finalize")}</button>`:""}<button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`
-      :held?"":(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`)}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+    :vidApproved?`<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`
+    :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${isVid?(dr?`${vrReady?`<button data-act="video-approve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.video.approveBtn")}</button>`:""}<button data-act="video-return-open" data-id="${id}">${tMsg("viewer.video.returnBtn")}</button>`:held?"":vr?`<button data-act="video-return-open" data-id="${id}">${tMsg(vidState==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn")}</button>`:(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`)):(dr?`${vrReady?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button>`:""}<button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`:held?"":(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`))}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
   const analysisLink=x.heldBy||x.analysisId||x.fromAnalysis;
   const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
   const sk=Array.isArray(x.skills)?x.skills:[];
@@ -2374,11 +2500,11 @@ function noteHtml(x){
    +(ed?`<div class="anchor">${tMsg("viewer.moveTo")} <select id="epage">${P.map(q=>`<option value="${q.n}"${q.n===(editBuf["pg:"+x.id]??x.page)?" selected":""}>${escH(tMsg("viewer.page",{page:q.n}))}</option>`).join("")}</select></div>`:"")
    +(!ed&&x.anchor?`<div class="anchor">${tMsg("viewer.anchorLabel")}${escH(clip(x.anchor,140))}</div>`:"")
    +(!ed&&x.pptx&&x.pptx.v===1?`<div class="anchor">${escH(pptxLocText(x.pptx))}</div>`:"")
-   +(!ed&&VIDEO&&(x.video||x.videoReview)?videoReceiptCardHtml(x):!ed&&x.video?`<div class="anchor">${escH(videoLocText(x.video))}</div>`:"")
+   +(!ed&&isVid&&(x.video||x.videoReview)?videoReceiptCardHtml(x):!ed&&x.video?`<div class="anchor">${escH(videoLocText(x.video))}</div>`:"")
    +(()=>{if(ed)return"";const al=done?[]:alwaysFor(x).filter((a,k,arr)=>!sk.includes(a.name)&&arr.findIndex(b=>b.name===a.name)===k);
       return sk.length||al.length?`<div class="skills">${al.map(a=>`<span class="skill al" title="${escH(tMsg("viewer.skill.alwaysChipTitle",{scope:alwaysLabel(a.scope)}))}">${escH(tMsg("viewer.skill.alwaysChip",{name:a.name}))}</span>`).join("")}${sk.map(n=>`<span class="skill" title="${escH(tMsg("viewer.skill.noteTitle"))}">⚙ ${escH(n)}</span>`).join("")}</div>`:""})()
    +(x.pair&&x.pair.text?`<div class="pair">${escH(tMsg("viewer.pairLine",{side:targetLabel(x.pair.side),match:tMsg(x.pair.match==="exact"?"viewer.pairSame":"viewer.pairSimilar"),text:clip(x.pair.text,120)}))}</div>`:"")
-   +((done||dr)&&x.resolution&&(!VIDEO||!x.videoReview||!x.videoReview.summary)?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
+   +((done||dr)&&x.resolution&&(!isVid||!x.videoReview||!x.videoReview.summary)?`<div class="res">${dr?"初改说明":"处理说明"}：${escH(x.resolution).replace(/\n/g,"<br>")}</div>`:"")
    +(!ed&&Array.isArray(x.trail)&&x.trail.length?`<div class="trail">${tMsg("viewer.batch.trailLabel")}${trailText(x)}</div>`:"")+`</div>`}
 // 把正在编辑的那张卡片的内容按它自己的 id 存起来（不能按 editingId：切换编辑对象时它已经变了）
 function stashEdit(){if(!editingId)return;   // 保存或取消后，重绘不能再缓存旧卡片里的草稿
@@ -2593,13 +2719,24 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
       if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(x),...pptxDrop(x)});   // 挪到别的页（或确认原页）
       mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
     case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null),...pptxPatch(id,null)}});drawPins();refreshList(true);break;
-    case "resolve":mutate({kind:"patch",id,body:{status:"resolved"}});break;
+    case "resolve":if(VIDEO){const x=notes.find(n=>n.id===id);if(x&&x.videoReview&&typeof submitVideoDecision==="function"){submitVideoDecision(id,"approve");break}}mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
+    case "video-approve":if(typeof submitVideoDecision==="function")submitVideoDecision(id,"approve");else mutate({kind:"patch",id,body:{status:"resolved"}});break;
+    case "video-return-open":if(typeof videoReturnOpen!=="undefined"){videoReturnOpen=videoReturnOpen===id?null:id;refreshList(true)}break;
+    case "video-return-cancel":if(typeof videoReturnOpen!=="undefined"){videoReturnOpen=null;if(typeof videoReturnBuf!=="undefined")delete videoReturnBuf[id];refreshList(true)}break;
+    case "video-return-save":{const card=b.closest(".note"),ta=card&&card.querySelector("[data-vid-return]"),rsn=ta?ta.value.trim():String((typeof videoReturnBuf!=="undefined"&&videoReturnBuf[id])||"").trim();if(typeof submitVideoDecision==="function")submitVideoDecision(id,"return",{reason:rsn});break}
+    case "video-reply-save":{const card=b.closest(".note"),ta=card&&card.querySelector("[data-vid-reply]"),rep=ta?ta.value.trim():String((typeof videoReplyBuf!=="undefined"&&videoReplyBuf[id])||"").trim();if(typeof submitVideoDecision==="function")submitVideoDecision(id,"reply",{reply:rep});break}
     case "video-jump-orig":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&x.video)videoShowNote(x);break}
     case "video-jump-target":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&x.videoReview&&x.videoReview.target)videoShowTarget(x);break}
     case "video-compare":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&typeof videoCompareOpen==="function")videoCompareOpen(x,false);break}
     case "video-relocate":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&typeof videoCompareOpen==="function")videoCompareOpen(x,true);break}
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
+$("bottomPanel").addEventListener("input",e=>{
+  if(e.target&&e.target.dataset&&e.target.dataset.vidReturn&&typeof videoReturnBuf!=="undefined")videoReturnBuf[e.target.dataset.vidReturn]=e.target.value;
+  if(e.target&&e.target.dataset&&e.target.dataset.vidReply&&typeof videoReplyBuf!=="undefined")videoReplyBuf[e.target.dataset.vidReply]=e.target.value});
+$("bottomPanel").addEventListener("change",e=>{
+  const cb=e.target&&e.target.closest&&e.target.closest('input[type="checkbox"][data-act="video-batch-pick"]');
+  if(cb&&typeof videoToggleApprovePick==="function"){videoToggleApprovePick(cb.dataset.id,cb.checked);renderFinalizeAll()}});
 function autoGrow(){const t=$("ntext");t.style.height="auto";t.style.height=Math.min(t.scrollHeight+2,innerHeight*.4)+"px"}
 $("ntext").addEventListener("input",()=>{autoGrow();clearTimeout(saveDraft.h);saveDraft.h=setTimeout(saveDraft,400)});
 addEventListener("pagehide",saveDraft);
@@ -2623,17 +2760,17 @@ function openPinPop(id,el,repaint=false){const pop=$("pinpop"),r=el.getBoundingC
   if(!id)pop.innerHTML=el.classList.contains("ae-region")
     ?`<div class="pp-t">${escH(tMsg("viewer.markNewRegion"))}</div><div class="pp-a"><button data-pp="unregion">${tMsg("viewer.markRemoveRegion")}</button></div>`
     :`<div class="pp-t">${escH(tMsg("viewer.markNewPin"))}</div><div class="pp-a"><button data-pp="unpend">${tMsg("viewer.markRemovePin")}</button></div>`;
-  else{const x=notes.find(n=>n.id===id);if(!x)return;const eid=escH(id),vrReady=!VIDEO||videoReceiptReady(x,videoManifest());
+  else{const x=notes.find(n=>n.id===id);if(!x)return;const eid=escH(id),vrReady=!VIDEO||videoReceiptReady(x,videoManifest()),vidApproved=!!(VIDEO&&x.videoReview&&(isDone(x)||x.videoReview.decision==="approved"));
     pop.innerHTML=`<div class="pp-m">${escH(x.target?targetLabel(x.target):tMsg("viewer.popUnset"))}${isDone(x)?` · ${tMsg("viewer.popResolved")}`:""}</div><div class="pp-t">${escH(clip(noteSummary(x),200))}</div>`
-      +`<div class="pp-a"><button data-pp="edit" data-id="${eid}">${tMsg("viewer.edit")}</button>${isDone(x)||vrReady?`<button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${tMsg(isDone(x)?"viewer.reopen":"viewer.resolve")}</button>`:""}`
-      +`${hasMark(x)?`<button data-pp="unpin" data-id="${eid}">${tMsg("viewer.unpin")}</button>`:""}<button data-pp="del" data-id="${eid}">${tMsg("viewer.delete")}</button><button data-pp="close">${tMsg("viewer.popClose")}</button></div>`;
+      +`<div class="pp-a">${vidApproved?"":`<button data-pp="edit" data-id="${eid}">${tMsg("viewer.edit")}</button>`}${!vidApproved&&(isDone(x)||vrReady)?`<button data-pp="${isDone(x)?"reopen":"resolve"}" data-id="${eid}">${tMsg(isDone(x)?"viewer.reopen":"viewer.resolve")}</button>`:""}`
+      +`${!vidApproved&&hasMark(x)?`<button data-pp="unpin" data-id="${eid}">${tMsg("viewer.unpin")}</button>`:""}<button data-pp="del" data-id="${eid}">${tMsg("viewer.delete")}</button><button data-pp="close">${tMsg("viewer.popClose")}</button></div>`;
     if(!repaint)flashCard(id)}
   pop.classList.add("on");place(pop,r.left+r.width/2,r.top+r.height/2)}
 $("pinpop").addEventListener("click",e=>{const b=e.target.closest("[data-pp]");if(!b)return;const id=b.dataset.id,a=b.dataset.pp;closePinPop();
   if(a==="unpend"){pendingPin=null;updateStyleChip();drawPins();saveDraft()}
   else if(a==="unregion"){pendingRegion=null;updateStyleChip();drawPins();saveDraft()}
   else if(a==="edit"){if(focusMode)toggleFocus(false);if(!drawerOpen("panel"))setDrawer("panel",true);endRemark();stashEdit();editingId=id;refreshList(true);flashCard(id);($("etext")||$("eskills")).focus()}
-  else if(a==="resolve"||a==="reopen")mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}});
+  else if(a==="resolve"||a==="reopen"){if(VIDEO){const x=notes.find(n=>n.id===id);if(x&&x.videoReview&&typeof submitVideoDecision==="function"){if(a==="resolve")submitVideoDecision(id,"approve");else{if(!drawerOpen("panel"))setDrawer("panel",true);videoReturnOpen=id;refreshList(true);flashCard(id)}return}}mutate({kind:"patch",id,body:{status:a==="resolve"?"resolved":"open"}})}
   else if(a==="unpin"){mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null),...pptxPatch(id,null)}});drawPins()}
   else if(a==="del"){if(confirm(tMsg("viewer.confirmDelete")))mutate({kind:"del",id})}});
 function pct(e){const r=stage.getBoundingClientRect();return{x:Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100)),y:Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))}}
@@ -2992,15 +3129,67 @@ function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
 const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavailable",changed:"changed",unconfirmed:"unconfirmed",unready:"unready"};
+let videoApproveSel=new Set(),videoReturnOpen=null,videoReturnBuf={},videoReplyBuf={};
+function videoSyncApproveSel(){
+  if(!VIDEO){videoApproveSel.clear();return}
+  const readyIds=new Set(notes.filter(n=>videoBatchApprovable(n,videoManifest())).map(n=>n.id));
+  for(const id of [...videoApproveSel])if(!readyIds.has(id))videoApproveSel.delete(id)}
+function videoToggleApprovePick(id,checked){
+  const x=notes.find(n=>n.id===id);
+  if(!x||!videoBatchApprovable(x,videoManifest()))return false;
+  if(checked)videoApproveSel.add(id);else videoApproveSel.delete(id);
+  return true}
+function videoSelectAllReady(){
+  videoSyncApproveSel();
+  notes.forEach(n=>{if(videoBatchApprovable(n,videoManifest()))videoApproveSel.add(n.id)});
+  renderFinalizeAll();if(typeof refreshList==="function")refreshList(true)}
+function videoClearApproveSel(){
+  videoApproveSel.clear();renderFinalizeAll();if(typeof refreshList==="function")refreshList(true)}
+function videoSelectedBatches(plan,pickSet){
+  if(!plan||!Array.isArray(plan.batches))return{batches:[],count:0};
+  const byId=new Map(notes.map(x=>[x.id,x])),m=videoManifest(),sel=pickSet||videoApproveSel,batches=[];let count=0;
+  for(const b of plan.batches){
+    const picked=(b.ids||[]).filter(id=>sel.has(id)&&videoBatchApprovable(byId.get(id),m));
+    if(picked.length){batches.push({seq:b.seq,ids:picked});count+=picked.length}}
+  return{batches,count}}
 function finalizeSkipText(skipped){const counts={};
   for(const entry of skipped||[]){const reason=FINALIZE_SKIP[entry.reason]||"unavailable";counts[reason]=(counts[reason]||0)+1}
   return Object.entries(counts).map(([reason,count])=>tMsg("viewer.finalizeAll.skip."+reason,{count})).join(tMsg("viewer.finalizeAll.separator"))}
+function finalizeBlockedText(skipped){
+  if(!Array.isArray(skipped)||!skipped.length)return"";
+  const counts={};
+  for(const e of skipped){const k=String((e&&(e.detail||e.reason))||"unavailable");counts[k]=(counts[k]||0)+1}
+  const detail=Object.entries(counts).map(([k,count])=>{
+    const skKey="viewer.video.state."+k,altKey="viewer.finalizeAll.skip."+(FINALIZE_SKIP[k]||"unavailable");
+    if(typeof M!=="undefined"&&Object.prototype.hasOwnProperty.call(M,skKey))return tMsg("viewer.video.batchBlockedItem",{label:tMsg(skKey),count});
+    return tMsg(altKey,{count})}).join(tMsg("viewer.finalizeAll.separator"));
+  return tMsg("viewer.video.batchBlockedSummary",{detail})}
 function finalizeResultText(result){return tMsg(result.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",
   {count:result.finalizedCount,batches:result.batches.length,skipped:result.skippedCount})
   +(result.skippedCount?"\n"+finalizeSkipText(result.skipped):"")}
 function finalizeAllProblem(){return FILE?"file":mode!=="server"?"offline":!finalizeAllSupported?"legacy":""}
 function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAllBtn"),info=$("finalizeAllInfo");if(!bar)return;
   const plan=hand&&hand.finalizable,count=plan&&plan.count||0,problem=finalizeAllProblem();
+  const toolsEl=$("videoBatchTools"),blockedEl=$("videoBatchBlocked"),selAllBtn=$("videoBatchSelectAll"),clrBtn=$("videoBatchClear"),cntEl=$("videoBatchCount");
+  if(VIDEO){
+    videoSyncApproveSel();
+    const m=videoManifest(),readyCount=notes.filter(n=>videoBatchApprovable(n,m)).length,selCount=videoApproveSel.size;
+    button.hidden=!!problem||!readyCount;button.disabled=finalizingAll||selCount===0;
+    button.textContent=tMsg(finalizingAll?"viewer.finalizeAll.working":"viewer.video.batchApproveBtn",{count:selCount});
+    button.setAttribute("aria-label",button.textContent);
+    if(toolsEl){toolsEl.hidden=!!problem||!readyCount;
+      if(selAllBtn)selAllBtn.textContent=tMsg("viewer.video.batchSelectAll");
+      if(clrBtn)clrBtn.textContent=tMsg("viewer.video.batchClear");
+      if(cntEl)cntEl.textContent=tMsg("viewer.video.batchSelectionHint",{selected:selCount,ready:readyCount})}
+    let message="";
+    if(problem&&(readyCount||notes.some(isDraft)))message=tMsg("viewer.finalizeAll."+problem);
+    else if(finalizeAllError)message=tMsg("viewer.finalizeAll."+finalizeAllError);
+    else if(finalizeAllResult)message=finalizeResultText(finalizeAllResult);
+    info.textContent=message;
+    const bMsg=!problem&&plan&&Array.isArray(plan.skipped)&&plan.skipped.length?finalizeBlockedText(plan.skipped):"";
+    if(blockedEl){blockedEl.hidden=!bMsg;blockedEl.textContent=bMsg}
+    bar.hidden=button.hidden&&!message&&(!toolsEl||toolsEl.hidden)&&(!blockedEl||blockedEl.hidden);return}
+  if(toolsEl)toolsEl.hidden=true;if(blockedEl)blockedEl.hidden=true;
   button.hidden=!!problem||!count;button.disabled=finalizingAll;
   button.textContent=tMsg(finalizingAll?"viewer.finalizeAll.working":"viewer.finalizeAll.button",{count});
   button.setAttribute("aria-label",button.textContent);
@@ -3013,12 +3202,26 @@ function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAll
 async function finalizeAll(){
   if(finalizingAll)return;
   const problem=finalizeAllProblem();if(problem){toast(tMsg("viewer.finalizeAll."+problem),7000);return}
+  const preSel=VIDEO?new Set(videoApproveSel):null;
   finalizingAll=true;finalizeAllError="";busy++;renderFinalizeAll();
   try{
     if(!await flush()||pend.get().length||failed.get().length){finalizeAllError="unsaved";return}
     const d=await getNotes();applyServer(d,true);
     if(!finalizeAllSupported){finalizeAllError="legacy";return}
     const plan=d.handoff&&d.handoff.finalizable;
+    if(VIDEO){
+      const picked=videoSelectedBatches(plan,preSel);
+      if(!picked.count){finalizeAllError="empty";return}
+      const batches=picked.batches.map(b=>tMsg("viewer.finalizeAll.batch",{seq:b.seq,count:b.ids.length})).join(tMsg("viewer.finalizeAll.separator"));
+      if(!confirm(tMsg("viewer.finalizeAll.confirm",{count:picked.count,batches,skipped:plan?plan.skipped.length:0})))return;
+      const r=await api("POST","/api/handoff/finalize-all",{batches:picked.batches});
+      if(!sameReview(r.doc)||!Number.isInteger(r.finalizedCount)||!Number.isInteger(r.skippedCount)
+        ||!Array.isArray(r.finalizedIds)||r.finalizedIds.length!==r.finalizedCount
+        ||!Array.isArray(r.batches)||!Array.isArray(r.skipped)||r.skipped.length!==r.skippedCount){finalizeAllError="unknown";return}
+      r.finalizedIds.forEach(fid=>videoApproveSel.delete(fid));
+      finalizeAllResult=r;applyServer({...r.doc,handoff:r.handoff},true);
+      if($("batches").classList.contains("on"))loadBatches();
+      toast(finalizeResultText(r),8000);return}
     if(!plan||!plan.count){finalizeAllError="empty";return}
     const batches=plan.batches.map(b=>tMsg("viewer.finalizeAll.batch",{seq:b.seq,count:b.ids.length})).join(tMsg("viewer.finalizeAll.separator"));
     if(!confirm(tMsg("viewer.finalizeAll.confirm",{count:plan.count,batches,skipped:plan.skipped.length})))return;
@@ -3032,6 +3235,8 @@ async function finalizeAll(){
   }catch(e){finalizeAllError=e.code==="no-api"?"legacy":"unknown";
     if(!e.status)mode=e.mismatch?"mismatch":"offline";
   }finally{finalizingAll=false;busy--;updateMode()}}
+if($("videoBatchSelectAll"))$("videoBatchSelectAll").onclick=videoSelectAllReady;
+if($("videoBatchClear"))$("videoBatchClear").onclick=videoClearApproveSel;
 $("finalizeAllBtn").onclick=finalizeAll;
 $("handBtn").onclick=()=>analysisShown()?submitAnalysis():openHand();$("handState").onclick=()=>hand&&hand.latest?openBatches():openHand();
 $("handHist").onclick=()=>{$("hand").classList.remove("on");openBatches()};
@@ -3293,26 +3498,40 @@ $("doHand").onclick=()=>{const message=$("handMsg").value.trim(),sub=$("hSub").c
 
 // ---------- 提交弹窗的可勾选列表与源工程关联（仅视频审阅；文档审阅整批提交沿用旧路径） ----------
 function submittableNotes(){return VIDEO?notes.filter(x=>x.status==="open"&&!flight.has(x.id)):[]}
+function handPickNoteTag(x){
+  const vr=x&&x.videoReview&&typeof x.videoReview==="object"?x.videoReview:null,st=videoNoteState(x);
+  if(st==="returned")return vr&&vr.returnReason?tMsg("viewer.video.pickTag.returnedReason",{reason:clip(vr.returnReason,36)}):tMsg("viewer.video.pickTag.returned");
+  if(st==="needs_reply")return vr&&vr.reply?tMsg("viewer.video.pickTag.replied",{reply:clip(vr.reply,36)}):tMsg("viewer.video.pickTag.unanswered");
+  if(st==="failed")return tMsg("viewer.video.pickTag.failed");
+  if(st==="missing_evidence")return tMsg("viewer.video.pickTag.missingEvidence");
+  if(st==="needs_relocate")return tMsg("viewer.video.pickTag.needsRelocate");
+  return tMsg("viewer.video.pickTag.unsubmitted")}
 function renderHandPick(){
   const box=$("handPick");if(!box)return;
   const open=submittableNotes();
   if(!VIDEO||handMode||mode!=="server"||!open.length){box.innerHTML="";$("hPickOld").style.display="none";return}
-  if(!handPickSel)handPickSel=new Set(open.map(x=>x.id));
+  const hasPrior=notes.some(x=>!!x.videoReview);
+  if(!handPickSel)handPickSel=hasPrior?new Set():new Set(open.map(x=>x.id));
+  const hasReturned=open.some(x=>videoNoteState(x)==="returned");
   const count=open.reduce((n,x)=>n+(handPickSel.has(x.id)?1:0),0);
   box.innerHTML=`<div class="hp-head"><span>${tMsg("viewer.hand.pickTitle")}</span>`
     +`<button type="button" data-pick="all">${tMsg("viewer.hand.pickAll")}</button>`
+    +(hasReturned?`<button type="button" data-pick="returned">${tMsg("viewer.hand.pickReturned")}</button>`:"")
     +`<button type="button" data-pick="none">${tMsg("viewer.hand.pickNone")}</button>`
     +`<span class="hint">${tMsg("viewer.hand.pickCount",{n:count,m:open.length})}</span></div>`
     +open.map(x=>{const v=x.video&&typeof x.video==="object"?x.video:{},
       loc=Number.isInteger(v.frame)?tMsg("viewer.hand.pickFrame",{frame:v.frame})
-        :tMsg("viewer.hand.pickRange",{start:v.startFrame!=null?v.startFrame:"?",end:v.endFrame!=null?v.endFrame:"?"});
+        :tMsg("viewer.hand.pickRange",{start:v.startFrame!=null?v.startFrame:"?",end:v.endFrame!=null?v.endFrame:"?"}),
+      tag=hasPrior?`<span class="hp-tag">${escH(handPickNoteTag(x))}</span>`:"";
       return `<label class="hp-item"><input type="checkbox" data-noteid="${escH(x.id)}"${handPickSel.has(x.id)?" checked":""}>`
-        +`<span class="hp-loc">${escH(loc)}</span><span class="hp-text">${escH(clip(x.text||"",80))}</span></label>`}).join("");
+        +`<span class="hp-loc">${escH(loc)}</span>${tag}<span class="hp-text">${escH(clip(x.text||"",80))}</span></label>`}).join("");
   $("hPickOld").style.display=srvNoSelect?"":"none"}
 $("handPick").addEventListener("click",e=>{
   const btn=e.target.closest("[data-pick]");
   if(btn){const open=submittableNotes();
-    handPickSel=btn.dataset.pick==="all"?new Set(open.map(x=>x.id)):new Set();
+    handPickSel=btn.dataset.pick==="all"?new Set(open.map(x=>x.id))
+      :btn.dataset.pick==="returned"?new Set(open.filter(x=>videoNoteState(x)==="returned").map(x=>x.id))
+      :new Set();
     renderHandPick();return}
   const cb=e.target.closest('input[type="checkbox"][data-noteid]');
   if(cb&&handPickSel){cb.checked?handPickSel.add(cb.dataset.noteid):handPickSel.delete(cb.dataset.noteid);

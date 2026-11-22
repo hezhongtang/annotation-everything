@@ -105,6 +105,7 @@ FEATURES = [
     "video-receipt",
     "video-compare",
     "video-relocate",
+    "video-decisions",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -192,6 +193,7 @@ MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 NOTE_VIDEO_RELOCATE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-relocate$")
+NOTE_VIDEO_DECISION_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-decision$")
 VIDEO_MEDIA_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)/media$")
 VIDEO_VERSION_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
@@ -1238,6 +1240,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         d, m = self.server.review_dir, NOTE_PATH.match(path)
         relocate_match = NOTE_VIDEO_RELOCATE_PATH.fullmatch(path)
+        decision_match = NOTE_VIDEO_DECISION_PATH.fullmatch(path)
         video_media = VIDEO_MEDIA_PATH.fullmatch(path)
         video_version = VIDEO_VERSION_PATH.fullmatch(path)
         # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
@@ -1642,6 +1645,54 @@ class Handler(BaseHTTPRequestHandler):
                     "doc": {**doc, **self._ident(), **extra_video},
                     "note": note,
                     "handoff": store.handoff_state(d, full=False, handoff=handoff_doc, notes=doc["notes"]),
+                },
+            )
+        elif decision_match and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if set(body) - {"action", "reason", "reply", "expectedVersion", "expectedBatch"}:
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            action = body.get("action")
+            if not isinstance(action, str) or action not in store.VIDEO_DECISION_ACTIONS:
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            for text_key in ("reason", "reply"):
+                if body.get(text_key) is not None and not isinstance(body.get(text_key), str):
+                    raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            expected_batch = body.get("expectedBatch")
+            if expected_batch is not None and (
+                isinstance(expected_batch, bool) or not isinstance(expected_batch, int) or expected_batch < 1
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            expected_version = body.get("expectedVersion")
+            if expected_version is not None and (
+                not isinstance(expected_version, str) or not video_review.VERSION_ID.fullmatch(expected_version)
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
+            nid = decision_match.group(1)
+            result = store.video_decision(
+                d,
+                nid,
+                action=action,
+                reason=body.get("reason") or "",
+                reply=body.get("reply") or "",
+                expected_batch=expected_batch,
+                expected_version=expected_version,
+                by="page",
+            )
+            manifest = self.server.manifest()
+            extra_video: dict[str, Any] = {}
+            if isinstance(manifest.get("video"), dict):
+                try:
+                    extra_video["video"] = video_review.public_manifest(manifest)
+                except video_review.VideoError:
+                    pass
+            self.server.log("info", f"video-decision {nid} action={action} replayed={result['replayed']}")
+            self._json(
+                200,
+                {
+                    "doc": {**result["doc"], **self._ident(), **extra_video},
+                    "note": result["note"],
+                    "handoff": result["handoff"],
+                    "replayed": result["replayed"],
                 },
             )
         elif path == "/api/overview" and cmd == "GET":

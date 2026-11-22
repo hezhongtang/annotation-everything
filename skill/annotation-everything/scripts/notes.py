@@ -243,6 +243,7 @@ ACTION_KEY = {
     "accepted": "cli.batch.trail.action.accepted",
     "missing_evidence": "cli.batch.trail.action.missingEvidence",
     "question": "cli.batch.trail.action.question",
+    "replied": "cli.batch.trail.action.replied",
     "relocate": "cli.batch.trail.action.relocate",
     "relocated": "cli.batch.trail.action.relocated",
     "failed": "cli.batch.trail.action.failed",
@@ -566,6 +567,14 @@ def batches_text(
                     unsubmitted=vs.get("unsubmittedCount", 0),
                 )
             )
+            if vs.get("approvedCount") or vs.get("returnedCount"):
+                out.append(
+                    t(
+                        "cli.batch.videoDecisions",
+                        approved=vs.get("approvedCount", 0),
+                        returned=vs.get("returnedCount", 0),
+                    )
+                )
         for vrec in h.get("videoReceipts") or []:
             if not isinstance(vrec, dict):
                 continue
@@ -841,6 +850,31 @@ def _format_vr_target(tgt: dict[str, Any], ver: str, t: Any) -> str | None:
     return None
 
 
+def _format_vr_history_entry(entry: dict[str, Any], t: Any) -> str:
+    ver = str(entry.get("versionId") or "—")
+    if entry.get("source") == "relocate" or entry.get("action") == "relocate":
+        tgt = entry.get("target") if isinstance(entry.get("target"), dict) else None
+        loc = _format_vr_target(tgt, ver, t) if tgt else ver
+        detail = entry.get("reason") or entry.get("summary") or loc or ver
+        return t(
+            "cli.show.videoReview.historyEntry", version=ver, state=t("cli.batch.trail.action.relocated"), detail=detail
+        )
+    state = str(entry.get("state") or entry.get("decision") or "pending_review")
+    state_label = label(t, f"cli.show.videoReview.state.{state}", state)
+    tgt = entry.get("target") if isinstance(entry.get("target"), dict) else None
+    parts = [
+        _format_vr_target(tgt, str(tgt.get("versionId") or ver), t) if tgt else None,
+        entry.get("returnReason"),
+        entry.get("reply"),
+        entry.get("summary"),
+        entry.get("question"),
+        entry.get("relocateReason"),
+        entry.get("failure"),
+    ]
+    detail = " · ".join(str(p) for p in parts if p)
+    return t("cli.show.videoReview.historyEntry", version=ver, state=state_label, detail=detail or "—")
+
+
 def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
     out: list[str] = []
     state = str(vr.get("state") or "")
@@ -849,6 +883,12 @@ def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
         out.append(t("cli.show.videoReview.statusVersion", state=state_label, version=vr["versionId"]))
     else:
         out.append(t("cli.show.videoReview.status", state=state_label))
+    if vr.get("decision"):
+        dec = str(vr["decision"])
+        dec_label = label(t, f"cli.show.videoReview.decision.{dec}", dec)
+        who = t("cli.batch.trail.whoPage") if vr.get("decidedBy") in (None, "", "page") else str(vr.get("decidedBy"))
+        batch = vr.get("decisionBatch") or vr.get("batch") or "—"
+        out.append(t("cli.show.videoReview.decisionLine", decision=dec_label, by=who, batch=batch))
     if vr.get("summary"):
         out.append(t("cli.show.videoReview.summary", summary=vr["summary"]))
     tgt = vr.get("target") if isinstance(vr.get("target"), dict) else None
@@ -859,6 +899,8 @@ def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
             out.append(line)
     if vr.get("question"):
         out.append(t("cli.show.videoReview.question", question=vr["question"]))
+    if vr.get("reply"):
+        out.append(t("cli.show.videoReview.reply", reply=vr["reply"]))
     if vr.get("relocateReason"):
         out.append(t("cli.show.videoReview.relocateReason", reason=vr["relocateReason"]))
     if vr.get("relocatedReason"):
@@ -884,9 +926,11 @@ def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
         out.append(t("cli.show.videoReview.failure", reason=vr["failure"]))
     if vr.get("returnReason"):
         out.append(t("cli.show.videoReview.returnReason", reason=vr["returnReason"]))
-    hist = vr.get("history") if isinstance(vr.get("history"), list) else []
-    if len(hist) > 1:
+    hist = [h for h in (vr.get("history") or []) if isinstance(h, dict)]
+    if len(hist) > 1 or vr.get("decision") or vr.get("relocatedFrom"):
         out.append(t("cli.show.videoReview.historyCount", count=len(hist)))
+        for entry in hist:
+            out.append(_format_vr_history_entry(entry, t))
     return out
 
 

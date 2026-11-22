@@ -260,11 +260,13 @@ class VideoRelocateStoreTests(unittest.TestCase):
         self.assertEqual(batch1["videoStats"]["pendingReviewIds"], ["n3"])
         self.assertEqual(batch1["videoStats"]["needsRelocateCount"], 0)
 
-        # 继续复核并人工通过
+        # 继续复核并人工通过（保留前两轮历史并记录人工通过决定）
         store.set_status(self.review, "n3", "resolved", by="page")
         n3_done = next(n for n in store.load(self.review)["notes"] if n["id"] == "n3")
         self.assertEqual(n3_done["status"], "resolved")
-        self.assertEqual(len(n3_done["videoReview"]["history"]), 2)
+        self.assertEqual(n3_done["videoReview"]["decision"], "approved")
+        self.assertEqual(len(n3_done["videoReview"]["history"]), 3)
+        self.assertEqual(n3_done["videoReview"]["history"][-1]["decision"], "approved")
 
         # 已通过的条目不能再重定位
         with self.assertRaises(store.HandoffError) as decided_err:

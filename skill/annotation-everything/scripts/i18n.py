@@ -623,4 +623,9 @@ HANDOFF_ERROR_KEYS: dict[str, str] = {
     "bad-note-ids": "cli.hand.error.badNoteIds",
     "bad-submit-id": "cli.hand.error.badSubmitId",
     "note-missing": "cli.hand.error.noteMissing",
+    "bad-video-decision": "cli.hand.error.badVideoDecision",
+    "stale-decision": "cli.hand.error.staleDecision",
+    "video-return-reason-required": "cli.hand.error.videoReturnReasonRequired",
+    "video-reply-required": "cli.hand.error.videoReplyRequired",
+    "video-not-awaiting-reply": "cli.hand.error.videoNotAwaitingReply",
 }
