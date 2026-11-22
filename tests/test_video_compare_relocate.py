@@ -350,7 +350,7 @@ class VideoRelocateStoreTests(unittest.TestCase):
         )
         self.assertEqual(n2_reloc["videoReview"]["relocatedFrom"]["target"]["startFrame"], 130)
         self.assertEqual(n2_reloc["videoReview"]["summary"], "音乐区间已调整")
-        store.set_status(self.review, "n2", "open", resolution="再微调 1 dB", by="page")
+        store.video_decision(self.review, "n2", action="return", reason="再微调 1 dB", by="page")
         store.handoff_submit(self.review, "二轮修 n2", note_ids=["n2"])
         store.handoff_claim(self.review, by="claude", seq=2)
         v3_file = self._movie(self.v3_24_bytes, "v3.mp4")
