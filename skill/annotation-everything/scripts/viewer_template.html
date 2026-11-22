@@ -1864,7 +1864,10 @@ function videoFrameTime(frame,source){const clk=videoVersionClock(source);if(!cl
   const idx=Math.max(0,Math.floor(Number.isFinite(frame)?frame:0));return(idx*clk.num)/clk.den}
 function videoTimeToFrame(seconds,source,clamp=true){const clk=videoVersionClock(source);if(!clk)return 0;
   const sec=Number.isFinite(seconds)?Math.max(0,seconds):0;
-  const idx=Math.floor((sec*clk.den)/clk.num+1e-9);
+  let idx=Math.floor((sec*clk.den)/clk.num);
+  // Chrome 把 seek 位置向下截到整微秒。只认下一帧的精确边界或它的微秒读数。
+  const next=(idx+1)*clk.num;
+  if(sec>=next/clk.den||sec===Math.floor(next*1e6/clk.den)/1e6)idx++;
   if(clamp&&source&&typeof source==="object"&&Number.isInteger(source.frames)&&source.frames>0)
     return Math.max(0,Math.min(source.frames-1,idx));
   return idx}
@@ -2072,7 +2075,7 @@ function videoSelectVersion(versionId,resetTime=true){const version=videoFindVer
   if(player.getAttribute("src")!==version.url){const t=resetTime?0:player.currentTime;player.src=version.url;player.load();
     if(t>0)player.addEventListener("loadedmetadata",()=>{player.currentTime=Math.min(t,version.duration||t)},{once:true})}
   videoLayout()}
-function videoCurrentFrame(){const version=videoCurrentVersion(),player=videoEl();return version?Math.max(0,Math.min(version.frames-1,Math.floor(player.currentTime*version.fps+1e-6))):0}
+function videoCurrentFrame(){return videoTimeToFrame(videoEl().currentTime,videoCurrentVersion())}
 function videoLayout(){if(!VIDEO)return;const viewport=sr.getElementById("videoViewport"),player=videoEl(),layer=videoLayer(),version=videoCurrentVersion();if(!viewport||!player||!layer||!version)return;
   const rect=videoContentRect(viewport.clientWidth,viewport.clientHeight,player.videoWidth||version.width,player.videoHeight||version.height);   // 标记相对实际解码画面，不信登记尺寸
   for(const el of [player,layer])Object.assign(el.style,{left:rect.x+"px",top:rect.y+"px",width:rect.width+"px",height:rect.height+"px"});
@@ -2097,7 +2100,7 @@ function videoUpdateRange(){const label=sr.getElementById("videoRange");if(label
 function videoDraftAt(mark=videoPendingMark){const m=videoManifest(),version=videoCurrentVersion();if(!m||!version)return null;const frame=videoCurrentFrame();
   if(videoRangeStart!=null){const start=videoRangeStart,end=Math.max(frame+1,start+1);return videoMakeAnchor(m,{startFrame:start,endFrame:Math.min(end,version.frames)},mark,version.versionId)}
   return videoMakeAnchor(m,{frame},mark,version.versionId)}
-function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version.fps);videoRangeEnd=null;
+function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version);videoRangeEnd=null;
   sr.getElementById("videoFrame").value=videoCurrentFrame();videoDrawMarks()}
 function videoJumpPlay(version,temporal){const player=videoEl();if(!version||!player)return;
   videoActiveVersionId=version.versionId;renderVideoVersions();
@@ -2134,7 +2137,7 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
   videoLayer().addEventListener("pointerup",e=>{if(!videoPointerStart)return;const start=videoPointerStart;videoPointerStart=null;const viewport=videoEl().getBoundingClientRect();
     const end=videoNormalizedPoint(e.clientX,e.clientY,viewport,{x:0,y:0,width:viewport.width,height:viewport.height});if(!end)return;const moved=Math.hypot(e.clientX-start.clientX,e.clientY-start.clientY)>=5;
     videoPendingMark=moved?{kind:"region",x:Math.min(start.point.x,end.x),y:Math.min(start.point.y,end.y),width:Math.abs(end.x-start.point.x),height:Math.abs(end.y-start.point.y)}:{kind:"point",...end};
-    videoDraft=videoDraftAt(videoPendingMark);videoDrawMarks();saveDraft();openComposer()});
+    setMarkMode(false);videoDraft=videoDraftAt(videoPendingMark);videoDrawMarks();saveDraft();openComposer()});
   videoCompareInit();
   videoLayout()}
 
@@ -2792,7 +2795,7 @@ addEventListener("mousemove",e=>{
     drag.pin.style.left=x+"%";drag.pin.style.top=y+"%";drag.pos={x:+x.toFixed(1),y:+y.toFixed(1),w:drag.rg.w,h:drag.rg.h};return}
   drag.pin.style.left=c.x+"%";drag.pin.style.top=c.y+"%";drag.pos={x:+c.x.toFixed(1),y:+c.y.toFixed(1)}});
 // 标注：按下后不拖动就松开 = 放一个点；按住拖动 = 框选一块区域
-stage.addEventListener("mousedown",e=>{if(!markMode||e.button!==0)return;e.preventDefault();e.stopPropagation();
+stage.addEventListener("mousedown",e=>{if(VIDEO||!markMode||e.button!==0)return;e.preventDefault();e.stopPropagation();
   if(rdraw&&rdraw.box)rdraw.box.remove();   // 上一次没收到松开（鼠标在窗口外松开等）
   const c=pct(e);rdraw={x0:c.x,y0:c.y,cx:e.clientX,cy:e.clientY,box:null,rg:null}});
 addEventListener("mouseup",e=>{if(!rdraw)return;e.stopPropagation();const d=rdraw;rdraw=null;if(d.box)d.box.remove();

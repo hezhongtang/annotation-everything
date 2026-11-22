@@ -39,6 +39,8 @@ REMOTION_ENTRY_NAMES = tuple(f"src/index.{ext}" for ext in ("tsx", "ts", "jsx", 
 REMOTION_CONFIG_NAMES = ("remotion.config.ts", "remotion.config.js", "remotion.config.mjs")
 SET_ENTRY_POINT = re.compile(r"setEntryPoint\s*\(\s*['\"]([^'\"]+)['\"]")
 SPLIT_COLUMNS = re.compile(r"\s{2,}")
+ANSI_CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+REMOTION_ROW = re.compile(r"(\S+)\s+(\d+(?:\.\d+)?)\s+(\d+)x(\d+)\s+(\d+)\s+\([\d.]+ sec\)")
 
 
 class EngineError(ValueError):
@@ -117,17 +119,20 @@ def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
 
 
 class _RootTagParser(HTMLParser):
-    """只取第一个标签（<html>）的属性：fps 依据来自根 composition 的 data-fps。"""
+    """记录文档根与第一个合成元素的帧率声明。"""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.tag = ""
         self.attrs: dict[str, str | None] = {}
+        self.composition_attrs: dict[str, str | None] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if not self.tag:  # 只认文档里的第一个标签
             self.tag = tag
             self.attrs = dict(attrs)
+        if self.composition_attrs is None and any(key == "data-composition-id" for key, _ in attrs):
+            self.composition_attrs = dict(attrs)
 
 
 def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
@@ -153,7 +158,7 @@ def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
             continue
         if parser.tag != "html":
             continue
-        raw_fps = parser.attrs.get("data-fps")
+        raw_fps = parser.attrs.get("data-fps", (parser.composition_attrs or {}).get("data-fps"))
         try:
             fps = float(raw_fps) if raw_fps is not None else None
         except ValueError:
@@ -242,10 +247,16 @@ def render_argv(engine: str, bin_path: Path, entry_or_root: Path, composition_id
 
 
 def parse_compositions(stdout: str) -> tuple[list[dict[str, Any]], int]:
-    """解析 `remotion compositions` 的表格输出；列位置按表头映射，不猜列序。"""
-    lines = [line for line in stdout.splitlines() if line.strip()]
+    """识别 Remotion 4 的无表头行，兼容按表头映射列位置的旧清单。"""
+    lines = [line.strip() for line in ANSI_CSI.sub("", stdout).splitlines() if line.strip()]
     if not lines:
         raise EngineError("compositionsUnparsed", "empty output")
+    rows = [match.groups() for line in lines if (match := REMOTION_ROW.fullmatch(line))]
+    if rows:
+        return [
+            {"id": cid, "fps": float(fps), "width": int(width), "height": int(height), "frames": int(frames)}
+            for cid, fps, width, height, frames in rows
+        ], 0
     header = SPLIT_COLUMNS.split(lines[0].strip())
     index: dict[str, int] = {}
     for position, label in enumerate(header):

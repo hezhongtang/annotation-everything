@@ -37,6 +37,13 @@ def frame_anchor():
 
 
 class VideoPagePureTests(unittest.TestCase):
+    def test_microsecond_playback_clock_preserves_frame_boundaries(self):
+        actual = run_video(
+            "const clock={frames:180,timebase:{num:1,den:30}};"
+            "return [0.533333,1.833333,5.966666,5.966665,5.9666661,3.999999,4,4.02].map(t=>videoTimeToFrame(t,clock));"
+        )
+        self.assertEqual(actual, [16, 55, 179, 178, 178, 119, 120, 120])
+
     def test_clean_video_and_dedup_key_keep_the_whole_immutable_location(self):
         anchor = frame_anchor()
         actual = run_video(

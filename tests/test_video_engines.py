@@ -257,6 +257,15 @@ class DetectionTests(EngineEnvMixin):
             video_engines.detect_project(plain)
         self.assertEqual(ctx.exception.code, "notProject")
 
+    def test_hyperframes_composition_element_declares_fps_and_document_takes_precedence(self):
+        project = self.copy_fixture("hyperframes")
+        scene = '<body data-fps="90"><div data-composition-id="root" data-fps="25" data-duration="1"></div></body>'
+        for attrs, expected in (("", 25), ('data-fps="24"', 24)):
+            with self.subTest(attrs=attrs):
+                (project / "index.html").write_text(f"<html {attrs}>{scene}</html>", encoding="utf-8")
+                comp = next(c for c in video_engines.detect_project(project)["compositions"] if c["id"] == "index.html")
+                self.assertEqual((comp["fps"], comp["fpsDeclared"]), (expected, True))
+
     def test_project_with_both_engine_indicators_is_ambiguous(self):
         project = self.copy_fixture("remotion")
         pkg = json.loads((project / "package.json").read_text(encoding="utf-8"))
@@ -334,6 +343,24 @@ class ArgvAndParseTests(unittest.TestCase):
         table = "Composition ID  Width  Height  FPS  Duration\nMain  640  360  30  6.0\n"
         comps, _unparsed = video_engines.parse_compositions(table)
         self.assertEqual(comps[0]["frames"], 180)
+
+    def test_parse_remotion_4_listing_after_bundling(self):
+        listing = (
+            "\x1b[2KBundling code 90%\rBundling code 100%\n"
+            "The following compositions are available:\n\n"
+            "\x1b[32mDemo\x1b[0m    30      640x360        30 (1.00 sec)\n"
+            "Alternate    23.976      1280x720        48 (2.00 sec)\n"
+        )
+        self.assertEqual(
+            video_engines.parse_compositions(listing),
+            (
+                [
+                    {"id": "Demo", "fps": 30.0, "width": 640, "height": 360, "frames": 30},
+                    {"id": "Alternate", "fps": 23.976, "width": 1280, "height": 720, "frames": 48},
+                ],
+                0,
+            ),
+        )
 
 
 class ReuseTests(EngineEnvMixin):
