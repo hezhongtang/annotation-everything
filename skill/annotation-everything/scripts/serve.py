@@ -108,6 +108,7 @@ FEATURES = [
     "video-relocate",
     "video-decisions",
     "video-evidence-revision",
+    "video-decode-feedback",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -1291,6 +1292,41 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"videoVersion": version, **self._ident()})
         elif video_media is not None and cmd == "GET":
             self._video_media(video_media.group(1))
+        elif path == "/api/video/playback-failure" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if (
+                not claimed
+                or not isinstance(body.get("batch"), int)
+                or isinstance(body["batch"], bool)
+                or body["batch"] < 1
+                or not isinstance(body.get("versionId"), str)
+                or not video_review.VERSION_ID.fullmatch(body["versionId"])
+                or not store.valid_id(body.get("noteId"))
+                or not isinstance(body.get("expectedEvidence"), str)
+                or type(body.get("mediaError")) is not int
+                or body["mediaError"] not in (3, 4)
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.noApi"))
+            store.video_decode_failed(
+                d,
+                note_id=body["noteId"],
+                version_id=body["versionId"],
+                seq=body["batch"],
+                expected_evidence=body["expectedEvidence"],
+                review_id=claimed,
+                reason=self._t("viewer.video.playbackUnavailable") + f" (MediaError {body['mediaError']})",
+            )
+            self._json(
+                200,
+                {
+                    "doc": {
+                        **self._notes_doc(),
+                        **self._ident(),
+                        "video": video_review.public_manifest(self.server.manifest()),
+                    },
+                    "handoff": self._handoff_state(full=False),
+                },
+            )
         elif path == "/api/video/source-project" and cmd == "GET":
             video = self.server.manifest().get("video")
             self._json(
@@ -1304,6 +1340,9 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             self._confirm_source_project(body)
         elif path == "/api/notes" and cmd == "GET":
+            if (d / store.VIDEO_COMMIT_FILE).exists():
+                with store.locked(d):
+                    pass  # 服务重启后首次轮询即可读到已提交的批次与逐条记录。
             doc = self._notes_doc()
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」

@@ -346,7 +346,12 @@ class ReuseTests(EngineEnvMixin):
 
     def test_single_fresh_matching_movie_is_reused(self):
         media = self.make_movie(self.project / "out" / "Main.mp4")
-        self.arm_render(self.project, "remotion", media)  # 复用路径不应触发渲染
+        self.arm_render(self.project, "remotion", media)
+        with self.assertRaises(video_engines.EngineError) as uncertain:
+            self.resolve()
+        self.assertEqual(uncertain.exception.code, "movieConfirm")
+        self.resolve(no_reuse=True)
+        self.log.unlink()
         result = self.resolve()
         self.assertEqual(result["action"], "reused")
         self.assertEqual(result["source"], (self.project / "out" / "Main.mp4").resolve())
@@ -364,6 +369,20 @@ class ReuseTests(EngineEnvMixin):
         self.assertEqual(reason.exception.code, "movieConfirm")
         self.assertIn("Main", reason.exception.detail)
         self.assertIn("Alternate", reason.exception.detail)
+
+    def test_changing_a_source_asset_invalidates_record_even_with_the_same_timestamp(self):
+        asset = self.project / "src" / "asset.txt"
+        asset.write_text("first")
+        original = asset.stat()
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        self.resolve(no_reuse=True)
+        self.make_movie(self.project / "out" / "Main.mp4")
+        self.assertEqual(self.resolve()["action"], "reused")
+        asset.write_text("other")
+        os.utime(asset, ns=(original.st_atime_ns, original.st_mtime_ns))
+        with self.assertRaises(video_engines.EngineError) as uncertain:
+            self.resolve()
+        self.assertEqual(uncertain.exception.code, "movieConfirm")
 
     def test_changed_project_asset_prevents_automatic_reuse(self):
         movie = self.project / "out" / "Main.mp4"
@@ -622,6 +641,7 @@ class BuildIntegrationTests(EngineEnvMixin):
         self.arm_render(project, "remotion", media)
         self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
         out = self.root / "review"
+        self.build(project, self.root / "seed-review", no_reuse=True)
         result = self.build(project, out)
         self.assertTrue(any("复用" in w for w in result["warnings"]))
         manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))
@@ -687,6 +707,7 @@ class SourceProjectLinkTests(EngineEnvMixin):
         self.arm_render(project, "remotion", media)
         self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
         out = self.root / "review"
+        self.build_from_project(project, self.root / "seed", no_reuse=True)
         self.build_from_project(project, out)
         manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))
         sp = manifest["video"]["sourceProject"]
@@ -755,6 +776,7 @@ class SourceProjectLinkTests(EngineEnvMixin):
         self.arm_render(project, "remotion", media)
         self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
         out = self.root / "review"
+        self.build_from_project(project, self.root / "seed", no_reuse=True)
         self.build_from_project(project, out)
         self.assertEqual(build_viewer.main(["--rebuild", str(out)]), 0)
         manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))

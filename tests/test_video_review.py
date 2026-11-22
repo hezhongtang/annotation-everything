@@ -97,6 +97,26 @@ class VideoBuildTests(unittest.TestCase):
         self.assertIn('id="videoPlayer"', page)
         self.assertIn('"versionId": "V1"', page)
 
+    def test_interrupted_first_build_recovers_only_its_own_original(self):
+        with self.assertRaises(SystemExit):
+            build_viewer.build(self.source, None, self.out, sections_arg="invalid", no_scan_skills=True)
+        private = self.out / "media" / "v1.mp4"
+        self.assertEqual(private.read_bytes(), self.media)
+        original_inode = private.stat().st_ino
+        other = self.root / "other.mp4"
+        other.write_bytes(self.media)
+        with self.assertRaises(build_viewer.BuildError):
+            build_viewer.build(other, None, self.out, no_scan_skills=True)
+        self.build()
+        manifest = json.loads((self.out / "review.json").read_text())
+        self.assertEqual(manifest["video"]["versions"][0]["versionId"], "V1")
+        self.assertEqual(private.stat().st_ino, original_inode)
+        unknown = self.root / "unknown"
+        (unknown / "media").mkdir(parents=True)
+        (unknown / "media" / "v1.mp4").write_bytes(self.media)
+        with self.assertRaises(build_viewer.BuildError):
+            build_viewer.build(self.source, None, unknown, no_scan_skills=True)
+
     def test_rebuild_uses_registered_copy_and_does_not_remap_notes(self):
         self.build()
         notes = {

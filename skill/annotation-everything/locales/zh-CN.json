@@ -2672,6 +2672,7 @@
     "cli.batch.trail.action.relocate": "待定位",
     "cli.batch.trail.action.relocated": "人工重定位",
     "cli.batch.trail.action.failed": "回执失败",
+    "cli.hand.error.videoReviewerDecisionRequired": "请在视频批注的复核入口填写退回原因或答复。",
     "cli.hand.error.videoManualApprovalRequired": "视频批注必须由审阅人在页面复核通过，Agent 不能直接标为已处理或定稿",
     "cli.hand.error.videoNotReady": "视频批注 {id} 尚未满足人工复核通过条件（{reason}）",
     "cli.hand.error.reviewMismatch": "审阅标识不匹配，拒绝写入其他审阅",

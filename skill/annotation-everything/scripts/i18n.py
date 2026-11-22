@@ -607,6 +607,7 @@ HANDOFF_ERROR_KEYS: dict[str, str] = {
     "analysis-invalid-input": "cli.life.invalidInput",
     "structure-target-changed": "cli.life.structureChanged",
     "suggest-note-not-open": "cli.life.suggestNotOpen",
+    "video-reviewer-decision-required": "cli.hand.error.videoReviewerDecisionRequired",
     "video-manual-approval-required": "cli.hand.error.videoManualApprovalRequired",
     "video-not-ready": "cli.hand.error.videoNotReady",
     "review-mismatch": "cli.hand.error.reviewMismatch",

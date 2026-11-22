@@ -224,6 +224,119 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(store.handoff_load(self.review)["items"][0]["draftedIds"], ["n2"])
         self.assertEqual(len(self._note("n1")["videoReview"]["history"]), 2)
 
+    def test_bulk_retry_recovers_committed_decisions_and_refuses_stale_selections(self):
+        from unittest.mock import patch
+
+        self._deliver_v2_mixed_batch()
+        evidence = {nid: self._note(nid)["videoReview"]["evidenceRevision"] for nid in ("n1", "n2")}
+        replace = os.replace
+
+        def fail_handoff(source, destination):
+            if Path(destination) == self.review / "handoff.json":
+                raise OSError("synthetic interruption")
+            return replace(source, destination)
+
+        chosen = {1: {"n1", "n2"}}
+        with patch.object(os, "replace", side_effect=fail_handoff), self.assertRaises(OSError):
+            store.handoff_finalize_all(self.review, chosen, evidence=evidence)
+        before = self._note("n1")
+        stale = store.handoff_finalize_all(self.review, {1: {"n1"}}, evidence={"n1": "stale"})
+        self.assertEqual(stale["finalizedCount"], 0)
+        replay = store.handoff_finalize_all(self.review, chosen, evidence=evidence)
+        self.assertEqual(set(replay["finalizedIds"]), {"n1", "n2"})
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "done")
+        self.assertEqual(self._note("n1"), before)
+
+    def test_receipt_retry_preserves_original_evidence_and_history_after_notes_commit(self):
+        from unittest.mock import patch
+
+        original = os.replace
+
+        def fail_handoff(source, destination):
+            if Path(destination) == self.review / "handoff.json" and self._note("n1").get("videoReview"):
+                raise OSError("synthetic interruption")
+            return original(source, destination)
+
+        with patch.object(os, "replace", side_effect=fail_handoff), self.assertRaises(OSError):
+            self._deliver_v2_mixed_batch()
+        before = self._note("n1")
+        repeat = store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="rcpt-v2-mixed",
+            by="claude",
+            receipt={
+                "notes": [
+                    {"noteId": "n1", "outcome": "fixed", "summary": "重试", "target": {"kind": "frame", "frame": 0}}
+                ]
+            },
+        )
+        self.assertTrue(repeat["replayed"])
+        self.assertEqual(self._note("n1"), before)
+        self.assertEqual(len(store.handoff_load(self.review)["items"][0]["videoReceipts"]), 1)
+
+    def test_legacy_notes_only_receipt_recovers_the_original_items_and_revision(self):
+        self._deliver_v2_mixed_batch()
+        docs = store.handoff_load(self.review)
+        item = docs["items"][0]
+        item["status"] = "claimed"
+        item.pop("videoReceipts")
+        item.pop("videoVersionId")
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(docs))
+        before = store.load(self.review)
+        result = store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="rcpt-v2-mixed",
+            by="claude",
+            receipt={
+                "notes": [
+                    {"noteId": "n1", "outcome": "fixed", "summary": "网络重试", "target": {"kind": "frame", "frame": 0}}
+                ]
+            },
+        )
+        self.assertTrue(result["replayed"])
+        self.assertEqual({n["id"] for n in result["notes"]}, {"n1", "n2", "n3", "n4", "n5"})
+        self.assertEqual(store.load(self.review), before)
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
+
+    def test_browser_decode_failure_reopens_the_same_batch_and_keeps_human_decisions(self):
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n1", action="approve")
+        token = self._note("n2")["videoReview"]["evidenceRevision"]
+        req = dict(
+            note_id="n2",
+            version_id="V2",
+            seq=1,
+            expected_evidence=token,
+            review_id=self.rid,
+            reason="Browser decoder rejected this target",
+        )
+        store.video_decode_failed(self.review, **req)
+        store.video_decode_failed(self.review, **req)
+        manifest = json.loads((self.review / "review.json").read_text())
+        self.assertEqual(manifest["video"]["currentVersionId"], "V1")
+        self.assertEqual(manifest["video"]["versions"][1]["playbackFailure"]["stage"], "decode")
+        self.assertEqual(self._note("n1")["videoReview"]["decision"], "approved")
+        self.assertEqual(self._note("n2")["videoReview"]["state"], "failed")
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "claimed")
+        success = store.video_receipt(
+            self.review,
+            seq=1,
+            by="claude",
+            receipt_id="repaired",
+            movie=self._movie(self.v2_bytes, "repaired.mp4"),
+            receipt={
+                "notes": [
+                    {"noteId": "n2", "outcome": "fixed", "summary": "重渲染", "target": {"kind": "frame", "frame": 5}}
+                ]
+            },
+        )
+        self.assertEqual(success["version"]["versionId"], "V3")
+        with self.assertRaises(store.HandoffError):
+            store.video_decode_failed(self.review, **req)
+        self.assertEqual(self._note("n2")["videoReview"]["versionId"], "V3")
+
     def test_approval_requires_the_evidence_revision_selected_by_the_reviewer(self):
         self._deliver_v2_mixed_batch()
         stale = "older-location"
@@ -361,6 +474,33 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
             os.environ.clear()
             os.environ.update(old_env)
         return code, out.getvalue(), err.getvalue()
+
+    def test_video_import_edits_text_without_creating_or_overwriting_review_decisions(self):
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n1", action="approve")
+        for nid, fake_status in (("n1", "open"), ("n3", "resolved")):
+            old = self._note(nid)
+            store.import_notes(
+                self.review, [{**old, "updatedAt": "2099-01-01T00:00:00Z", "text": "更新原话", "status": fake_status}]
+            )
+            current = self._note(nid)
+            self.assertEqual(current["text"], "更新原话")
+            self.assertEqual(current["status"], old["status"])
+            self.assertEqual(current["videoReview"], old["videoReview"])
+        forged = {**video_note("fresh", "新的导入意见", frame=10), "status": "resolved", "resolvedBy": "page"}
+        store.import_notes(self.review, [forged])
+        self.assertEqual(self._note("fresh")["status"], "open")
+        self.assertNotIn("resolvedBy", self._note("fresh"))
+
+    def test_cli_reopen_cannot_return_pending_video_even_with_page_display_name(self):
+        self._deliver_v2_mixed_batch()
+        before = self._note("n1")
+        for name in ("agent", "page"):
+            code, _, _ = self._run_cli(["reopen", str(self.review), "n1", "--by", name])
+            self.assertNotEqual(code, 0)
+            self.assertEqual(self._note("n1"), before)
+        with self.assertRaises(store.HandoffError):
+            store.set_status(self.review, "n1", "open", by="page", reviewer=True)
 
     def test_return_and_reply_save_without_auto_submit_and_support_selective_rework_v1_v2_v3(self):
         self._deliver_v2_mixed_batch()
@@ -688,6 +828,12 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         ):
             bcode, _, _ = serve._req(server.port, "POST", "/api/notes/n1/video-decision", headers, bad_body)
             self.assertEqual(bcode, 400)
+
+        code, _, response = serve._req(
+            server.port, "PATCH", "/api/notes/n1", headers, {"status": "open", "resolution": "由专用入口退回"}
+        )
+        self.assertGreaterEqual(code, 400, response)
+        self.assertEqual(self._note("n1")["videoReview"]["state"], "pending_review")
 
         # 验证 video_decision 绝不嵌套 store.locked 与 ledger.metadata_lock
         held = {"store": False, "meta": False}
@@ -1330,7 +1476,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             "const srNodes=new Map();"
             "const makeBox=id=>({id,hidden:false,disabled:false,value:'',textContent:'',innerHTML:'',clientWidth:600,clientHeight:340,style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},appendChild(){},querySelectorAll(){return []},addEventListener(){},pause(){},load(){},setAttribute(){},getAttribute(){return null},currentTime:0,duration:6.4,paused:true,muted:false});"
             "const getEl=id=>{if(!srNodes.has(id))srNodes.set(id,makeBox(id));return srNodes.get(id)};"
-            "const sr={getElementById:getEl},probes=[];let decode=false;const document={createElement:tag=>tag==='video'?{removeAttribute(){this.src=''},load(){if(this.src){probes.push(this.src);queueMicrotask(()=>decode?this.onloadeddata():this.onerror())}}}:makeBox('d')};"
+            "const sr={getElementById:getEl},probes=[],seeks=[];let decode=false;const document={createElement:tag=>tag==='video'?{readyState:2,time:0,get currentTime(){return this.time},set currentTime(v){this.time=v;seeks.push([this.src,v]);queueMicrotask(()=>this.onseeked?.())},removeAttribute(){this.src=''},load(){if(this.src){probes.push(this.src);queueMicrotask(()=>decode?this.onloadeddata():this.onerror())}}}:makeBox('d')};"
             "const videoEl=()=>getEl('videoPlayer'),videoManifest=()=>VIDEO,videoFindVersion=vid=>VIDEO.versions.find(v=>v.versionId===(vid||videoActiveVersionId))||null,videoCurrentVersion=()=>videoFindVersion(videoActiveVersionId);"
             "const videoLayout=()=>{},setMarkMode=()=>{},mutate=()=>{};"
             "const apiCalls=[],toasts=[],applyCalls=[];"
@@ -1358,11 +1504,12 @@ class VideoPageReworkUITests(unittest.TestCase):
             const replyBoxHidden = getEl("videoCompareReplyBox").hidden;
             getEl("videoCompareReplyInput").value = "换成轻快的纯音乐";
             await videoCompareDecision("reply");
-            return { apiCalls, blockedCount, probes, emptyErr, appHiddenOnReply, retHiddenOnReply, replyBoxHidden, applyCount: applyCalls.length };
+            return { apiCalls, blockedCount, probes, seeks, emptyErr, appHiddenOnReply, retHiddenOnReply, replyBoxHidden, applyCount: applyCalls.length };
             """,
             locale="zh-CN",
         )
         self.assertEqual(cmp_actual["blockedCount"], 0)
+        self.assertIn(["/api/video/versions/V2/media", 1], cmp_actual["seeks"])
         self.assertEqual(set(cmp_actual["probes"]), {"/api/video/versions/V1/media", "/api/video/versions/V2/media"})
         self.assertTrue(cmp_actual["emptyErr"])
         self.assertEqual(len(cmp_actual["apiCalls"]), 3)

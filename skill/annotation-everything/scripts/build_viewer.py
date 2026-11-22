@@ -1024,7 +1024,16 @@ def build(
             raise BuildError(diag(locale_choice, "build.video.scriptUnsupported", path=script))
         try:
             try:
-                video_meta = video_review.prepare(movie_for_v1, out, preview)
+                origin = None
+                if engine_result:
+                    origin = {
+                        "root": engine_result["root"],
+                        "entry": engine_result["entry"],
+                        "engine": engine_result["engine"],
+                        "sourceFingerprint": engine_result.get("sourceFingerprint"),
+                        "reuse": str(reuse_movie.resolve()) if reuse_movie else None,
+                    }
+                video_meta = video_review.prepare(movie_for_v1, out, preview, origin=origin)
             finally:
                 if engine_cleanup is not None:
                     _remove_render_staging(engine_cleanup)
@@ -1045,7 +1054,7 @@ def build(
                     entry=engine_result["entry"],
                     media=engine_result["declaration"],
                     by="build",
-                    verified_source=reuse_movie is None,
+                    verified_source=reuse_movie is None and not engine_result.get("sourceChanged"),
                 )
                 if reuse_movie is not None and not video_meta["sourceProject"]["differences"]:
                     video_meta = video_source.confirm(video_meta, by="cli")
@@ -1331,8 +1340,11 @@ def build(
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
     with ledger.metadata_lock(out, exclusive=True):
-        if video_meta is not None and preview.get("video"):
+        if video_meta is not None:
             current = ledger.read_manifest(out)
+        if video_meta is not None and not preview.get("video") and current.get("video"):
+            raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
+        if video_meta is not None and preview.get("video"):
             if current.get("reviewId") != preview.get("reviewId") or not isinstance(current.get("video"), dict):
                 raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
             if current["video"] != video_meta:
@@ -1342,6 +1354,8 @@ def build(
                 manifest["video"] = video_meta
         write_private(out / "index.html", page_html)
         write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        if video_meta:
+            (out / ".video-first-build.json").unlink(missing_ok=True)
     # 已有批注：按页面键校正页码（重排、增删页之后批注跟着原来的页走）
     key_count: dict[str, int] = {}
     for pg in pages:

@@ -13,12 +13,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import stat
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -391,6 +393,62 @@ def freshness_sources(info: dict[str, Any]) -> list[Path]:
     return sources
 
 
+def source_fingerprint(info: dict[str, Any]) -> str:
+    import video_review
+
+    digest = hashlib.sha256()
+    for path in freshness_sources(info):
+        if not path.is_file():
+            raise EngineError("movieUnreadable", str(path))
+        name = path.relative_to(info["root"]).as_posix().encode("utf-8")
+        digest.update(len(name).to_bytes(8, "big") + name)
+        digest.update(bytes.fromhex(video_review.file_digest(path)))
+    return digest.hexdigest()
+
+
+def _render_evidence(info, chosen, source_hash, movie):
+    import ledger
+    import video_review
+
+    evidence = {
+        "root": str(info["root"]),
+        "engine": info["engine"],
+        "entry": chosen["id"],
+        "inputs": source_hash,
+        "sha256": video_review.file_digest(movie),
+    }
+    key = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+    return ledger.home() / "video-renders" / (key + ".json"), evidence
+
+
+def _private_evidence_directory(directory, *, create):
+    import fsutil
+    import ledger
+
+    if create:
+        ledger._ensure_home()
+        directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or fsutil._is_reparse_or_symlink(info)
+        or not fsutil.is_windows()
+        and (info.st_uid != os.getuid() or info.st_mode & 0o077)
+    ):
+        raise EngineError("stagingExists", str(directory))
+
+
+def _known_render(info, chosen, source_hash, movie):
+    path, evidence = _render_evidence(info, chosen, source_hash, movie)
+    try:
+        import fsutil
+
+        _private_evidence_directory(path.parent, create=False)
+        return json.loads(fsutil.read_private_text(path, max_bytes=32 * 1024)) == evidence
+    except (OSError, ValueError):
+        return False
+
+
 def _matches(meta: dict[str, Any], comp: dict[str, Any]) -> bool:
     """复用证据：引擎声明的 fps 必须与探测一致；Remotion 还核对宽高与帧数。"""
     if abs(float(meta["fps"]) - float(comp["fps"])) >= FPS_TOLERANCE:
@@ -517,6 +575,7 @@ def resolve_source(
     compositions = list_compositions(info)
     chosen = choose_composition(compositions, composition, engine, info["root"])
     warnings: list[str] = []
+    source_hash = source_fingerprint(info)
     sources = freshness_sources(info)
     source_mtime = max((_mtime(p) for p in sources), default=0.0)
 
@@ -548,12 +607,10 @@ def resolve_source(
     movies = scan_movies(info["root"])
     matching = [m for m in movies if m["meta"] and _matches(m["meta"], chosen)]
     fresh = [m for m in matching if m["mtime"] >= source_mtime]
-    if not no_reuse and engine == ENGINE_REMOTION:
-        if len(fresh) == 1:
-            picked = fresh[0]
-            possible = [c["id"] for c in compositions if _matches(picked["meta"], c)]
-            if len(possible) != 1:
-                raise EngineError("movieConfirm", f"{picked['path']} {_describe(picked)} — {', '.join(possible)}")
+    if not no_reuse and fresh:
+        known = [m for m in fresh if _known_render(info, chosen, source_hash, m["path"])]
+        if len(known) == 1:
+            picked = known[0]
             warnings.append(_warn(locale, "engine.warn.reused", path=str(picked["path"]), composition=chosen["id"]))
             return {
                 "action": "reused",
@@ -564,20 +621,31 @@ def resolve_source(
                 "warnings": warnings,
                 **_source_context(info, chosen),
             }
-        if len(fresh) > 1:
+        if len(fresh) > 1 and engine == ENGINE_REMOTION:
             raise EngineError("movieAmbiguous", "\n".join(f"{m['path']} {_describe(m)}" for m in fresh))
-        if matching:
-            raise EngineError(
-                "movieStale",
-                "\n".join(f"{m['path']} {_describe(m)}" for m in matching),
-            )
-    if not no_reuse and engine == ENGINE_HYPERFRAMES and matching:
+        possible = [c["id"] for c in compositions if any(_matches(m["meta"], c) for m in fresh)]
         raise EngineError(
-            "movieConfirm",
+            "movieConfirm", "\n".join(f"{m['path']} {_describe(m)}" for m in fresh) + " — " + ", ".join(possible)
+        )
+    if not no_reuse and matching:
+        raise EngineError(
+            "movieStale" if engine == ENGINE_REMOTION else "movieConfirm",
             "\n".join(f"{m['path']} {_describe(m)}" for m in matching),
         )
 
-    return _render(info, chosen, review_dir, timeout, locale, warnings)
+    result = _render(info, chosen, review_dir, timeout, locale, warnings)
+    if source_hash == source_fingerprint(info):
+        import fsutil
+
+        record, evidence = _render_evidence(info, chosen, source_hash, result["source"])
+        _private_evidence_directory(record.parent, create=True)
+        if record.exists() or record.is_symlink():
+            fsutil.check_private_regular_file(record, max_bytes=32 * 1024)
+        fsutil.atomic_write(record, json.dumps(evidence) + "\n", prefix=".render-")
+        result["sourceFingerprint"] = source_hash
+    else:
+        result["sourceChanged"] = True
+    return result
 
 
 def _describe(movie: dict[str, Any]) -> str:

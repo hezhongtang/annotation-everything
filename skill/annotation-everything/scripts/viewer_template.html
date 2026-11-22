@@ -1935,7 +1935,7 @@ function videoReceiptReady(note,manifest){
   if(typeof vr.summary!=="string"||!vr.summary.trim())return false;
   const verId=vr.versionId;if(typeof verId!=="string"||!/^V[1-9][0-9]*$/.test(verId))return false;
   const versions=(manifest&&Array.isArray(manifest.versions))?manifest.versions:[];
-  const version=versions.find(v=>v&&v.versionId===verId);if(!version)return false;
+  const version=versions.find(v=>v&&v.versionId===verId);if(!version||version.playbackFailure||versions.find(v=>v?.versionId===note.video?.versionId)?.playbackFailure)return false;
   return videoTargetValid(vr.target,version)}
 function videoBatchApprovable(note,manifest){
   return !!(note&&note.status==="drafted"&&videoReceiptReady(note,manifest)&&videoNoteState(note)==="pending_review")}
@@ -2134,7 +2134,7 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
   if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{const cur=videoCurrentVersion()||version;if(Math.abs(player.videoWidth-cur.width)>0||Math.abs(player.videoHeight-cur.height)>0){
       sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.dimensionMismatch")}videoLayout()})}
   player.addEventListener("loadeddata",()=>videoPlaybackState(videoActiveVersionId,true));
-  player.addEventListener("error",()=>{videoPlaybackState(videoActiveVersionId,false);const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
+  player.addEventListener("error",()=>{videoPlaybackState(videoActiveVersionId,false,player.error?.code);const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
   player.addEventListener("timeupdate",()=>{videoRangeTick(player);sr.getElementById("videoFrame").value=videoCurrentFrame()});
   sr.getElementById("videoPrevFrame").onclick=()=>videoSeekDraftFrame(videoCurrentFrame()-1);sr.getElementById("videoNextFrame").onclick=()=>videoSeekDraftFrame(videoCurrentFrame()+1);
   sr.getElementById("videoFrame").onchange=e=>videoSeekDraftFrame(+e.target.value);
@@ -2190,27 +2190,52 @@ async function submitVideoDecision(noteId,action,opts={}){
       toast(tMsg(key),4000)}
     return res;
   }catch(e){onErr(videoDecisionError(e));return null}}
-const videoFailedVersions=new Set(),videoDecodedVersions=new Set();
-async function videoApprovalPlayable(selected,manifest){
-  const ids=new Set(selected.flatMap(note=>[note?.video?.versionId,note?.videoReview?.versionId]));
-  const results=await Promise.all([...ids].map(id=>{
-    const version=manifest?.versions?.find(v=>v.versionId===id);
-    if(!version?.url)return false;
-    if(videoDecodedVersions.has(id))return true;
-    return new Promise(resolve=>{
-      const player=document.createElement("video");
-      const finish=ok=>{clearTimeout(timer);player.onloadeddata=null;player.onerror=null;
-        player.removeAttribute("src");player.load();videoPlaybackState(id,ok);resolve(ok)};
-      const timer=setTimeout(()=>finish(false),10000);
-      player.muted=true;player.preload="auto";player.onloadeddata=()=>finish(true);player.onerror=()=>finish(false);
-      player.src=version.url;player.load()})}));
-  return results.length>0&&results.every(Boolean)}
-function videoPlaybackState(id,readable){
+const videoFailedVersions=new Set(),videoFailureReports=new Map();
+async function reportVideoDecodeFailure(versionId,code,note){
+  if((code!==3&&code!==4)||!serverSupports("video-decode-feedback"))return;
+  const active=n=>n?.videoReview?.versionId===versionId&&["pending_review","missing_evidence","needs_relocate"].includes(n.videoReview.state);
+  const affected=active(note)?note:notes.find(active);
+  if(!affected)return;
+  const vr=affected.videoReview,key=versionId+":"+videoEvidence(affected);
+  if(videoFailureReports.has(key))return videoFailureReports.get(key);
+  const request=api("POST","/api/video/playback-failure",{noteId:affected.id,versionId,batch:vr.batch,
+    expectedEvidence:videoEvidence(affected),mediaError:code}).then(r=>{if(r?.doc)applyServer({...r.doc,handoff:r.handoff},true)})
+    .catch(()=>{}).finally(()=>videoFailureReports.delete(key));
+  videoFailureReports.set(key,request);return request}
+function videoPlaybackState(id,readable,code,note){
   if(!id)return;
   const changed=readable?videoFailedVersions.delete(id):!videoFailedVersions.has(id);
-  if(readable)videoDecodedVersions.add(id);
-  else{videoFailedVersions.add(id);videoDecodedVersions.delete(id)}
+  if(!readable){videoFailedVersions.add(id);reportVideoDecodeFailure(id,code,note)}
   if(changed&&typeof refreshList==="function"){refreshList(true);renderFinalizeAll()}}
+function videoDecodeTarget(note,side){
+  const spec=side?.spec,version=side?.version;
+  if(!spec||!version?.url||version.playbackFailure)return Promise.resolve(false);
+  const times=[spec.seekTime];
+  if(spec.playRange){
+    const first=spec.playRange.startFrame,last=spec.playRange.endFrame-1;
+    for(const frame of [Math.floor((first+last)/2),last])
+      times.push(videoFrameTime(frame,videoVersionClock(version)))}
+  return new Promise(resolve=>{
+    const player=document.createElement("video");
+    const positions=[...new Set(times)].filter(Number.isFinite);let index=0;
+    const finish=(ok,code)=>{clearTimeout(timer);player.onloadeddata=player.onseeked=player.onerror=player.oncanplay=null;
+      player.removeAttribute("src");player.load();
+      if(code===3||code===4)videoPlaybackState(version.versionId,false,code,note);
+      resolve(ok)};
+    const next=()=>{if(index===positions.length){finish(true);return}
+      const pos=positions[index++];if(player.readyState>=2&&Math.abs(player.currentTime-pos)<0.0001){next();return}
+      player.onseeked=()=>{player.onseeked=null;if(player.readyState>=2)next();else player.oncanplay=()=>{player.oncanplay=null;next()}};
+      player.currentTime=pos};
+    const timer=setTimeout(()=>finish(false),15000);
+    player.muted=true;player.preload="auto";player.onloadeddata=()=>{player.onloadeddata=null;next()};
+    player.onerror=()=>finish(false,player.error?.code);player.src=version.url;player.load()})}
+async function videoApprovalPlayable(selected,manifest){
+  for(const note of selected){
+    const pair=videoComparePair(note,manifest);
+    if(!pair)return false;
+    const ok=await Promise.all([videoDecodeTarget(note,pair.before),videoDecodeTarget(note,pair.after)]);
+    if(!ok.every(Boolean))return false}
+  return selected.length>0}
 function videoCompareEl(side){return sr.getElementById(side==="before"?"videoCompareBefore":"videoCompareAfter")}
 function videoCompareMarksEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeMarks":"videoCompareAfterMarks")}
 function videoCompareBoxEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeBox":"videoCompareAfterBox")}
@@ -2468,9 +2493,7 @@ function videoCompareInit(){
   for(const side of ["before","after"]){
     const player=videoCompareEl(side);if(!player)continue;
     const changed=ok=>{const info=videoComparePairState?.[side];if(!info?.url||player.getAttribute("src")!==info.url)return;
-      videoPlaybackState(info.versionId,ok);
-      const button=sr.getElementById("videoCompareApprove");
-      if(button)button.disabled=["before","after"].some(s=>{const el=videoCompareEl(s);return el?.error||el?.readyState<2});
+      videoPlaybackState(info.versionId,ok,player.error?.code,notes.find(n=>n.id===videoCompareNoteId));
       if(!ok){const err=sr.getElementById("videoCompareDecisionErr");if(err){err.hidden=false;err.textContent=tMsg("viewer.video.playbackUnavailable")}}};
     player.addEventListener("loadeddata",()=>changed(true));player.addEventListener("error",()=>changed(false))}
   const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");

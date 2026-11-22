@@ -10549,6 +10549,47 @@ def video_mp4_rework(page, review, identity, movies):
     video_artifact(page, review, "audio-v1-v2-v3", data={"claim": claim, "note": approved["note"]})
 
 
+def video_browser_decode_repair(page, review, identity, movies):
+    """用未编码样本模拟中断的导出，浏览器识别后让原会话在同一批更换成片。"""
+    page.click("#videoCompareClose")
+    notes = page.request.get("/api/notes").json()["notes"]
+    nid = next(n["id"] for n in notes if n["text"] == "Review the palette later")
+    page.click("#handBtn")
+    page.click("[data-pick='none']")
+    page.check(f"#handPick input[data-noteid='{nid}']")
+    claim = video_claim(page, review, identity, 3)
+    entries = [
+        {"noteId": nid, "outcome": "fixed", "summary": "Updated palette", "target": {"kind": "frame", "frame": 65}}
+    ]
+    data = bytearray(movies["V3"].read_bytes())
+    start = data.index(b"mdat")
+    size = int.from_bytes(data[start - 4 : start], "big")
+    data[start + 4 : start - 4 + size] = bytes(size - 8)
+    broken = review.parent / "unencoded-samples.mp4"
+    broken.write_bytes(data)
+    with page.expect_response(
+        lambda r: r.request.method == "POST" and r.url.endswith("/api/video/playback-failure")
+    ) as failed:
+        video_deliver(page, review, identity, claim, broken, entries, "V4")
+        if (
+            next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == nid)["videoReview"]["state"]
+            == "pending_review"
+        ):
+            video_compare(page, nid)
+    assert failed.value.ok, failed.value.text()
+    data = failed.value.json()
+    ok(
+        data["handoff"]["latest"]["status"] == "claimed" and data["doc"]["video"]["currentVersionId"] == "V3",
+        "Chrome 解码失败后保留上一有效成片，原接收会话可在同批继续",
+    )
+    video_deliver(page, review, identity, claim, movies["V3"], entries, "V5")
+    note = next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == nid)
+    ok(
+        note["videoReview"]["versionId"] == "V5" and note["videoReview"]["state"] == "pending_review",
+        "同批补交 V5 后原条目恢复待人工复核",
+    )
+
+
 def video_review_checks(browser, tmp: Path):
     movies = video_demo_movies(browser, tmp / "video-fixtures")
     project = movies["V1"].parent.parent
@@ -10570,6 +10611,7 @@ def video_review_checks(browser, tmp: Path):
     video_cli(builder, "--report", movies["V1"], "--out", review, "--no-scan-skills", "--locale", "en")
     with video_review_page(browser, review) as (page, identity):
         video_mp4_rework(page, review, identity, movies)
+        video_browser_decode_repair(page, review, identity, movies)
 
 
 SCENARIO_RUNNERS = {

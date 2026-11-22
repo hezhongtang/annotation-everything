@@ -372,7 +372,9 @@ def _next_version_number(video: dict[str, Any]) -> int:
     return highest + 1
 
 
-def prepare(source: Path, review_dir: Path, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+def prepare(
+    source: Path, review_dir: Path, existing: dict[str, Any] | None = None, *, origin: dict | None = None
+) -> dict[str, Any]:
     """登记 V1。重建时从私有副本读取，绝不回头采用可能已被覆盖的原文件。"""
     existing = existing or {}
     if existing.get("format", {}).get("report") == "video":
@@ -385,7 +387,31 @@ def prepare(source: Path, review_dir: Path, existing: dict[str, Any] | None = No
             raise VideoError("审阅内 V1 的 SHA-256 与清单不符；请恢复原始证据后再重建")
         return json.loads(json.dumps(existing["video"]))
 
-    version = _stage_and_probe_mp4(source, review_dir, 1)
+    review_dir.mkdir(parents=True, exist_ok=True)
+    journal = review_dir / ".video-first-build.json"
+    identity = origin or {"source": str(source.resolve())}
+    with ledger.metadata_lock(review_dir, exclusive=True):
+        if journal.is_file() and (review_dir / "media" / "v1.mp4").exists():
+            try:
+                saved = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
+            except (OSError, ValueError) as exc:
+                raise VideoError("V1 构建记录不可读") from exc
+            version = saved["version"]
+            if saved.get("origin") != identity or version.get("path") != "media/v1.mp4":
+                raise VideoError("已有 V1 属于另一次构建，请选择其他审阅目录")
+            private = media_path(review_dir, {"video": {"versions": [version]}}, "V1")
+            if (
+                file_digest(private) != version["sha256"]
+                or not identity.get("sourceFingerprint")
+                and file_digest(source) != version["sha256"]
+            ):
+                raise VideoError("已有 V1 与此来源的 SHA-256 不符")
+        else:
+
+            def save_intent(entry):
+                _write_manifest(journal, {"origin": identity, "version": entry})
+
+            version = _stage_and_probe_mp4(source, review_dir, 1, save_intent)
     return {"formatVersion": FORMAT_VERSION, "currentVersionId": "V1", "versions": [version]}
 
 
@@ -418,7 +444,7 @@ def register_version(
 
         journal = Path(review_dir) / ".video-registration.json"
         if journal.exists():
-            pending = json.loads(journal.read_text(encoding="utf-8"))
+            pending = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
             if pending["reviewId"] != manifest["reviewId"]:
                 raise VideoError("待恢复的视频版本与审阅标识不匹配")
             entry = pending["version"]
@@ -451,6 +477,35 @@ def register_version(
         _write_manifest(manifest_path, manifest)
         journal.unlink()
         return json.loads(json.dumps(version))
+
+
+def reject_decoded_version(review_dir: Path, version_id: str, batch: int, review_id: str, reason: str) -> dict:
+    """保留浏览器不能解码的版本证据，默认播放最近的有效成片。"""
+    with ledger.metadata_lock(review_dir, exclusive=True):
+        path, manifest = _read_video_manifest(review_dir, review_id=review_id)
+        video = manifest["video"]
+        version = registered_version(manifest, version_id)
+        if version.get("batch") != batch:
+            raise VideoError("版本不属于指定批次")
+        if version.get("playbackFailure"):
+            return version["playbackFailure"]
+        failure = {
+            "versionId": version_id,
+            "batch": batch,
+            "by": "page",
+            "at": _now_iso(),
+            "stage": "decode",
+            "reason": reason,
+        }
+        version["playbackFailure"] = failure
+        video["failures"] = [*video.get("failures", []), failure][-FAILURES_KEEP:]
+        if video["currentVersionId"] == version_id:
+            video["currentVersionId"] = next(
+                v["versionId"] for v in reversed(video["versions"]) if not v.get("playbackFailure")
+            )
+            video["lastFailure"] = failure
+        _write_manifest(path, manifest)
+        return failure
 
 
 def record_failure(
@@ -794,6 +849,8 @@ def review_readiness(
         version_meta = registered_version(manifest, version_id)
     except VideoError:
         return False, "unregistered-version"
+    if version_meta.get("playbackFailure"):
+        return False, "media-unreadable"
     if not isinstance(vr.get("batch"), int) or version_meta.get("batch") != vr["batch"]:
         return False, "unregistered-version"
     target = vr.get("target")
@@ -813,6 +870,8 @@ def review_readiness(
                 return False, "missing-target"
             for vid in {version_id, original}:
                 cut = registered_version(manifest, vid)
+                if cut.get("playbackFailure"):
+                    return False, "media-unreadable"
                 path = media_path(base_dir, manifest, vid)
                 stat = path.stat()
                 identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
@@ -848,6 +907,7 @@ def public_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
                     "timebase",
                     "frames",
                     "batch",
+                    "playbackFailure",
                     "at",
                     "by",
                 )

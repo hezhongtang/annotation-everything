@@ -2868,6 +2868,7 @@
     "cli.batch.trail.action.relocate": "Needs relocate",
     "cli.batch.trail.action.relocated": "Relocated by reviewer",
     "cli.batch.trail.action.failed": "Receipt failed",
+    "cli.hand.error.videoReviewerDecisionRequired": "Return or reply to a video annotation using its review controls.",
     "cli.hand.error.videoManualApprovalRequired": "Video annotations must be approved by the reviewer on the page; the agent cannot mark them resolved or finalized.",
     "cli.hand.error.videoNotReady": "Video annotation {id} is not ready for manual approval ({reason}).",
     "cli.hand.error.reviewMismatch": "Review ID mismatch; refusing to write to a different review.",
