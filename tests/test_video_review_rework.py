@@ -300,6 +300,67 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(store.load(self.review), before)
         self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
 
+    def interrupt_after_decode_failure_is_registered(self):
+        from unittest.mock import patch
+
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n1", action="approve")
+        reject = store.video_review.reject_decoded_version
+
+        def interrupt(*args):
+            reject(*args)
+            raise OSError("synthetic interruption after manifest commit")
+
+        with (
+            patch.object(store.video_review, "reject_decoded_version", side_effect=interrupt),
+            self.assertRaises(OSError),
+        ):
+            store.video_decode_failed(
+                self.review,
+                note_id="n2",
+                version_id="V2",
+                seq=1,
+                expected_evidence=self._note("n2")["videoReview"]["evidenceRevision"],
+                review_id=self.rid,
+                reason="Browser decoder rejected this target",
+            )
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
+
+    def test_poll_after_restart_recovers_decode_failure_without_another_browser_report(self):
+        self.interrupt_after_decode_failure_is_registered()
+        with serve.ReviewServer(self.review, 0, log_to_file=False) as server:
+            worker = threading.Thread(target=server.handle_request, daemon=True)
+            worker.start()
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{server.port}"})
+            worker.join(2)
+        self.assertEqual(code, 200, raw)
+        response = json.loads(raw)
+        self.assertEqual(response["handoff"]["latest"]["status"], "claimed")
+        notes = {n["id"]: n for n in response["notes"]}
+        self.assertEqual(notes["n2"]["videoReview"]["state"], "failed")
+        self.assertEqual(notes["n1"]["videoReview"]["decision"], "approved")
+
+    def test_same_receiver_can_replace_failed_cut_after_interruption_before_page_refresh(self):
+        self.interrupt_after_decode_failure_is_registered()
+        reply = store.video_receipt(
+            self.review,
+            seq=1,
+            review_id=self.rid,
+            receipt_id="replacement",
+            by="claude",
+            movie=self._movie(self.v3_bytes, "replacement.mp4"),
+            receipt={
+                "notes": [
+                    {"noteId": "n2", "outcome": "fixed", "summary": "新成片", "target": {"kind": "frame", "frame": 65}}
+                ]
+            },
+        )
+        self.assertEqual(reply["version"]["versionId"], "V3")
+        self.assertEqual(self._note("n1")["videoReview"]["decision"], "approved")
+        vr = self._note("n2")["videoReview"]
+        self.assertEqual(vr["state"], "pending_review")
+        self.assertEqual(sum(h.get("source") == "browser" for h in vr["history"]), 1)
+
     def test_browser_decode_failure_reopens_the_same_batch_and_keeps_human_decisions(self):
         self._deliver_v2_mixed_batch()
         store.video_decision(self.review, "n1", action="approve")
@@ -1456,7 +1517,7 @@ class VideoPageReworkUITests(unittest.TestCase):
                     "batch": 2,
                     "versionId": "V2",
                     "summary": "已压低",
-                    "target": {"kind": "frame", "versionId": "V2", "frame": 30},
+                    "target": {"kind": "frame", "versionId": "V2", "frame": 65},
                 },
             },
             {
@@ -1509,7 +1570,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             locale="zh-CN",
         )
         self.assertEqual(cmp_actual["blockedCount"], 0)
-        self.assertIn(["/api/video/versions/V2/media", 1], cmp_actual["seeks"])
+        self.assertIn(["/api/video/versions/V2/media", 2.166667], cmp_actual["seeks"])
         self.assertEqual(set(cmp_actual["probes"]), {"/api/video/versions/V1/media", "/api/video/versions/V2/media"})
         self.assertTrue(cmp_actual["emptyErr"])
         self.assertEqual(len(cmp_actual["apiCalls"]), 3)

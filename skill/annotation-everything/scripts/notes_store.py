@@ -3179,10 +3179,35 @@ def video_decode_failed(
                 expected=version_id,
                 actual=vr.get("versionId"),
             )
-    failure = video_review.reject_decoded_version(review_dir, version_id, seq, review_id, reason)
+    video_review.reject_decoded_version(review_dir, version_id, seq, review_id, reason)
+    recover_video_decode_failures(review_dir, ledger.read_manifest(review_dir))
+
+
+def recover_video_decode_failures(review_dir: Path, manifest: dict) -> None:
+    video = manifest.get("video")
+    if not isinstance(video, dict):
+        return
+    pending = [
+        v["playbackFailure"]
+        for v in video.get("versions", [])
+        if isinstance(v, dict) and isinstance(v.get("playbackFailure"), dict) and not v.get("playbackFailureSynced")
+    ]
+    if not pending:
+        return
     with locked(review_dir):
+        if ledger.read_manifest(review_dir).get("reviewId") != manifest.get("reviewId"):
+            return
         doc, ndoc = handoff_load(review_dir), load(review_dir)
-        item = _find_batch(doc["items"], seq)
+        _sync_decode_failures(review_dir, pending, doc, ndoc)
+    video_review.finish_decode_recovery(review_dir, manifest["reviewId"], pending)
+
+
+def _sync_decode_failures(review_dir: Path, pending: list[dict], doc: dict, ndoc: dict) -> None:
+    for failure in pending:
+        seq, version_id, reason = failure["batch"], failure["versionId"], failure["reason"]
+        item = next((i for i in doc["items"] if i["seq"] == seq), None)
+        if item is None:
+            continue
         affected = []
         for note in ndoc["notes"]:
             vr = note.get("videoReview") or {}
@@ -3264,6 +3289,8 @@ def video_receipt(
     req_render_err = spec["renderError"]
     req_summary = spec["summary"]
     entries = spec["entries"]
+
+    recover_video_decode_failures(review_dir, ledger.read_manifest(review_dir))
 
     # Phase 1: 在 .notes.lock 下预检批次、权限、幂等、目标批注与（可选）源位置范围
     probed_meta: dict[str, Any] | None = None

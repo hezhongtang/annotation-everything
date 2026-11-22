@@ -2225,7 +2225,7 @@ function videoDecodeTarget(note,side){
     const next=()=>{if(index===positions.length){finish(true);return}
       const pos=positions[index++];if(player.readyState>=2&&Math.abs(player.currentTime-pos)<0.0001){next();return}
       player.onseeked=()=>{player.onseeked=null;if(player.readyState>=2)next();else player.oncanplay=()=>{player.oncanplay=null;next()}};
-      player.currentTime=pos};
+      videoSeekTime(player,pos)};
     const timer=setTimeout(()=>finish(false),15000);
     player.muted=true;player.preload="auto";player.onloadeddata=()=>{player.onloadeddata=null;next()};
     player.onerror=()=>finish(false,player.error?.code);player.src=version.url;player.load()})}

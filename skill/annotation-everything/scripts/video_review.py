@@ -508,6 +508,20 @@ def reject_decoded_version(review_dir: Path, version_id: str, batch: int, review
         return failure
 
 
+def finish_decode_recovery(review_dir: Path, review_id: str, failures: list[dict]) -> None:
+    """批注和批次已落盘才标记完成。旧版缺少标记的解码失败也可恢复。"""
+    with ledger.metadata_lock(review_dir, exclusive=True):
+        path, manifest = _read_video_manifest(review_dir, review_id=review_id)
+        changed = False
+        for failure in failures:
+            version = registered_version(manifest, failure["versionId"])
+            if version.get("playbackFailure") == failure and not version.get("playbackFailureSynced"):
+                version["playbackFailureSynced"] = True
+                changed = True
+        if changed:
+            _write_manifest(path, manifest)
+
+
 def record_failure(
     review_dir: Path,
     *,

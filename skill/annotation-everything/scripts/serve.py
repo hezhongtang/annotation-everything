@@ -1343,6 +1343,7 @@ class Handler(BaseHTTPRequestHandler):
             if (d / store.VIDEO_COMMIT_FILE).exists():
                 with store.locked(d):
                     pass  # 服务重启后首次轮询即可读到已提交的批次与逐条记录。
+            store.recover_video_decode_failures(d, self.server.manifest())
             doc = self._notes_doc()
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
