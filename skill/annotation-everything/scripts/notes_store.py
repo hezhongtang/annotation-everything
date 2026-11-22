@@ -2108,7 +2108,8 @@ def handoff_submit(
     with locked(review_dir):
         if authorize is not None:
             authorize()
-        notes = load(review_dir)["notes"]
+        note_doc = load(review_dir)
+        notes = note_doc["notes"]
         doc = handoff_load(review_dir)
         items = doc["items"]
         manifest = ledger.read_manifest(review_dir)
@@ -2149,7 +2150,11 @@ def handoff_submit(
         }
         if video is not None:
             by_id = {n["id"]: n for n in notes}
-            snap["videoSubmission"] = {"notes": [by_id[nid] for nid in snap["openIds"]], "video": video}
+            snap["videoSubmission"] = {
+                "rev": note_doc["rev"],
+                "notes": [by_id[nid] for nid in snap["openIds"]],
+                "video": video,
+            }
         if submit_id is not None:
             snap["submitId"] = submit_id
         if merge_into is not None:

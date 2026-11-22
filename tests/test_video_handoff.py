@@ -380,20 +380,28 @@ class ClaimPayloadTests(VideoHandoffBase):
         )
         self.assertEqual(payload["materials"][0]["video"]["startFrame"], 120)
 
-    def test_wait_output_lists_only_selected_notes_with_source_line(self):
-        store.handoff_submit(self.d, "只交两条", note_ids=["n1", "n2"])
+    def wait_text(self):
         env = {k: v for k, v in os.environ.items()}
         os.environ["AE_HARNESS"] = "Claude Code"
         os.environ["AE_SESSION_ID"] = "session-a"
         try:
             buf, err = io.StringIO(), io.StringIO()
             with redirect_stdout(buf), redirect_stderr(err):
-                code = notes_cli.main(["wait", str(self.d), "--no-claim", "--timeout", "0"])
+                code = notes_cli.main(["wait", str(self.d), "--no-claim", "--timeout", "0", "--locale", "en"])
         finally:
             os.environ.clear()
             os.environ.update(env)
         self.assertEqual(code, 0)
-        text = buf.getvalue()
+        return buf.getvalue()
+
+    def test_wait_output_lists_only_selected_notes_with_source_line(self):
+        rev = store.load(self.d)["rev"]
+        store.handoff_submit(self.d, "只交两条", note_ids=["n1", "n2"])
+        store.update(self.d, "n1", {"text": "提交后编辑"})
+        text = self.wait_text()
+        self.assertIn(f". rev {rev}\n", text)
+        self.assertNotIn("top-left of the page", text)
+        self.assertIn("relative to the actual video picture", text)
         self.assertIn("n1", text)
         self.assertIn("n2", text)
         self.assertNotIn("这次不交", text, "未选中的批注不进 wait 输出")
@@ -401,6 +409,15 @@ class ClaimPayloadTests(VideoHandoffBase):
         self.assertNotIn("notes.py resolve", text)
         self.assertIn(str(self.root / "project"), text)
         self.assertIn("Main", text)
+
+    def test_wait_omits_unrecorded_revision_for_legacy_video_snapshot(self):
+        store.handoff_submit(self.d, "", note_ids=["n1"])
+        batches = store.handoff_load(self.d)
+        batches["items"][0]["videoSubmission"].pop("rev", None)
+        (self.d / store.HANDOFF_FILE).write_text(json.dumps(batches))
+        text = self.wait_text()
+        self.assertIn("listing 1", text)
+        self.assertNotIn(". rev ", text)
 
 
 class ServeHandoffTests(VideoHandoffBase):

@@ -1073,9 +1073,10 @@ def to_markdown(
         t("cli.show.count", count=len(all_notes))
         + t("cli.show.countTail", list=t("cli.show.countSep").join(counts))
         + t("cli.show.listingAll" if include_resolved else "cli.show.listing", count=len(notes))
-        + t("cli.show.rev", rev=doc.get("rev")),
-        _mark_hint(t, lang),
+        + (t("cli.show.rev", rev=doc["rev"]) if doc.get("rev") is not None else ""),
     ]
+    if not isinstance(manifest.get("video"), dict):
+        head.append(_mark_hint(t, lang))
     if sources:  # 已按 review.json 解析成实际路径（相对审阅目录优先），改稿就改这里列出的文件
         parts = []
         for kind, path in sources.items():
@@ -2933,7 +2934,7 @@ def wait(
     alw = store.always_skills(d)
     if alw:
         print(t("cli.hand.alwaysLine", list=always_text(t, alw)))
-    doc = {"notes": submitted["notes"]} if submitted else store.load(d)
+    doc = submitted or store.load(d)
     open_ids = set(item.get("openIds") or [])
     mine = {n["id"] for n in doc["notes"] if n.get("id") in open_ids and n.get("status", "open") == "open"}
     needed_notes = (n for n in doc["notes"] if n.get("status", "open") == "open" and (not video or n["id"] in mine))
