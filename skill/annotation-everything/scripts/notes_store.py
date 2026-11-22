@@ -2704,6 +2704,8 @@ def _apply_video_receipt_to_note(
         new_vr["relocateReason"] = entry["relocateReason"]
     if outcome == "failed":
         new_vr["failure"] = entry["failure"]
+    if isinstance(vr.get("relocatedFrom"), dict):
+        new_vr["relocatedFrom"] = copy.deepcopy(vr["relocatedFrom"])
     note["videoReview"] = new_vr
     note["updatedAt"] = now
     _trail(note, by=by, stage="draft", batch=n_seq, action=trail_action, note=trail_note)
@@ -3103,6 +3105,227 @@ def video_receipt(
             "batch": copy.deepcopy(item),
             "notes": copy.deepcopy(touched_notes),
         }
+
+
+def relocate_video_note(
+    review_dir: Path,
+    note_id: str,
+    *,
+    target: Any,
+    version_id: str | None = None,
+    summary: str | None = None,
+    reason: str | None = None,
+    by: str = "page",
+    authorize: Callable[[], None] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """审阅人人工校对或补齐视频批注的新版位置（在 .notes.lock 内完成，绝不嵌套 metadata_lock）。"""
+    actor = str(by or "").strip()[:200] or "page"
+    if version_id is not None and (
+        not isinstance(version_id, str) or not video_review.VERSION_ID.fullmatch(version_id)
+    ):
+        raise HandoffError("目标版本标识无效", code="invalid-receipt-target", id=note_id)
+    if not isinstance(target, dict):
+        raise HandoffError("回执位置须为对象", code="invalid-receipt-target", id=note_id)
+
+    with locked(review_dir):
+        if authorize is not None:
+            authorize()
+        manifest = ledger.read_manifest(review_dir)
+        if not _is_video_review(manifest):
+            raise HandoffError("只有视频审阅支持视频重定位", code="no-video")
+        ndoc = load(review_dir)
+        note = _find(ndoc, note_id)
+        if not _is_video_review(manifest, note):
+            raise HandoffError("只有视频批注支持视频重定位", code="no-video", id=note_id)
+        if note.get("status") == "held":
+            raise HandoffError(f"{note_id} 已被分析搁住，不能重定位", code="note-held", id=note_id)
+        vr = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else None
+        if note.get("status") == "resolved" or (vr and vr.get("decision") is not None):
+            raise HandoffError(f"批注 {note_id} 已有人工决定，不能重定位", code="note-already-decided", id=note_id)
+
+        if version_id is not None:
+            if target.get("versionId") is not None and target.get("versionId") != version_id:
+                raise HandoffError(
+                    f"回执位置 versionId（{target.get('versionId')}）与目标版本 {version_id} 不符",
+                    code="invalid-receipt-target",
+                    id=note_id,
+                )
+            target_vid = version_id
+        else:
+            target_vid = (
+                target.get("versionId")
+                or (vr.get("versionId") if vr else None)
+                or ((manifest.get("video") or {}).get("currentVersionId"))
+            )
+        try:
+            version_meta = video_review.registered_version(manifest, str(target_vid or ""))
+            cleaned_target = video_review.clean_receipt_target(target, version_meta)
+        except video_review.VideoError as exc:
+            raise HandoffError(str(exc), code="invalid-receipt-target", id=note_id) from None
+
+        clean_summary = _receipt_str(summary) if summary is not None else ""
+        existing_summary = _receipt_str(vr.get("summary")) if vr else ""
+        final_summary = clean_summary if summary is not None else existing_summary
+        clean_reason = _receipt_str(reason) if reason is not None else ""
+
+        now = now_iso()
+        prev_vr = copy.deepcopy(vr) if vr else None
+        prev_state = (
+            prev_vr.get("state")
+            if prev_vr
+            else ("missing_evidence" if note.get("status") == "drafted" else "unsubmitted")
+        )
+        prev_ver = (
+            prev_vr.get("versionId")
+            if prev_vr and prev_vr.get("versionId")
+            else ((note.get("video") or {}).get("versionId") if isinstance(note.get("video"), dict) else None)
+        )
+        prev_target = (
+            copy.deepcopy(prev_vr.get("target")) if prev_vr and isinstance(prev_vr.get("target"), dict) else None
+        )
+        prev_reason = prev_vr.get("relocateReason") if prev_vr else None
+        prev_summary = prev_vr.get("summary") if prev_vr else None
+        batch_seq = (
+            prev_vr.get("batch")
+            if prev_vr and isinstance(prev_vr.get("batch"), int) and not isinstance(prev_vr.get("batch"), bool)
+            else (
+                note.get("draftBatch")
+                if isinstance(note.get("draftBatch"), int) and not isinstance(note.get("draftBatch"), bool)
+                else None
+            )
+        )
+        had_batch = (batch_seq is not None) or (note.get("status") == "drafted")
+        next_state = "pending_review" if final_summary else "missing_evidence"
+
+        history = list(prev_vr.get("history") or []) if prev_vr and isinstance(prev_vr.get("history"), list) else []
+        hist_entry: dict[str, Any] = {
+            "source": "relocate",
+            "action": "relocate",
+            "at": now,
+            "by": actor,
+            "state": next_state,
+            "versionId": version_meta["versionId"],
+            "target": cleaned_target,
+            "previousState": prev_state,
+        }
+        if batch_seq is not None:
+            hist_entry["batch"] = batch_seq
+        if prev_ver:
+            hist_entry["previousVersionId"] = prev_ver
+        if prev_target is not None:
+            hist_entry["previousTarget"] = prev_target
+        if prev_reason:
+            hist_entry["previousReason"] = prev_reason
+        if final_summary:
+            hist_entry["summary"] = final_summary
+        if clean_reason:
+            hist_entry["reason"] = clean_reason
+        history.append(hist_entry)
+
+        if prev_vr and isinstance(prev_vr.get("relocatedFrom"), dict):
+            relocated_from = copy.deepcopy(prev_vr["relocatedFrom"])
+        else:
+            relocated_from = {"state": prev_state, "at": now, "by": actor}
+            if prev_ver:
+                relocated_from["versionId"] = prev_ver
+            if prev_target is not None:
+                relocated_from["target"] = prev_target
+            if prev_reason:
+                relocated_from["relocateReason"] = prev_reason
+            if prev_summary:
+                relocated_from["summary"] = prev_summary
+            if prev_vr and prev_vr.get("question"):
+                relocated_from["question"] = prev_vr["question"]
+            if prev_vr and prev_vr.get("failure"):
+                relocated_from["failure"] = prev_vr["failure"]
+            if prev_vr and prev_vr.get("returnReason"):
+                relocated_from["returnReason"] = prev_vr["returnReason"]
+
+        new_vr: dict[str, Any] = {
+            "v": 1,
+            "state": next_state,
+            "versionId": version_meta["versionId"],
+            "target": cleaned_target,
+            "by": actor,
+            "at": now,
+            "relocatedFrom": relocated_from,
+            "history": history[-VIDEO_HISTORY_KEEP:],
+        }
+        if batch_seq is not None:
+            new_vr["batch"] = batch_seq
+        if prev_vr and prev_vr.get("receiptId"):
+            new_vr["receiptId"] = prev_vr["receiptId"]
+        if prev_vr and prev_vr.get("outcome"):
+            new_vr["outcome"] = prev_vr["outcome"]
+        if final_summary:
+            new_vr["summary"] = final_summary
+        if clean_reason:
+            new_vr["relocatedReason"] = clean_reason
+
+        if next_state == "pending_review" and had_batch:
+            for k in RESOLVE_FIELDS:
+                note.pop(k, None)
+            note.update(status="drafted", draftedAt=now, draftedBy=actor, resolution=final_summary)
+            if batch_seq is not None:
+                note["draftBatch"] = batch_seq
+        else:
+            note["status"] = "open"
+            for k in RESOLVE_FIELDS + DRAFT_FIELDS:
+                note.pop(k, None)
+
+        note["videoReview"] = new_vr
+        note["updatedAt"] = now
+        trail_note = clean_reason or final_summary or None
+        _trail(
+            note,
+            by=actor,
+            stage="page" if actor == "page" else None,
+            batch=batch_seq,
+            action="relocated",
+            note=trail_note,
+        )
+        ndoc = _commit(
+            review_dir,
+            ndoc,
+            {
+                "op": "video-relocate",
+                "by": actor,
+                "id": note_id,
+                "versionId": version_meta["versionId"],
+                "state": next_state,
+            },
+        )
+        handoff_doc = handoff_load(review_dir)
+        if batch_seq is not None:
+            item = next(
+                (i for i in handoff_doc["items"] if int(i.get("seq", 0) or 0) == batch_seq),
+                None,
+            )
+            if item is not None:
+                mine = [n for n in ndoc["notes"] if n.get("status") == "drafted" and n.get("draftBatch") == batch_seq]
+                in_flight_set = {
+                    x for it in handoff_doc["items"] if it.get("status") in IN_FLIGHT for x in (it.get("openIds") or [])
+                }
+                item["draftedIds"] = [n["id"] for n in mine]
+                item["draftedCount"] = len(mine)
+                if item.get("status") == "done" and mine:
+                    item["status"] = "drafted"
+                    item["resolvedIds"] = []
+                    item["resolvedCount"] = 0
+                    item["leftOpen"] = sum(1 for x in item.get("openIds") or [] if x in _open_ids(ndoc["notes"]))
+                item["videoStats"] = _video_batch_stats(ndoc["notes"], item, in_flight=in_flight_set)
+                handoff_doc = _handoff_commit(
+                    review_dir,
+                    handoff_doc,
+                    {
+                        "op": "handoff-video-relocate",
+                        "by": actor,
+                        "seq": batch_seq,
+                        "id": note_id,
+                        "state": next_state,
+                    },
+                )
+        return ndoc, note, handoff_doc
 
 
 # ---------- 重建后校正页码：DOCX 先按段落，其余按页面键 ----------

@@ -105,6 +105,9 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
   - `notes.py video-receipt 审阅目录 [--seq N] [--review-id ID] [--receipt 文件|-] [--movie 新成片.mp4] [--receipt-id ID] [--render-error 原因] [--summary 说明] [--no-finish] [--by 角色] [--json]` 在原批注下写回本轮回执。新成片在台账元数据锁内先经 0600 临时文件落盘并校验（恒定帧率、单视频轨、有效宽高与时长）再原子移入 `media/v{N}.mp4`，追加进 `review.json` 的 `video.versions[]` 并更新 `currentVersionId` 与清除 `lastFailure`（绝不覆盖已有 `V1` 或泄露本机路径）；渲染失败或新成片不可播放时在 `video.lastFailure` / `video.failures[]` 记账并保留上一有效版本。同批次同一 `(seq, receiptId)` 幂等重放不重复登记版本或历史。
   - 原批注的 `video` 定位保持不可变，回执写进 `videoReview`（不进 `EDITABLE`，通用 `PATCH /api/notes/<id>` 与导入不得篡改）：`fixed` / `deleted` 带合法 `target`（`frame` / `range` / `cut`，均按对应成片总帧数严格校界）与 `summary` 时记 `status = "drafted"`、`videoReview.state = "pending_review"`；缺目标证据时保留 `open` 与 `missing_evidence`；`question` / `needs_relocate` / `failed` 保持 `open` 并分别记录 `needs_reply`（含提问）、`needs_relocate`（含原因）或 `failed`（含失败原因）。支持 `--no-finish` 分次交回局部结果，未交回完时批次留待补交或结束；每轮结果追加至 `videoReview.history[]`。
   - 严禁 Agent 越权通过：`handoff_done`（含 `--final`）绝不把视频初改标为 `resolved`；Agent 调用 `resolve` 或 `review --ok/--revise` 一律拒绝（`video-manual-approval-required`）。页面人工通过（`PATCH /api/notes/<id>` / `POST /api/handoff/finalize` / `finalize-all`）前均校 `review_readiness`（须 `pending_review`、带改动说明、合法版本内 `target` 且对应版本媒体可读），不完备批注在 UI 隐藏通过按钮并在服务端拒绝或于 `finalize-all` 列为 `unready` 跳过。服务声明 `video-receipt` 特性并在 `GET /api/notes` 带公开 `video` 清单供对照页热更新版本切换与失败横幅。
+- 前后对照、删镜剪口与人工重定位（#196）：
+  - 对照页提供并排的原版 / 改后独立 `<video>` 对照舞台（`video-compare` 特性）：按各自登记版本的 `timebase`（`num/den`）与 `fps` 换算帧与半开区间，画面意见各自停到对应帧并叠加对应 `mark`，时序/声音意见可分别点击播放各自不静音（`muted = false`）的区间且互不抢音轨，删除镜头（`outcome: "deleted"`，`target.kind: "cut"`）展示删除说明与剪口并按显式或有界上下文窗口播放新版上下文，同时保留原片可回看。
+  - 审阅人可在未定稿条目的对照舞台或卡片打开人工重定位（`POST /api/notes/<id>/video-relocate`，声明 `video-relocate` 特性；沿用 Host、同源 `Origin`、JSON `Content-Type`、`X-AE-Review` 与停审门禁）：从 `needs_relocate`、`missing_evidence`、`pending_review` 或已有未补全位置的新版条目补齐或校正 `versionId`、`target`（严格校界，越界/未登记版本拒绝）与可选 `summary`/`reason`，将此前位置/原因归档进 `videoReview.relocatedFrom` 并追加 `videoReview.history[]` 与 `trail`（不改原 `video` 与正文，后续 `video-receipt` 也不抹除重定位追溯）；缺改动说明时仍保持 `missing_evidence`，不能进入可验收。
 
 ## 从源工程直接开始（Remotion / HyperFrames）
 
@@ -258,7 +261,8 @@ One line per paragraph.
         "batch": 1, "receiptId": "rcpt-1", "outcome": "fixed", "versionId": "V2",
         "summary": "片头+12帧并上移字幕",
         "target": {"kind": "frame", "versionId": "V2", "frame": 108},   // 支持 frame / range / cut（可选 contextStart/End）
-        "history": [ …按原批注累计的各轮回执与证据… ]
+        "relocatedFrom": { …人工重定位前最早位置/原因快照（如有）… },
+        "history": [ …按原批注累计的各轮回执、重定位与证据… ]
       }
     }
   ]

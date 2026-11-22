@@ -103,6 +103,8 @@ FEATURES = [
     "selective-handoff",
     "video-source",
     "video-receipt",
+    "video-compare",
+    "video-relocate",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -189,6 +191,7 @@ MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
+NOTE_VIDEO_RELOCATE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-relocate$")
 VIDEO_MEDIA_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)/media$")
 VIDEO_VERSION_PATH = re.compile(r"^/api/video/versions/(V[1-9][0-9]*)$")
 SAFE_CHARS = re.compile(r"[^A-Za-z0-9._:/?=&%+@-]")
@@ -1234,6 +1237,7 @@ class Handler(BaseHTTPRequestHandler):
             self._api_home(path, cmd)
             return
         d, m = self.server.review_dir, NOTE_PATH.match(path)
+        relocate_match = NOTE_VIDEO_RELOCATE_PATH.fullmatch(path)
         video_media = VIDEO_MEDIA_PATH.fullmatch(path)
         video_version = VIDEO_VERSION_PATH.fullmatch(path)
         # 页面带上自己的审阅标识：端口上换成了另一份审阅的服务时，先拒绝，绝不写进别人的 notes.json
@@ -1606,6 +1610,40 @@ class Handler(BaseHTTPRequestHandler):
             doc = store.delete(d, m.group(1), by="page")
             self.server.log("info", f"delete {m.group(1)}")
             self._json(200, {"doc": {**doc, **self._ident()}})
+        elif relocate_match and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if set(body) - {"versionId", "target", "summary", "reason"}:
+                raise Reject(400, "bad-request", self._t("serve.err.videoRelocateBody"))
+            for text_key in ("summary", "reason"):
+                if body.get(text_key) is not None and not isinstance(body.get(text_key), str):
+                    raise Reject(400, "bad-request", self._t("serve.err.videoRelocateBody"))
+            nid = relocate_match.group(1)
+            doc, note, handoff_doc = store.relocate_video_note(
+                d,
+                nid,
+                target=body.get("target"),
+                version_id=body.get("versionId"),
+                summary=body.get("summary"),
+                reason=body.get("reason"),
+                by="page",
+            )
+            manifest = self.server.manifest()
+            extra_video: dict[str, Any] = {}
+            if isinstance(manifest.get("video"), dict):
+                try:
+                    extra_video["video"] = video_review.public_manifest(manifest)
+                except video_review.VideoError:
+                    pass
+            vr_after = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else {}
+            self.server.log("info", f"video-relocate {nid} version={vr_after.get('versionId', '-')}")
+            self._json(
+                200,
+                {
+                    "doc": {**doc, **self._ident(), **extra_video},
+                    "note": note,
+                    "handoff": store.handoff_state(d, full=False, handoff=handoff_doc, notes=doc["notes"]),
+                },
+            )
         elif path == "/api/overview" and cmd == "GET":
             scopes = parse_qs(self.path.partition("?")[2], keep_blank_values=True).get("scope", ["workspace"])
             if len(scopes) != 1 or scopes[0] not in ("workspace", "all"):

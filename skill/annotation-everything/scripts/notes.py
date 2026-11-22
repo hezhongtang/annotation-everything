@@ -244,6 +244,7 @@ ACTION_KEY = {
     "missing_evidence": "cli.batch.trail.action.missingEvidence",
     "question": "cli.batch.trail.action.question",
     "relocate": "cli.batch.trail.action.relocate",
+    "relocated": "cli.batch.trail.action.relocated",
     "failed": "cli.batch.trail.action.failed",
 }
 STAGE_KEY = {"draft": "cli.batch.stageName.draft", "review": "cli.batch.stageName.review"}
@@ -821,6 +822,25 @@ def pptx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     return out
 
 
+def _format_vr_target(tgt: dict[str, Any], ver: str, t: Any) -> str | None:
+    kind = tgt.get("kind")
+    if kind == "frame" and isinstance(tgt.get("frame"), int):
+        return t("cli.show.videoReview.targetFrame", version=ver, frame=tgt["frame"])
+    if kind == "range" and isinstance(tgt.get("startFrame"), int) and isinstance(tgt.get("endFrame"), int):
+        return t("cli.show.videoReview.targetRange", version=ver, start=tgt["startFrame"], end=tgt["endFrame"])
+    if kind == "cut" and isinstance(tgt.get("frame"), int):
+        if isinstance(tgt.get("contextStart"), int) and isinstance(tgt.get("contextEnd"), int):
+            return t(
+                "cli.show.videoReview.targetCutContext",
+                version=ver,
+                frame=tgt["frame"],
+                start=tgt["contextStart"],
+                end=tgt["contextEnd"],
+            )
+        return t("cli.show.videoReview.targetCut", version=ver, frame=tgt["frame"])
+    return None
+
+
 def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
     out: list[str] = []
     state = str(vr.get("state") or "")
@@ -833,29 +853,33 @@ def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
         out.append(t("cli.show.videoReview.summary", summary=vr["summary"]))
     tgt = vr.get("target") if isinstance(vr.get("target"), dict) else None
     if tgt:
-        ver = tgt.get("versionId") or vr.get("versionId") or ""
-        kind = tgt.get("kind")
-        if kind == "frame" and isinstance(tgt.get("frame"), int):
-            out.append(t("cli.show.videoReview.targetFrame", version=ver, frame=tgt["frame"]))
-        elif kind == "range" and isinstance(tgt.get("startFrame"), int) and isinstance(tgt.get("endFrame"), int):
-            out.append(t("cli.show.videoReview.targetRange", version=ver, start=tgt["startFrame"], end=tgt["endFrame"]))
-        elif kind == "cut" and isinstance(tgt.get("frame"), int):
-            if isinstance(tgt.get("contextStart"), int) and isinstance(tgt.get("contextEnd"), int):
-                out.append(
-                    t(
-                        "cli.show.videoReview.targetCutContext",
-                        version=ver,
-                        frame=tgt["frame"],
-                        start=tgt["contextStart"],
-                        end=tgt["contextEnd"],
-                    )
-                )
-            else:
-                out.append(t("cli.show.videoReview.targetCut", version=ver, frame=tgt["frame"]))
+        ver = str(tgt.get("versionId") or vr.get("versionId") or "")
+        line = _format_vr_target(tgt, ver, t)
+        if line:
+            out.append(line)
     if vr.get("question"):
         out.append(t("cli.show.videoReview.question", question=vr["question"]))
     if vr.get("relocateReason"):
         out.append(t("cli.show.videoReview.relocateReason", reason=vr["relocateReason"]))
+    if vr.get("relocatedReason"):
+        out.append(t("cli.show.videoReview.relocatedReason", reason=vr["relocatedReason"]))
+    rf = vr.get("relocatedFrom") if isinstance(vr.get("relocatedFrom"), dict) else None
+    if rf:
+        rf_state = str(rf.get("state") or "")
+        rf_parts = [label(t, f"cli.show.videoReview.state.{rf_state}", rf_state)] if rf_state else []
+        rf_tgt = rf.get("target") if isinstance(rf.get("target"), dict) else None
+        rf_ver = str((rf_tgt.get("versionId") if rf_tgt else None) or rf.get("versionId") or "")
+        if rf_tgt:
+            rf_line = _format_vr_target(rf_tgt, rf_ver, t)
+            if rf_line:
+                rf_parts.append(rf_line)
+        elif rf_ver:
+            rf_parts.append(rf_ver)
+        if rf.get("relocateReason"):
+            rf_parts.append(str(rf["relocateReason"]))
+        detail = " · ".join(p for p in rf_parts if p)
+        if detail:
+            out.append(t("cli.show.videoReview.relocatedFrom", detail=detail))
     if vr.get("failure"):
         out.append(t("cli.show.videoReview.failure", reason=vr["failure"]))
     if vr.get("returnReason"):

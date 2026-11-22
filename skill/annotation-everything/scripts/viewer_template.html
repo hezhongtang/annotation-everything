@@ -237,6 +237,12 @@ body.focus-mode.focus-composer #focusHint{display:none}
 .vr-row{display:flex;align-items:center;justify-content:space-between;gap:var(--ae-gap-6);flex-wrap:wrap;color:var(--ae-mut);font-size:var(--ae-small)}
 .vr-jump{font:inherit;font-size:var(--ae-small);border:1px solid var(--ae-line);background:var(--ae-panel);color:var(--ae-navy);border-radius:var(--ae-radius-xs);padding:1px var(--ae-gap-6);cursor:pointer}
 .vr-sum{color:var(--ae-green)}.vr-q{color:var(--ae-accent)}.vr-err{color:var(--ae-warning)}
+.vr-acts{display:flex;gap:var(--ae-gap-5);flex-wrap:wrap;margin-top:2px}
+.vr-del-tag{display:inline-block;font-size:var(--ae-badge);padding:0 var(--ae-gap-5);border-radius:var(--ae-radius-xs);background:var(--ae-danger-bg);color:var(--ae-warning);margin-left:var(--ae-gap-5)}
+.vr-reloc{color:var(--ae-mut);font-size:var(--ae-small)}
+.vr-hist{font-size:var(--ae-small);color:var(--ae-mut)}
+.vr-hist ul{margin:var(--ae-gap-3) 0 0;padding-left:16px}
+.vr-hist li{margin:2px 0}
 .note.drafted{border-color:var(--ae-warm-line)}.note .trail{font-size:var(--ae-small);color:var(--ae-mut);margin-top:var(--ae-gap-3)}
 .note .trail b{font-weight:600;color:var(--ae-amber)}
 .form{display:flex;flex-direction:column;gap:var(--ae-gap-6);margin-top:var(--ae-space)}
@@ -889,7 +895,7 @@ const isDraft=x=>x.status==="drafted";   // 两段流程：初改完成、等复
 let flight=new Set();                    // 已交给 Agent、还在路上（等待接收 / 处理中 / 等待复核 / 复核中）的批注
 const inFlight=x=>!isDone(x)&&!isDraft(x)&&flight.has(x.id);
 const TRAIL_ACTION={drafted:"viewer.batch.trail.action.drafted",resolved:"viewer.batch.trail.action.resolved",finalized:"viewer.batch.trail.action.finalized",approved:"viewer.batch.trail.action.approved",revised:"viewer.batch.trail.action.revised",returned:"viewer.batch.trail.action.returned",reopened:"viewer.batch.trail.action.reopened",accepted:"viewer.batch.trail.action.accepted"};
-const videoTrailAction={missing_evidence:"viewer.batch.trail.action.missingEvidence",question:"viewer.batch.trail.action.question",relocate:"viewer.batch.trail.action.relocate",failed:"viewer.batch.trail.action.failed"};
+const videoTrailAction={missing_evidence:"viewer.batch.trail.action.missingEvidence",question:"viewer.batch.trail.action.question",relocate:"viewer.batch.trail.action.relocate",relocated:"viewer.batch.trail.action.relocated",failed:"viewer.batch.trail.action.failed"};
 // 痕迹动作名与「第 N 批」按当前语言，执行者名称和理由保持原文
 function trailText(x,last){const t=Array.isArray(x.trail)?x.trail.slice(-(last||4)):[];
   return t.filter(e=>e&&typeof e==="object").map(e=>{const who=e.by==="page"?tMsg("viewer.batch.trail.whoPage"):e.by==="claude"?"Claude":String(e.by||"");
@@ -1031,8 +1037,48 @@ ${RCSS}
 #videoError,#videoFailureBanner{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
 #videoFailureBanner{padding:4px 8px;background:rgba(160,40,30,.35);border:1px solid #d9776c;border-radius:4px}
 #videoVersionPick{font:inherit;background:#2b3038;color:#fff;border:1px solid #484f5b;border-radius:4px;padding:1px 6px}
+#videoCompareStage{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;padding:8px;background:#14171c;color:#fff;font:12px/1.4 sans-serif;overflow:auto}
+#videoCompareStage[hidden]{display:none}
+#videoCompareHead{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:6px 8px;background:#1e232b;border-radius:6px}
+.vc-head-info,.vc-head-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#videoCompareHead button,#videoCompareRelocate button,#videoCompareRelocate input,#videoCompareRelocate select,.vc-bar button{font:inherit}
+#videoCompareHead button,.vc-bar button,#videoCompareRelocate button{background:#2d3440;color:#fff;border:1px solid #4d5666;border-radius:4px;padding:2px 8px;cursor:pointer}
+#videoCompareHead button.primary,#videoCompareRelocate button.primary{background:#2a78d6;border-color:#3b89e8}
+#videoCompareGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1;min-height:220px}
+.vc-pane{display:flex;flex-direction:column;gap:6px;min-height:0;background:#1b2028;border:1px solid #303744;border-radius:6px;padding:6px}
+.vc-pane-head{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}
+.vc-box{position:relative;flex:1;min-height:160px;background:#000;overflow:hidden;border-radius:4px}
+.vc-video{position:absolute;display:block;object-fit:contain;background:#000}
+.vc-marks{position:absolute;pointer-events:none;z-index:2}
+.vc-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.vc-reason{font-size:12px;color:#d6e4ff;background:rgba(42,120,214,.16);padding:4px 6px;border-radius:4px}
+.vc-reason[hidden]{display:none}
+#videoCompareHistory{font-size:11px;color:#b8c2d1;background:#1b2028;padding:4px 8px;border-radius:4px}
+#videoCompareHistory[hidden]{display:none}
+#videoCompareRelocate{display:flex;flex-direction:column;gap:6px;padding:8px;background:#1e232b;border:1px solid #3c4657;border-radius:6px}
+#videoCompareRelocate[hidden]{display:none}
+.vc-reloc-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.vc-reloc-row label{display:flex;align-items:center;gap:4px}
+.vc-reloc-row input[type="number"]{width:72px}
+.vc-reloc-row .vc-grow{flex:1;min-width:160px}
+.vc-reloc-row .vc-grow input{flex:1;min-width:120px}
+#videoRelocateErr{color:#ffb4a8;font-size:12px}
+#videoRelocateErr[hidden]{display:none}
 </style><div class="ae-frame" id="ae-frame"><div id="ae-stage"><section id="videoStage" hidden>
 <div id="videoViewport"><video id="videoPlayer" controls playsinline preload="metadata"></video><div id="videoMarkLayer"></div></div>
+<div id="videoCompareStage" hidden>
+<div id="videoCompareHead"><div class="vc-head-info"><span id="videoCompareState" class="chip"></span><span id="videoCompareNoteText"></span></div><div class="vc-head-acts"><button id="videoCompareApprove" type="button" class="primary" hidden></button><button id="videoCompareToggleRelocate" type="button" hidden></button><button id="videoCompareClose" type="button"></button></div></div>
+<div id="videoCompareGrid">
+<div id="videoCompareBeforePane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareBeforeTitle"></strong><span id="videoCompareBeforeInfo"></span></div><div id="videoCompareBeforeBox" class="vc-box"><video id="videoCompareBefore" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareBeforeMarks" class="vc-marks"></div></div><div id="videoCompareBeforeBar" class="vc-bar"><button id="videoComparePlayBefore" type="button"></button><button id="videoComparePauseBefore" type="button"></button><span id="videoCompareBeforeTime"></span></div></div>
+<div id="videoCompareAfterPane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareAfterTitle"></strong><span id="videoCompareAfterInfo"></span></div><div id="videoCompareAfterBox" class="vc-box"><video id="videoCompareAfter" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareAfterMarks" class="vc-marks"></div></div><div id="videoCompareAfterBar" class="vc-bar"><button id="videoComparePlayAfter" type="button"></button><button id="videoComparePauseAfter" type="button"></button><span id="videoCompareAfterTime"></span></div><div id="videoCompareAfterReason" class="vc-reason" hidden></div></div>
+</div>
+<div id="videoCompareHistory" hidden></div>
+<div id="videoCompareRelocate" hidden>
+<div class="vc-reloc-row"><label><span id="videoRelocateVerLbl"></span><select id="videoRelocateVersion"></select></label><label><span id="videoRelocateKindLbl"></span><select id="videoRelocateKind"><option value="frame"></option><option value="range"></option><option value="cut"></option></select></label><span id="videoRelocateFrameWrap"><label><span id="videoRelocateFrameLbl"></span><input id="videoRelocateFrame" type="number" min="0" step="1" value="0"></label><button id="videoRelocateUseFrame" type="button"></button></span><span id="videoRelocateRangeWrap" hidden><label><span id="videoRelocateStartLbl"></span><input id="videoRelocateStart" type="number" min="0" step="1" value="0"></label><button id="videoRelocateSetStart" type="button">[</button><label><span id="videoRelocateEndLbl"></span><input id="videoRelocateEnd" type="number" min="1" step="1" value="1"></label><button id="videoRelocateSetEnd" type="button">]</button></span><span id="videoRelocateCutCtxWrap" hidden><label><span id="videoRelocateCtxStartLbl"></span><input id="videoRelocateContextStart" type="number" min="0" step="1" placeholder="-"></label><label><span id="videoRelocateCtxEndLbl"></span><input id="videoRelocateContextEnd" type="number" min="1" step="1" placeholder="-"></label></span></div>
+<div class="vc-reloc-row"><label class="vc-grow"><span id="videoRelocateSummaryLbl"></span><input id="videoRelocateSummary" type="text"></label><label class="vc-grow"><span id="videoRelocateReasonLbl"></span><input id="videoRelocateReason" type="text"></label><button id="videoRelocateSave" type="button" class="primary"></button><button id="videoRelocateCancel" type="button"></button></div>
+<div id="videoRelocateErr" role="alert" hidden></div>
+</div>
+</div>
 <div id="videoError" role="alert" hidden></div>
 <div id="videoFailureBanner" role="alert" hidden></div>
 <div id="videoControls"><span id="videoVersion"></span><select id="videoVersionPick" hidden aria-label="Video version"></select><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
@@ -1600,6 +1646,7 @@ function applyServer(d,quietHand){
   }
   finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
   srvNoSelect=!hasFeature(d,"selective-handoff");srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
+  if(typeof setVideoServerFeatures==="function")setVideoServerFeatures(d);
   if(VIDEO&&mode==="server"&&!videoSourceLoaded){videoSourceLoaded=true;loadVideoSource()}
   if(VIDEO&&d.video){const sig=JSON.stringify(d.video);liveVideo=d.video;const cur=d.video.currentVersionId||null;
     if(cur&&cur!==videoLatestId){videoLatestId=cur;videoActiveVersionId=cur}
@@ -1615,6 +1662,7 @@ function applyServer(d,quietHand){
   if(d.handoff)setHand(d.handoff,quietHand);else if(!quietHand)renderHand();
   if(idx0==null)idx0=d.indexMtime;else if(d.indexMtime&&d.indexMtime!==idx0){idx0=d.indexMtime;$("reloadBanner").hidden=false;fit()}
   if(d.rev!==rev){setDoc(d);pend.get().forEach(op=>{if(op.kind!=="handoff")applyLocal(op)});refreshList()}
+  if(typeof videoCompareSync==="function")videoCompareSync();
   if(!resumeReady){resumeReady=true;renderResume()}}
 async function poll(){
   if(FILE||document.hidden||busy)return;
@@ -1783,16 +1831,47 @@ function videoContentRect(viewportWidth,viewportHeight,videoWidth,videoHeight){c
   return{x:(viewportWidth-width)/2,y:(viewportHeight-height)/2,width,height}}
 function videoNormalizedPoint(clientX,clientY,viewport,content){const x=clientX-viewport.left-content.x,y=clientY-viewport.top-content.y;
   if(x<0||y<0||x>content.width||y>content.height)return null;return{x:x/content.width,y:y/content.height}}
-function videoSeekFrame(player,frame,fps){player.pause();player.muted=false;player.currentTime=Math.max(0,Math.floor(frame))/fps;return player.currentTime}
-async function videoPlayInterval(player,anchor){videoSeekFrame(player,anchor.startFrame,anchor.fps);videoRangeEnd=anchor.endFrame/anchor.fps;player.muted=false;await player.play()}
+function videoVersionClock(source){
+  if(typeof source==="number"&&Number.isFinite(source)&&source>0)return{num:1,den:source,fps:source};
+  if(!source||typeof source!=="object")return null;
+  const tb=source.timebase;
+  if(tb&&typeof tb==="object"&&Number.isInteger(tb.num)&&tb.num>0&&Number.isInteger(tb.den)&&tb.den>0)
+    return{num:tb.num,den:tb.den,fps:tb.den/tb.num};
+  if(typeof source.fps==="number"&&Number.isFinite(source.fps)&&source.fps>0)return{num:1,den:source.fps,fps:source.fps};
+  return null}
+function videoFrameTime(frame,source){const clk=videoVersionClock(source);if(!clk)return 0;
+  const idx=Math.max(0,Math.floor(Number.isFinite(frame)?frame:0));return(idx*clk.num)/clk.den}
+function videoTimeToFrame(seconds,source,clamp=true){const clk=videoVersionClock(source);if(!clk)return 0;
+  const sec=Number.isFinite(seconds)?Math.max(0,seconds):0;
+  const idx=Math.floor((sec*clk.den)/clk.num+1e-9);
+  if(clamp&&source&&typeof source==="object"&&Number.isInteger(source.frames)&&source.frames>0)
+    return Math.max(0,Math.min(source.frames-1,idx));
+  return idx}
+function videoRangeTimes(temporal,source){const clk=videoVersionClock(source)||videoVersionClock(temporal);
+  const startFrame=Math.max(0,Math.floor(temporal.startFrame||0)),endFrame=Math.max(startFrame+1,Math.floor(temporal.endFrame||startFrame+1));
+  return{startFrame,endFrame,startTime:videoFrameTime(startFrame,clk),endTime:videoFrameTime(endFrame,clk),fps:clk?clk.fps:null,timebase:clk?{num:clk.num,den:clk.den}:null}}
+function videoCutContext(target,version,padSeconds=1){
+  const clk=videoVersionClock(version)||videoVersionClock(target);
+  const total=(version&&Number.isInteger(version.frames)&&version.frames>0)?version.frames:(target&&Number.isInteger(target.frames)&&target.frames>0?target.frames:Math.max(1,(target.frame||0)+1));
+  const cutFrame=Math.max(0,Math.min(total,Math.floor(target.frame||0)));
+  if(Number.isInteger(target.contextStart)&&Number.isInteger(target.contextEnd)&&target.contextStart>=0&&target.contextStart<target.contextEnd&&target.contextEnd<=total)
+    return{frame:cutFrame,contextStart:target.contextStart,contextEnd:target.contextEnd,time:videoFrameTime(cutFrame,clk),startTime:videoFrameTime(target.contextStart,clk),endTime:videoFrameTime(target.contextEnd,clk),explicit:true};
+  const pad=clk?Math.max(1,Math.round((padSeconds*clk.den)/clk.num)):30;
+  const start=Math.max(0,Math.min(total-1,cutFrame-pad)),end=Math.min(total,Math.max(start+1,cutFrame+pad));
+  return{frame:cutFrame,contextStart:start,contextEnd:end,time:videoFrameTime(cutFrame,clk),startTime:videoFrameTime(start,clk),endTime:videoFrameTime(end,clk),explicit:false}}
+function videoSeekFrame(player,frame,clockOrFps){player.pause();player.muted=false;player.currentTime=videoFrameTime(frame,clockOrFps);return player.currentTime}
+async function videoPlayInterval(player,anchor,version){const times=videoRangeTimes(anchor,version||anchor);
+  videoSeekFrame(player,times.startFrame,version||anchor);videoRangeEnd=times.endTime;player.muted=false;await player.play()}
 function videoRangeTick(player){if(videoRangeEnd==null||player.currentTime+1e-6<videoRangeEnd)return;
   const end=videoRangeEnd;videoRangeEnd=null;player.pause();player.currentTime=end}
 function videoExportLine(anchor,en){return(en?"   Video location: ":"   视频定位：")+JSON.stringify(anchor)}
 function videoImportLine(line,en){const match=line.match(en?/^\s+Video location: (\{.*\})$/:/^\s+视频定位：(\{.*\})$/);if(!match)return null;
   try{const value=JSON.parse(match[1]);return value&&typeof value==="object"&&!Array.isArray(value)?value:null}catch(error){return null}}
-function videoLocText(anchor){if(!anchor||anchor.v!==1||!anchor.fps)return tMsg("viewer.video.unknownLocation");const fps=anchor.fps;
-  return Number.isInteger(anchor.frame)?tMsg("viewer.video.frameLocation",{version:anchor.versionId,frame:anchor.frame,fps})
-    :tMsg("viewer.video.rangeLocation",{version:anchor.versionId,start:(anchor.startFrame/fps).toFixed(3),end:(anchor.endFrame/fps).toFixed(3),fps})}
+function videoLocText(anchor){const clk=videoVersionClock(anchor);if(!anchor||anchor.v!==1||!clk)return tMsg("viewer.video.unknownLocation");
+  const fps=Number.isInteger(clk.fps)?clk.fps:+clk.fps.toFixed(3);
+  if(Number.isInteger(anchor.frame))return tMsg("viewer.video.frameLocation",{version:anchor.versionId,frame:anchor.frame,fps});
+  const rt=videoRangeTimes(anchor,anchor);
+  return tMsg("viewer.video.rangeLocation",{version:anchor.versionId,start:rt.startTime.toFixed(3),end:rt.endTime.toFixed(3),fps})}
 function handoffNoteIds(avail,sel){
   // 视频审阅的选择性提交范围：null = 没勾选过或又全选了，沿用整批语义（不带 noteIds）；
   // 部分选择返回所选 id（按列表顺序，可为空数组，由提交入口拦住）。
@@ -1839,11 +1918,71 @@ function videoStatusCounts(list){
   const out={pending_review:0,needs_reply:0,needs_relocate:0,missing_evidence:0,failed:0,returned:0,unsubmitted:0,approved:0};
   (list||[]).forEach(n=>{const s=videoNoteState(n);if(Object.prototype.hasOwnProperty.call(out,s))out[s]++});
   return out}
-function videoReceiptCardHtml(note){
+function videoTargetPlaySpec(target,version){
+  if(!target||typeof target!=="object")return null;
+  const src=version||target,clk=videoVersionClock(src);
+  if(!clk)return null;
+  const versionId=(version&&version.versionId)||target.versionId||null;
+  if(target.kind==="cut"&&Number.isInteger(target.frame)){
+    const ctx=videoCutContext(target,src);
+    return{kind:"cut",versionId,seekFrame:ctx.contextStart,seekTime:ctx.startTime,cutFrame:ctx.frame,cutTime:ctx.time,
+      playRange:{startFrame:ctx.contextStart,endFrame:ctx.contextEnd,startTime:ctx.startTime,endTime:ctx.endTime},
+      mark:target.mark||null,valid:version&&Number.isInteger(version.frames)?videoTargetValid(target,version):true}}
+  if(target.kind==="range"||(Number.isInteger(target.startFrame)&&Number.isInteger(target.endFrame))){
+    const rt=videoRangeTimes(target,src);
+    return{kind:"range",versionId,seekFrame:rt.startFrame,seekTime:rt.startTime,playRange:rt,
+      mark:target.mark||null,valid:version&&Number.isInteger(version.frames)?videoTargetValid({kind:"range",startFrame:rt.startFrame,endFrame:rt.endFrame},version):true}}
+  if(Number.isInteger(target.frame)){
+    return{kind:"frame",versionId,seekFrame:target.frame,seekTime:videoFrameTime(target.frame,clk),playRange:null,
+      mark:target.mark||null,valid:version&&Number.isInteger(version.frames)?videoTargetValid({kind:"frame",frame:target.frame},version):true}}
+  return null}
+function videoTimelineHistory(note){
+  const vr=note&&typeof note==="object"&&note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
+  const hist=vr&&Array.isArray(vr.history)?vr.history:[];
+  return hist.filter(e=>e&&typeof e==="object").map(e=>{
+    if(e.source==="relocate"||e.action==="relocate"){
+      const from=e.previousTarget?videoTargetText(e.previousTarget,e.previousVersionId):(e.previousVersionId||tMsg("viewer.video.state."+(e.previousState||"unsubmitted")));
+      const to=e.target?videoTargetText(e.target,e.versionId):(e.versionId||"");
+      const reason=e.reason||e.summary||"";
+      const text=reason?tMsg("viewer.video.historyRelocateReason",{by:e.by||"page",from,to,reason}):tMsg("viewer.video.historyRelocate",{by:e.by||"page",from,to});
+      return{...e,text}}
+    const st=tMsg("viewer.video.state."+(e.state||"pending_review")),ver=e.versionId||"—";
+    const tgt=e.target?videoTargetText(e.target,e.versionId):"";
+    const detail=[tgt,e.summary||e.question||e.relocateReason||e.failure||""].filter(Boolean).join(" · ");
+    const text=detail?tMsg("viewer.video.historyReceiptDetail",{version:ver,state:st,detail}):tMsg("viewer.video.historyReceipt",{version:ver,state:st});
+    return{...e,text}})}
+function videoComparePair(note,manifest){
+  if(!note||typeof note!=="object")return null;
+  const m=manifest||null,vers=m&&Array.isArray(m.versions)?m.versions:[];
+  const findVer=vid=>vid?(vers.find(v=>v&&v.versionId===vid)||null):null;
+  const orig=note.video&&typeof note.video==="object"?note.video:null;
+  const beforeVer=orig?(findVer(orig.versionId)||{versionId:orig.versionId,fps:orig.fps,timebase:orig.timebase,frames:orig.frames,width:orig.videoWidth,height:orig.videoHeight,url:null}):null;
+  const beforeSpec=orig?videoTargetPlaySpec(orig,beforeVer):null;
+  const vr=note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
+  const afterVerId=(vr&&vr.target&&vr.target.versionId)||(vr&&vr.versionId)||(m&&m.currentVersionId)||(beforeVer&&beforeVer.versionId)||null;
+  const afterVer=findVer(afterVerId)||vers[0]||null;
+  const afterSpec=vr&&vr.target?videoTargetPlaySpec(vr.target,afterVer||vr.target):null;
+  const canRelocate=!!(note.status!=="resolved"&&(vr||note.status==="drafted"||vers.length>1));
+  return{noteId:note.id||"",text:note.text||"",state:videoNoteState(note),ready:videoReceiptReady(note,m),canRelocate,
+    before:{version:beforeVer,versionId:beforeVer&&beforeVer.versionId||null,url:beforeVer&&beforeVer.url||null,anchor:orig,spec:beforeSpec,mark:orig&&orig.mark||null},
+    after:{version:afterVer,versionId:afterVer&&afterVer.versionId||afterVerId||null,url:afterVer&&afterVer.url||null,target:vr&&vr.target||null,spec:afterSpec,mark:vr&&vr.target&&vr.target.mark||null,
+      outcome:vr&&vr.outcome||null,summary:vr&&vr.summary||"",question:vr&&vr.question||"",relocateReason:vr&&vr.relocateReason||"",relocatedReason:vr&&vr.relocatedReason||"",
+      failure:vr&&vr.failure||"",returnReason:vr&&vr.returnReason||"",relocatedFrom:vr&&vr.relocatedFrom||null,history:videoTimelineHistory(note)}}}
+function videoPriorSummary(rf){
+  if(!rf||typeof rf!=="object")return"";
+  const parts=[];
+  if(rf.state)parts.push(tMsg("viewer.video.state."+rf.state));
+  if(rf.target)parts.push(videoTargetText(rf.target,rf.versionId));
+  else if(rf.versionId)parts.push(rf.versionId);
+  if(rf.relocateReason)parts.push(rf.relocateReason);
+  return parts.filter(Boolean).join(" · ")}
+function videoReceiptCardHtml(note,manifest){
   if(!note||typeof note!=="object")return"";
+  const m=manifest||(typeof videoManifest==="function"?videoManifest():null);
   const eid=escH(note.id||""),st=videoNoteState(note),vr=note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
   const stateText=tMsg("viewer.video.state."+st),verTag=vr&&vr.versionId?" · "+escH(vr.versionId):"";
-  const parts=[`<div class="vr-box"><span class="chip vr-chip vr-${escH(st)}">${escH(stateText)}${verTag}</span>`];
+  const delTag=vr&&vr.outcome==="deleted"?`<span class="vr-del-tag">${escH(tMsg("viewer.video.deletedShotTag"))}</span>`:"";
+  const parts=[`<div class="vr-box"><div><span class="chip vr-chip vr-${escH(st)}">${escH(stateText)}${verTag}</span>${delTag}</div>`];
   if(note.video){parts.push(`<div class="vr-row"><span>${escH(tMsg("viewer.video.originalLoc",{loc:videoLocText(note.video)}))}</span><button type="button" class="vr-jump" data-act="video-jump-orig" data-id="${eid}">${escH(tMsg("viewer.video.jumpOriginal"))}</button></div>`)}
   if(vr){
     if(vr.target){const nt=videoTargetText(vr.target,vr.versionId);
@@ -1851,9 +1990,18 @@ function videoReceiptCardHtml(note){
     if(vr.summary)parts.push(`<div class="vr-sum">${escH(tMsg("viewer.video.changeSummary",{version:vr.versionId||"—",summary:vr.summary})).replace(/\n/g,"<br>")}</div>`);
     if(vr.question)parts.push(`<div class="vr-q">${escH(tMsg("viewer.video.questionLabel",{question:vr.question}))}</div>`);
     if(vr.relocateReason)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.relocateLabel",{reason:vr.relocateReason}))}</div>`);
+    if(vr.relocatedReason)parts.push(`<div class="vr-reloc">${escH(tMsg("viewer.video.relocatedReason",{reason:vr.relocatedReason}))}</div>`);
+    if(vr.relocatedFrom){const prior=videoPriorSummary(vr.relocatedFrom);if(prior)parts.push(`<div class="vr-reloc">${escH(tMsg("viewer.video.relocatedFrom",{detail:prior}))}</div>`)}
     if(vr.failure)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.failureLabel",{reason:vr.failure}))}</div>`);
     if(vr.returnReason)parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.returnLabel",{reason:vr.returnReason}))}</div>`);
-    if(st==="missing_evidence")parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.missingEvidenceHint"))}</div>`)}
+    if(st==="missing_evidence")parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.missingEvidenceHint"))}</div>`);
+    const hist=videoTimelineHistory(note);
+    if(hist.length>1||(hist.length>0&&vr.relocatedFrom))
+      parts.push(`<details class="vr-hist"><summary>${escH(tMsg("viewer.video.historyToggle",{count:hist.length}))}</summary><ul>${hist.map(h=>`<li>${escH(h.text)}</li>`).join("")}</ul></details>`)}
+  const vers=m&&Array.isArray(m.versions)?m.versions:[];
+  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!(note.status!=="resolved"&&(vr||note.status==="drafted"||vers.length>1));
+  if(canCompare||canRelocate)
+    parts.push(`<div class="vr-acts">${canCompare?`<button type="button" class="vr-jump" data-act="video-compare" data-id="${eid}">${escH(tMsg("viewer.video.compareBtn"))}</button>`:""}${canRelocate?`<button type="button" class="vr-jump" data-act="video-relocate" data-id="${eid}">${escH(tMsg("viewer.video.relocateBtn"))}</button>`:""}</div>`);
   parts.push("</div>");return parts.join("")}
 // ---------- 视频审阅 DOM ----------
 let videoDraft=null,videoRangeStart=null,videoRangeEnd=null,videoSelectedId=null,videoPointerStart=null,videoPendingMark=null;
@@ -1879,7 +2027,8 @@ function videoCurrentFrame(){const version=videoCurrentVersion(),player=videoEl(
 function videoLayout(){if(!VIDEO)return;const viewport=sr.getElementById("videoViewport"),player=videoEl(),layer=videoLayer(),version=videoCurrentVersion();if(!viewport||!player||!layer||!version)return;
   const rect=videoContentRect(viewport.clientWidth,viewport.clientHeight,player.videoWidth||version.width,player.videoHeight||version.height);   // 标记相对实际解码画面，不信登记尺寸
   for(const el of [player,layer])Object.assign(el.style,{left:rect.x+"px",top:rect.y+"px",width:rect.width+"px",height:rect.height+"px"});
-  videoDrawMarks()}
+  videoDrawMarks();
+  if(typeof videoCompareLayout==="function")videoCompareLayout()}
 function videoMarkElements(mark,cls=""){const layer=videoLayer();if(!layer||!mark)return;const el=document.createElement("div");el.className="video-mark "+(mark.kind==="point"?"point ":"")+cls;
   if(mark.kind==="point")Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%"});
   else Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%",width:mark.width*100+"%",height:mark.height*100+"%"});
@@ -1937,7 +2086,236 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
     const end=videoNormalizedPoint(e.clientX,e.clientY,viewport,{x:0,y:0,width:viewport.width,height:viewport.height});if(!end)return;const moved=Math.hypot(e.clientX-start.clientX,e.clientY-start.clientY)>=5;
     videoPendingMark=moved?{kind:"region",x:Math.min(start.point.x,end.x),y:Math.min(start.point.y,end.y),width:Math.abs(end.x-start.point.x),height:Math.abs(end.y-start.point.y)}:{kind:"point",...end};
     videoDraft=videoDraftAt(videoPendingMark);videoDrawMarks();saveDraft();openComposer()});
+  videoCompareInit();
   videoLayout()}
+
+// ---------- 视频对照与重定位 ----------
+let videoServerFeatures=new Set(),videoCompareNoteId=null,videoCompareEnds={before:null,after:null},videoComparePairState=null,videoRelocateOpen=false,videoCompareSig="";
+function setVideoServerFeatures(d){videoServerFeatures=new Set(Array.isArray(d&&d.features)?d.features:[])}
+function serverSupports(name){return mode==="server"&&videoServerFeatures.has(name)}
+function videoCompareEl(side){return sr.getElementById(side==="before"?"videoCompareBefore":"videoCompareAfter")}
+function videoCompareMarksEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeMarks":"videoCompareAfterMarks")}
+function videoCompareBoxEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeBox":"videoCompareAfterBox")}
+function videoCompareDrawSideMark(side,mark){const layer=videoCompareMarksEl(side);if(!layer)return;layer.innerHTML="";if(!mark)return;
+  const el=document.createElement("div");el.className="video-mark "+(mark.kind==="point"?"point":"");
+  if(mark.kind==="point")Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%"});
+  else Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%",width:mark.width*100+"%",height:mark.height*100+"%"});
+  layer.appendChild(el)}
+function videoCompareLayoutSide(side){const pair=videoComparePairState;if(!pair)return;const box=videoCompareBoxEl(side),el=videoCompareEl(side),layer=videoCompareMarksEl(side);
+  const info=side==="before"?pair.before:pair.after,ver=info&&info.version;if(!box||!el||!layer||!ver)return;
+  const rect=videoContentRect(box.clientWidth||600,box.clientHeight||340,el.videoWidth||ver.width||640,el.videoHeight||ver.height||360);
+  for(const target of [el,layer])Object.assign(target.style,{left:rect.x+"px",top:rect.y+"px",width:rect.width+"px",height:rect.height+"px"});
+  videoCompareDrawSideMark(side,info.mark)}
+function videoCompareLayout(){if(!videoCompareNoteId)return;videoCompareLayoutSide("before");videoCompareLayoutSide("after")}
+function videoCompareFormatReadout(versionId,spec,ver){
+  if(!spec)return tMsg("viewer.video.compare.noTarget");
+  const vid=versionId||spec.versionId||"—";
+  if(spec.kind==="range"&&spec.playRange)
+    return tMsg("viewer.video.compare.rangeReadout",{version:vid,start:spec.playRange.startFrame,end:spec.playRange.endFrame,startTime:spec.playRange.startTime.toFixed(3),endTime:spec.playRange.endTime.toFixed(3)});
+  if(spec.kind==="cut"&&spec.playRange)
+    return tMsg("viewer.video.compare.cutReadout",{version:vid,frame:spec.cutFrame,start:spec.playRange.startFrame,end:spec.playRange.endFrame,startTime:spec.playRange.startTime.toFixed(3),endTime:spec.playRange.endTime.toFixed(3)});
+  const sec=Number.isFinite(spec.seekTime)?spec.seekTime:videoFrameTime(spec.seekFrame||0,ver);
+  return tMsg("viewer.video.compare.frameReadout",{version:vid,frame:spec.seekFrame||0,time:sec.toFixed(3)})}
+function videoCompareRenderLabels(){
+  const setText=(id,key)=>{const el=sr.getElementById(id);if(el)el.textContent=tMsg(key)};
+  setText("videoCompareBeforeTitle","viewer.video.compare.beforeTitle");
+  setText("videoCompareAfterTitle","viewer.video.compare.afterTitle");
+  setText("videoCompareClose","viewer.video.compare.close");
+  setText("videoComparePauseBefore","viewer.video.compare.pause");
+  setText("videoComparePauseAfter","viewer.video.compare.pause");
+  setText("videoCompareApprove","viewer.video.approveBtn");
+  setText("videoCompareToggleRelocate","viewer.video.relocateBtn");
+  setText("videoRelocateVerLbl","viewer.video.relocate.version");
+  setText("videoRelocateKindLbl","viewer.video.relocate.kind");
+  setText("videoRelocateFrameLbl","viewer.video.relocate.frame");
+  setText("videoRelocateStartLbl","viewer.video.relocate.start");
+  setText("videoRelocateEndLbl","viewer.video.relocate.end");
+  setText("videoRelocateCtxStartLbl","viewer.video.relocate.ctxStart");
+  setText("videoRelocateCtxEndLbl","viewer.video.relocate.ctxEnd");
+  setText("videoRelocateUseFrame","viewer.video.relocate.useFrame");
+  setText("videoRelocateSummaryLbl","viewer.video.relocate.summary");
+  setText("videoRelocateReasonLbl","viewer.video.relocate.reason");
+  setText("videoRelocateSave","viewer.video.relocate.save");
+  setText("videoRelocateCancel","viewer.video.relocate.cancel");
+  const kindSel=sr.getElementById("videoRelocateKind");
+  if(kindSel&&kindSel.options&&kindSel.options.length>=3){
+    kindSel.options[0].textContent=tMsg("viewer.video.relocate.kindFrame");
+    kindSel.options[1].textContent=tMsg("viewer.video.relocate.kindRange");
+    kindSel.options[2].textContent=tMsg("viewer.video.relocate.kindCut")}
+}
+function videoCompareLoadSide(el,url,seekTime,onReady){
+  if(!el)return;
+  if(!url){el.pause();if(el.getAttribute("src")){el.removeAttribute("src");el.load()}if(onReady)onReady();return}
+  const changed=el.getAttribute("src")!==url;
+  if(changed){el.src=url;el.load()}
+  const apply=()=>{el.pause();el.muted=false;if(seekTime!=null)el.currentTime=seekTime;if(onReady)onReady()};
+  if(el.readyState>=1)apply();
+  else el.addEventListener("loadedmetadata",apply,{once:true})}
+function videoRelocateKindSync(){
+  const kind=(sr.getElementById("videoRelocateKind")||{}).value||"frame";
+  sr.getElementById("videoRelocateFrameWrap").hidden=kind==="range";
+  sr.getElementById("videoRelocateRangeWrap").hidden=kind!=="range";
+  sr.getElementById("videoRelocateCutCtxWrap").hidden=kind!=="cut"}
+function videoRelocatePopulate(pair,showForm){
+  videoRelocateOpen=!!showForm&&!!(pair&&pair.canRelocate);
+  const box=sr.getElementById("videoCompareRelocate"),err=sr.getElementById("videoRelocateErr");
+  if(err){err.hidden=true;err.textContent=""}
+  if(!box)return;
+  box.hidden=!videoRelocateOpen;
+  if(!videoRelocateOpen||!pair)return;
+  const m=videoManifest(),vers=(m&&Array.isArray(m.versions))?m.versions:[];
+  const verSel=sr.getElementById("videoRelocateVersion");
+  const pickedVer=pair.after.versionId||(m&&m.currentVersionId)||"V1";
+  if(verSel){verSel.innerHTML=vers.map(v=>`<option value="${escH(v.versionId)}"${v.versionId===pickedVer?" selected":""}>${escH(v.versionId)}</option>`).join("");
+    verSel.value=pickedVer}
+  const tgt=pair.after.target;
+  const kind=(tgt&&tgt.kind)||(pair.before.spec&&pair.before.spec.kind==="range"?"range":"frame");
+  const kindSel=sr.getElementById("videoRelocateKind");if(kindSel)kindSel.value=kind;
+  const frameEl=sr.getElementById("videoRelocateFrame"),startEl=sr.getElementById("videoRelocateStart"),endEl=sr.getElementById("videoRelocateEnd"),
+    csEl=sr.getElementById("videoRelocateContextStart"),ceEl=sr.getElementById("videoRelocateContextEnd"),
+    sumEl=sr.getElementById("videoRelocateSummary"),reasonEl=sr.getElementById("videoRelocateReason");
+  if(frameEl)frameEl.value=tgt&&Number.isInteger(tgt.frame)?tgt.frame:(pair.before.spec&&Number.isInteger(pair.before.spec.seekFrame)?pair.before.spec.seekFrame:0);
+  if(startEl)startEl.value=tgt&&Number.isInteger(tgt.startFrame)?tgt.startFrame:(pair.before.spec&&pair.before.spec.playRange?pair.before.spec.playRange.startFrame:0);
+  if(endEl)endEl.value=tgt&&Number.isInteger(tgt.endFrame)?tgt.endFrame:(pair.before.spec&&pair.before.spec.playRange?pair.before.spec.playRange.endFrame:1);
+  if(csEl)csEl.value=tgt&&Number.isInteger(tgt.contextStart)?tgt.contextStart:"";
+  if(ceEl)ceEl.value=tgt&&Number.isInteger(tgt.contextEnd)?tgt.contextEnd:"";
+  if(sumEl)sumEl.value=pair.after.summary||"";
+  if(reasonEl)reasonEl.value="";
+  videoRelocateKindSync()}
+function videoCompareAfterVersion(){const verSel=sr.getElementById("videoRelocateVersion");
+  const vid=(videoRelocateOpen&&verSel&&verSel.value)||(videoComparePairState&&videoComparePairState.after.versionId)||null;
+  return videoFindVersion(vid)}
+function videoCompareAfterCurrentFrame(){const ver=videoCompareAfterVersion(),el=videoCompareEl("after");
+  if(!ver||!el)return 0;return videoTimeToFrame(el.currentTime||0,ver,true)}
+function videoCompareOpen(note,openRelocate=false){
+  if(!VIDEO||!note)return;
+  const m=videoManifest(),pair=videoComparePair(note,m);if(!pair)return;
+  videoCompareNoteId=note.id;videoComparePairState=pair;videoCompareSig=JSON.stringify({note,versions:m&&m.versions||null});
+  videoCompareEnds={before:null,after:null};
+  const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage"),mainPlayer=typeof videoEl==="function"?videoEl():sr.getElementById("videoPlayer");
+  if(mainPlayer)mainPlayer.pause();
+  if(vp)vp.hidden=true;if(ctrl)ctrl.hidden=true;if(cs)cs.hidden=false;
+  videoCompareRenderLabels();
+  const stEl=sr.getElementById("videoCompareState");
+  if(stEl){stEl.className="chip vr-chip vr-"+pair.state;stEl.textContent=tMsg("viewer.video.state."+pair.state)+(pair.after.versionId?" · "+pair.after.versionId:"")}
+  const ntEl=sr.getElementById("videoCompareNoteText");if(ntEl)ntEl.textContent=pair.text||"";
+  const appBtn=sr.getElementById("videoCompareApprove");if(appBtn)appBtn.hidden=!(note.status!=="resolved"&&pair.ready);
+  const relBtn=sr.getElementById("videoCompareToggleRelocate");if(relBtn)relBtn.hidden=!pair.canRelocate;
+  const bInfo=sr.getElementById("videoCompareBeforeInfo"),bTime=sr.getElementById("videoCompareBeforeTime"),bPlay=sr.getElementById("videoComparePlayBefore");
+  const bText=videoCompareFormatReadout(pair.before.versionId,pair.before.spec,pair.before.version);
+  if(bInfo)bInfo.textContent=pair.before.versionId||"V1";if(bTime)bTime.textContent=bText;
+  if(bPlay)bPlay.textContent=tMsg(pair.before.spec&&pair.before.spec.playRange?"viewer.video.compare.playRange":"viewer.video.compare.playFrame");
+  const aInfo=sr.getElementById("videoCompareAfterInfo"),aTime=sr.getElementById("videoCompareAfterTime"),aPlay=sr.getElementById("videoComparePlayAfter");
+  const aText=videoCompareFormatReadout(pair.after.versionId,pair.after.spec,pair.after.version);
+  if(aInfo)aInfo.textContent=pair.after.versionId||"—";if(aTime)aTime.textContent=aText;
+  if(aPlay)aPlay.textContent=tMsg(pair.after.spec&&pair.after.spec.kind==="cut"?"viewer.video.compare.playContext":pair.after.spec&&pair.after.spec.playRange?"viewer.video.compare.playRange":"viewer.video.compare.playFrame");
+  const reasonEl=sr.getElementById("videoCompareAfterReason");
+  if(reasonEl){const notesOut=[];
+    if(pair.after.outcome==="deleted")notesOut.push(tMsg("viewer.video.deletedShotTag"));
+    if(pair.after.summary)notesOut.push(tMsg("viewer.video.changeSummary",{version:pair.after.versionId||"—",summary:pair.after.summary}));
+    if(pair.after.relocateReason)notesOut.push(tMsg("viewer.video.relocateLabel",{reason:pair.after.relocateReason}));
+    if(pair.after.relocatedReason)notesOut.push(tMsg("viewer.video.relocatedReason",{reason:pair.after.relocatedReason}));
+    if(pair.after.relocatedFrom){const prior=videoPriorSummary(pair.after.relocatedFrom);if(prior)notesOut.push(tMsg("viewer.video.relocatedFrom",{detail:prior}))}
+    if(pair.after.question)notesOut.push(tMsg("viewer.video.questionLabel",{question:pair.after.question}));
+    if(pair.after.failure)notesOut.push(tMsg("viewer.video.failureLabel",{reason:pair.after.failure}));
+    if(pair.after.returnReason)notesOut.push(tMsg("viewer.video.returnLabel",{reason:pair.after.returnReason}));
+    reasonEl.hidden=!notesOut.length;reasonEl.textContent=notesOut.join(" · ")}
+  const histEl=sr.getElementById("videoCompareHistory");
+  if(histEl){const items=pair.after.history||[];histEl.hidden=!items.length;histEl.textContent=items.map(h=>h.text).join(" | ")}
+  videoCompareLoadSide(videoCompareEl("before"),pair.before.url,pair.before.spec?pair.before.spec.seekTime:0,()=>videoCompareLayoutSide("before"));
+  const afterSeek=pair.after.spec?pair.after.spec.seekTime:0;
+  videoCompareLoadSide(videoCompareEl("after"),pair.after.url,afterSeek,()=>videoCompareLayoutSide("after"));
+  videoRelocatePopulate(pair,openRelocate||pair.state==="needs_relocate"||pair.state==="missing_evidence");
+  videoCompareLayout()}
+function videoCompareClose(){
+  if(!videoCompareNoteId)return;
+  const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");
+  if(bEl)bEl.pause();if(aEl)aEl.pause();
+  videoCompareNoteId=null;videoComparePairState=null;videoRelocateOpen=false;videoCompareSig="";videoCompareEnds={before:null,after:null};
+  const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage");
+  if(cs)cs.hidden=true;if(vp)vp.hidden=false;if(ctrl)ctrl.hidden=false;
+  videoLayout()}
+function videoCompareSync(){
+  if(!videoCompareNoteId)return;
+  const found=notes.find(n=>n.id===videoCompareNoteId);
+  if(!found){videoCompareClose();return}
+  const m=videoManifest(),sig=JSON.stringify({note:found,versions:m&&m.versions||null});
+  if(sig===videoCompareSig)return;
+  videoCompareOpen(found,videoRelocateOpen)}
+function videoComparePause(side){const el=videoCompareEl(side);videoCompareEnds[side]=null;if(el)el.pause()}
+async function videoComparePlay(side){
+  const pair=videoComparePairState;if(!pair)return;
+  const other=side==="before"?"after":"before";
+  videoComparePause(other);
+  const el=videoCompareEl(side),info=side==="before"?pair.before:pair.after,spec=info&&info.spec,ver=info&&info.version;
+  if(!el)return;
+  const startPlay=()=>{
+    el.muted=false;
+    if(spec&&spec.playRange){
+      el.pause();el.currentTime=spec.playRange.startTime;videoCompareEnds[side]=spec.playRange.endTime;
+    }else if(spec){
+      el.pause();el.currentTime=spec.seekTime;videoCompareEnds[side]=null;
+    }else if(ver){
+      videoCompareEnds[side]=null;
+    }
+    return el.play()};
+  if(el.readyState>=1||!el.getAttribute("src"))return await startPlay();
+  return await new Promise((resolve,reject)=>{
+    el.addEventListener("loadedmetadata",()=>startPlay().then(resolve,reject),{once:true})})}
+function videoCompareTick(side){const end=videoCompareEnds[side],el=videoCompareEl(side);
+  if(end==null||!el||el.currentTime+1e-6<end)return;
+  videoCompareEnds[side]=null;el.pause();el.currentTime=end}
+function videoRelocateUseFrame(){const f=videoCompareAfterCurrentFrame(),el=sr.getElementById("videoRelocateFrame");if(el)el.value=f;return f}
+function videoRelocateReadTarget(ver){
+  const kind=(sr.getElementById("videoRelocateKind")||{}).value||"frame";
+  const intVal=id=>{const raw=String((sr.getElementById(id)||{}).value??"").trim();if(!/^-?\d+$/.test(raw))return null;return parseInt(raw,10)};
+  if(kind==="frame"){const f=intVal("videoRelocateFrame");if(f==null)return null;const t={kind:"frame",frame:f};return videoTargetValid(t,ver)?t:null}
+  if(kind==="range"){const s=intVal("videoRelocateStart"),e=intVal("videoRelocateEnd");if(s==null||e==null)return null;
+    const t={kind:"range",startFrame:s,endFrame:e};return videoTargetValid(t,ver)?t:null}
+  if(kind==="cut"){const f=intVal("videoRelocateFrame"),csRaw=String((sr.getElementById("videoRelocateContextStart")||{}).value??"").trim(),ceRaw=String((sr.getElementById("videoRelocateContextEnd")||{}).value??"").trim();
+    if(f==null)return null;
+    const t={kind:"cut",frame:f};
+    if(csRaw||ceRaw){const cs=intVal("videoRelocateContextStart"),ce=intVal("videoRelocateContextEnd");if(cs==null||ce==null)return null;t.contextStart=cs;t.contextEnd=ce}
+    return videoTargetValid(t,ver)?t:null}
+  return null}
+async function videoRelocateSave(){
+  const errEl=sr.getElementById("videoRelocateErr"),setErr=msg=>{if(errEl){errEl.textContent=msg;errEl.hidden=!msg}};
+  setErr("");
+  if(!videoCompareNoteId)return null;
+  if(mode!=="server"){setErr(tMsg("viewer.video.relocate.needServer"));return null}
+  if(!serverSupports("video-relocate")){setErr(tMsg("viewer.video.relocate.oldService"));return null}
+  const ver=videoCompareAfterVersion(),target=videoRelocateReadTarget(ver);
+  if(!ver||!target){setErr(tMsg("viewer.video.relocate.badTarget"));return null}
+  const summary=String((sr.getElementById("videoRelocateSummary")||{}).value||"").trim();
+  const reason=String((sr.getElementById("videoRelocateReason")||{}).value||"").trim();
+  const body={versionId:ver.versionId,target};
+  if(summary)body.summary=summary;
+  if(reason)body.reason=reason;
+  try{
+    const res=await api("POST","/api/notes/"+encodeURIComponent(videoCompareNoteId)+"/video-relocate",body);
+    if(res&&res.doc)applyServer({...res.doc,...(res.handoff?{handoff:res.handoff}:{})},true);
+    if(res&&res.note){videoRelocateOpen=false;videoCompareOpen(res.note,false)}
+    toast(tMsg("viewer.video.relocate.saved"));
+    return res;
+  }catch(e){setErr(e&&e.message?e.message:tMsg("viewer.video.relocate.badTarget"));return null}}
+function videoCompareInit(){
+  const closeBtn=sr.getElementById("videoCompareClose");if(closeBtn)closeBtn.onclick=()=>videoCompareClose();
+  const toggleRel=sr.getElementById("videoCompareToggleRelocate");if(toggleRel)toggleRel.onclick=()=>videoRelocatePopulate(videoComparePairState,!videoRelocateOpen);
+  const approveBtn=sr.getElementById("videoCompareApprove");if(approveBtn)approveBtn.onclick=()=>{if(videoCompareNoteId)mutate({kind:"patch",id:videoCompareNoteId,body:{status:"resolved"}})};
+  const pBefore=sr.getElementById("videoComparePlayBefore");if(pBefore)pBefore.onclick=()=>videoComparePlay("before").catch(()=>{});
+  const sBefore=sr.getElementById("videoComparePauseBefore");if(sBefore)sBefore.onclick=()=>videoComparePause("before");
+  const pAfter=sr.getElementById("videoComparePlayAfter");if(pAfter)pAfter.onclick=()=>videoComparePlay("after").catch(()=>{});
+  const sAfter=sr.getElementById("videoComparePauseAfter");if(sAfter)sAfter.onclick=()=>videoComparePause("after");
+  const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");
+  if(bEl){bEl.addEventListener("timeupdate",()=>videoCompareTick("before"));bEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("before"))}
+  if(aEl){aEl.addEventListener("timeupdate",()=>videoCompareTick("after"));aEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("after"))}
+  const kindSel=sr.getElementById("videoRelocateKind");if(kindSel)kindSel.onchange=()=>videoRelocateKindSync();
+  const verSel=sr.getElementById("videoRelocateVersion");if(verSel)verSel.onchange=()=>{const ver=videoFindVersion(verSel.value);if(ver&&ver.url)videoCompareLoadSide(aEl,ver.url,0,()=>videoCompareLayoutSide("after"))};
+  const useF=sr.getElementById("videoRelocateUseFrame");if(useF)useF.onclick=()=>videoRelocateUseFrame();
+  const setS=sr.getElementById("videoRelocateSetStart");if(setS)setS.onclick=()=>{sr.getElementById("videoRelocateStart").value=videoCompareAfterCurrentFrame()};
+  const setE=sr.getElementById("videoRelocateSetEnd");if(setE)setE.onclick=()=>{sr.getElementById("videoRelocateEnd").value=videoCompareAfterCurrentFrame()+1};
+  const saveBtn=sr.getElementById("videoRelocateSave");if(saveBtn)saveBtn.onclick=()=>videoRelocateSave();
+  const cancelBtn=sr.getElementById("videoRelocateCancel");if(cancelBtn)cancelBtn.onclick=()=>videoRelocatePopulate(videoComparePairState,false)}
 
 // ---------- 批注区：列表与输入框分开，刷新列表不碰正在写的内容 ----------
 // 计数与标注序号都先一次遍历建好映射再填充：不再每页、每张卡片各扫一遍批注。
@@ -2052,6 +2430,7 @@ function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>
   const label=b.querySelector("[data-msg]");
   if(label)label.textContent=markMode?(rn?tMsg("viewer.markRehint",{title:clip(noteSummary(rn),12)}):tMsg("viewer.markHint")):tMsg("viewer.markPin")}
 function setMarkMode(on){if(on&&(docxBlocked()||pptxBlocked())){docxBlocked()?docxBlockToast():pptxBlockToast();return}
+  if(on&&typeof videoCompareClose==="function")videoCompareClose();
   markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
   markBtnLabel();
   if(on)toast(remarkId?tMsg("viewer.markRemarkToast"):tMsg("viewer.markToast"),3000);
@@ -2218,6 +2597,8 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
     case "video-jump-orig":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&x.video)videoShowNote(x);break}
     case "video-jump-target":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&x.videoReview&&x.videoReview.target)videoShowTarget(x);break}
+    case "video-compare":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&typeof videoCompareOpen==="function")videoCompareOpen(x,false);break}
+    case "video-relocate":{const x=notes.find(n=>n.id===id);if(VIDEO&&x&&typeof videoCompareOpen==="function")videoCompareOpen(x,true);break}
     case "hide":hideDone=!hideDone;LS.set(K.hide,hideDone);refreshList(true);break}});
 function autoGrow(){const t=$("ntext");t.style.height="auto";t.style.height=Math.min(t.scrollHeight+2,innerHeight*.4)+"px"}
 $("ntext").addEventListener("input",()=>{autoGrow();clearTimeout(saveDraft.h);saveDraft.h=setTimeout(saveDraft,400)});

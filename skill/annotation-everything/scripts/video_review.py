@@ -428,6 +428,129 @@ def clean_video_mark(value: Any) -> dict[str, Any]:
     return mark
 
 
+def version_timebase(version_meta: dict[str, Any]) -> Fraction:
+    """读取并校验单个视频版本的精确帧时间基准（秒/帧）。"""
+    if not isinstance(version_meta, dict):
+        raise VideoError("缺少目标版本元数据")
+    tb = version_meta.get("timebase")
+    if not isinstance(tb, dict) or set(tb) != {"num", "den"}:
+        raise VideoError("目标版本缺少有效 timebase")
+    num = _check_int(tb.get("num"), "version.timebase.num", minimum=1)
+    den = _check_int(tb.get("den"), "version.timebase.den", minimum=1)
+    return Fraction(num, den)
+
+
+def frame_to_seconds(frame: int, version_meta: dict[str, Any]) -> float:
+    """按版本自身的 timebase 将帧号换算为精确秒数。"""
+    tb = version_timebase(version_meta)
+    idx = _check_int(frame, "frame", minimum=0)
+    if version_meta.get("frames") is not None:
+        frames = _check_int(version_meta["frames"], "version.frames", minimum=1)
+        if idx > frames:
+            raise VideoError(f"帧号 {idx} 超出版本帧数范围 [0, {frames}]")
+    return float(Fraction(idx) * tb)
+
+
+def seconds_to_frame(seconds: float, version_meta: dict[str, Any], *, clamp: bool = True) -> int:
+    """按版本自身的 timebase 将秒数换算为帧号；保留 IEEE-754 边界容差。"""
+    tb = version_timebase(version_meta)
+    sec = _check_number(seconds, "seconds")
+    if sec < 0:
+        if not clamp:
+            raise VideoError("秒数不能为负")
+        sec = 0.0
+    idx = math.floor(sec * tb.denominator / tb.numerator + 1e-9)
+    if version_meta.get("frames") is not None:
+        frames = _check_int(version_meta["frames"], "version.frames", minimum=1)
+        if idx >= frames:
+            if not clamp:
+                raise VideoError(f"时间 {sec}s 超出版本帧数范围 [0, {frames})")
+            return frames - 1
+    return idx
+
+
+def cut_context_window(
+    target: dict[str, Any], version_meta: dict[str, Any], *, pad_seconds: float = 1.0
+) -> tuple[int, int]:
+    """返回剪口定位的可播放上下文区间 [start, end)；未显式给出时按版本帧率截取有界窗口。"""
+    if not isinstance(target, dict):
+        raise VideoError("回执位置须为对象")
+    tb = version_timebase(version_meta)
+    frames = _check_int(version_meta.get("frames"), "version.frames", minimum=1)
+    cut_frame = _check_int(target.get("frame"), "frame")
+    if cut_frame > frames:
+        raise VideoError(f"回执剪口 {cut_frame} 超出帧数范围 [0, {frames}]")
+    has_cs = "contextStart" in target and target["contextStart"] is not None
+    has_ce = "contextEnd" in target and target["contextEnd"] is not None
+    if has_cs != has_ce:
+        raise VideoError("剪口上下文须同时提供 contextStart 与 contextEnd")
+    if has_cs:
+        cs = _check_int(target.get("contextStart"), "contextStart")
+        ce = _check_int(target.get("contextEnd"), "contextEnd")
+        if cs >= ce or ce > frames or not (cs <= cut_frame <= ce):
+            raise VideoError(f"剪口上下文 [{cs}, {ce}) 无效或未包含剪口 {cut_frame}")
+        return cs, ce
+    pad_sec = _check_number(pad_seconds, "padSeconds")
+    if pad_sec <= 0:
+        raise VideoError("剪口上下文时长须大于 0")
+    pad = max(1, round(pad_sec * tb.denominator / tb.numerator))
+    cs = max(0, min(frames - 1, cut_frame - pad))
+    ce = min(frames, max(cs + 1, cut_frame + pad))
+    return cs, ce
+
+
+def temporal_window(
+    location: dict[str, Any], version_meta: dict[str, Any], *, pad_seconds: float = 1.0
+) -> dict[str, Any]:
+    """按目标版本时间基准解析帧、区间或剪口及其可播放时间窗。"""
+    if not isinstance(location, dict):
+        raise VideoError("视频定位须为对象")
+    tb = version_timebase(version_meta)
+    frames = _check_int(version_meta.get("frames"), "version.frames", minimum=1)
+    kind = location.get("kind")
+    if kind is None:
+        if "frame" in location and "startFrame" not in location and "endFrame" not in location:
+            kind = "frame"
+        elif "startFrame" in location and "endFrame" in location and "frame" not in location:
+            kind = "range"
+    if kind not in RECEIPT_TARGET_KINDS:
+        raise VideoError(f"回执位置 kind 须为 {'/'.join(RECEIPT_TARGET_KINDS)} 之一")
+    base: dict[str, Any] = {
+        "kind": kind,
+        "versionId": version_meta.get("versionId"),
+        "fps": float(1 / tb),
+        "timebase": {"num": tb.numerator, "den": tb.denominator},
+    }
+    if kind == "frame":
+        frame = _check_int(location.get("frame"), "frame")
+        if frame >= frames:
+            raise VideoError(f"回执帧 {frame} 超出帧数范围 [0, {frames})")
+        return {**base, "frame": frame, "time": frame_to_seconds(frame, version_meta)}
+    if kind == "range":
+        start = _check_int(location.get("startFrame"), "startFrame")
+        end = _check_int(location.get("endFrame"), "endFrame")
+        if start >= end or end > frames:
+            raise VideoError(f"回执区间 [{start}, {end}) 超出帧数范围 [0, {frames}]")
+        return {
+            **base,
+            "startFrame": start,
+            "endFrame": end,
+            "startTime": frame_to_seconds(start, version_meta),
+            "endTime": frame_to_seconds(end, version_meta),
+        }
+    frame = _check_int(location.get("frame"), "frame")
+    cs, ce = cut_context_window(location, version_meta, pad_seconds=pad_seconds)
+    return {
+        **base,
+        "frame": frame,
+        "time": frame_to_seconds(frame, version_meta),
+        "contextStart": cs,
+        "contextEnd": ce,
+        "contextStartTime": frame_to_seconds(cs, version_meta),
+        "contextEndTime": frame_to_seconds(ce, version_meta),
+    }
+
+
 def clean_receipt_target(raw_target: Any, version_meta: dict[str, Any]) -> dict[str, Any]:
     """校验并规范化新版回执定位（frame / range / cut），越出成片范围一律拒绝。"""
     if not isinstance(raw_target, dict):
@@ -446,11 +569,8 @@ def clean_receipt_target(raw_target: Any, version_meta: dict[str, Any]) -> dict[
     fps = _check_number(version_meta.get("fps"), "version.fps")
     if fps <= 0:
         raise VideoError("目标版本 fps 须大于 0")
-    tb = version_meta.get("timebase")
-    if not isinstance(tb, dict) or set(tb) != {"num", "den"}:
-        raise VideoError("目标版本缺少有效 timebase")
-    num = _check_int(tb.get("num"), "version.timebase.num", minimum=1)
-    den = _check_int(tb.get("den"), "version.timebase.den", minimum=1)
+    tb = version_timebase(version_meta)
+    num, den = tb.numerator, tb.denominator
 
     kind = raw_target.get("kind")
     if kind is None:
