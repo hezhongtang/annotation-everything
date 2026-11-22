@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Optional
 
 SCHEMA = "ae-verify-selection/1"
-STRATEGY_VERSION = 19
+STRATEGY_VERSION = 20
 
 # 覆盖映射的环境变量（只记「用了覆盖」这个事实，路径不进记录）
 OVERRIDE_ENV = "AE_SELECTION_MAP"
@@ -266,6 +266,14 @@ SELECTION_RULES = (
             "skill/annotation-everything/scripts/video_review.py",
             "skill/annotation-everything/scripts/video_source.py",
             "skill/annotation-everything/scripts/video_engines.py",
+            "skill/annotation-everything/scripts/notes.py",
+            "skill/annotation-everything/scripts/notes_store.py",
+            "skill/annotation-everything/scripts/serve.py",
+            "skill/annotation-everything/scripts/viewer_template.html",
+            "skill/annotation-everything/scripts/build_viewer.py",
+            "skill/annotation-everything/scripts/wakeup.py",
+            "skill/annotation-everything/scripts/i18n.py",
+            "skill/annotation-everything/locales/",
             "fixtures/video/",
         ),
         selectors=(
@@ -282,7 +290,7 @@ SELECTION_RULES = (
         ),
         scenarios=("video-review",),
         serve_check=True,
-        why="视频版本、引擎入口与合成样例涉及媒体服务、帧和区间定位、验收与返工交接",
+        why="视频版本、引擎入口、协议存储、服务页面与合成样例共享媒体服务、帧和区间定位、验收与返工交接边界",
     ),
     SelectionRule(
         rid="pptx-generation",

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
@@ -687,6 +688,77 @@ class ServeSourceProjectTests(VideoHandoffBase):
             {"choice": "ghost", "proposalRevision": json.loads(body)["sourceProject"]["proposalRevision"]},
         )
         self.assertEqual(code, 400)
+
+    def test_ntsc_fps_matches_without_false_difference_and_candidate_without_media_clears_stale_basis(self):
+        video = self.manifest()["video"]
+        for declared_fps, exact_fps in ((23.976, 24000 / 1001), (29.97, 30000 / 1001), (59.94, 60000 / 1001)):
+            with self.subTest(declared_fps=declared_fps):
+                ntsc_video = copy.deepcopy(video)
+                ntsc_video["versions"][0]["fps"] = exact_fps
+                ntsc_video["versions"][0]["duration"] = 180 / exact_fps
+                linked = video_source.link(
+                    ntsc_video,
+                    engine="remotion",
+                    root=str(self.root / "ntsc"),
+                    entry={"kind": "composition", "id": "Main"},
+                    media={**V1_MEDIA, "fps": declared_fps, "duration": round(180 / declared_fps, 3)},
+                    verified_source=True,
+                )
+                self.assertEqual(linked["sourceProject"]["status"], "linked")
+                self.assertEqual(linked["sourceProject"]["differences"], [])
+
+        pending = video_source.link(
+            video,
+            engine="remotion",
+            root=str(self.root / "multi"),
+            entry={"kind": "composition", "id": "A"},
+            media={**V1_MEDIA, "frames": 240},
+            candidates=[
+                {
+                    "id": "c1",
+                    "engine": "remotion",
+                    "root": str(self.root / "multi"),
+                    "entry": {"kind": "composition", "id": "A"},
+                    "media": {**V1_MEDIA, "frames": 240},
+                },
+                {
+                    "id": "c2",
+                    "engine": "remotion",
+                    "root": str(self.root / "multi"),
+                    "entry": {"kind": "composition", "id": "B"},
+                },
+            ],
+        )
+        self.assertTrue(pending["sourceProject"]["differences"])
+        confirmed = video_source.confirm(pending, choice="c2", by="page")
+        sp = confirmed["sourceProject"]
+        self.assertEqual(sp["status"], "linked")
+        self.assertEqual(sp["basis"]["kind"], "confirmed-candidate")
+        self.assertNotIn("media", sp["basis"])
+        self.assertEqual(sp["differences"], [])
+
+    def test_dangling_symlink_in_hyperframes_project_does_not_500(self):
+        project = self.root / "hf"
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "broken-asset.mp4").symlink_to(self.root / "does-not-exist.mp4")
+        code, _, body = self.post(
+            "/api/video/source-project",
+            {"engine": "hyperframes", "root": str(project), "entry": {"id": "index.html"}},
+        )
+        self.assertEqual(code, 200, body)
+
+    def test_event_wakeup_prompt_uses_video_receipt_protocol_for_video_reviews(self):
+        prompt = wakeup.prompt(
+            {"reviewId": self.manifest()["reviewId"], "reviewDir": str(self.d)},
+            "handoff",
+            1,
+            "msg-video-1",
+        )
+        self.assertIn("video-receipt", prompt)
+        self.assertIn("--receipt", prompt)
+        self.assertIn("--movie", prompt)
+        self.assertIn("--render-error", prompt)
+        self.assertIn("Never call resolve, review, done --final, or document rebuild", prompt)
 
 
 if __name__ == "__main__":

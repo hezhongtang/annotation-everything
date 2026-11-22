@@ -680,21 +680,21 @@ def _check_number(value: Any, name: str) -> float:
     return float(value)
 
 
-def clean_video_mark(value: Any) -> dict[str, Any]:
+def clean_video_mark(value: Any, *, label: str = "回执画面标记") -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("kind") not in ("point", "region"):
-        raise VideoError("回执画面标记须为归一化点或区域")
+        raise VideoError(f"{label}须为归一化点或区域")
     kind = value["kind"]
     names = ("x", "y") if kind == "point" else ("x", "y", "width", "height")
     if set(value) != {"kind", *names}:
-        raise VideoError("回执画面标记含无法识别的字段")
+        raise VideoError(f"{label}含无法识别的字段")
     mark = {"kind": kind, **{name: _check_number(value[name], f"mark.{name}") for name in names}}
     if any(mark[name] < 0 or mark[name] > 1 for name in ("x", "y")):
-        raise VideoError("回执画面标记坐标须在 0 至 1 之间")
+        raise VideoError(f"{label}坐标须在 0 至 1 之间")
     if kind == "region":
         if mark["width"] <= 0 or mark["height"] <= 0:
-            raise VideoError("回执画面标记区域宽高须大于 0")
+            raise VideoError(f"{label}区域宽高须大于 0")
         if mark["x"] + mark["width"] > 1 or mark["y"] + mark["height"] > 1:
-            raise VideoError("回执画面标记区域不能超出实际视频画面")
+            raise VideoError(f"{label}区域不能超出实际视频画面")
     return mark
 
 

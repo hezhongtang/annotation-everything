@@ -56,6 +56,7 @@ OVERVIEW_PAGE_FILE = ".overview-home.html"  # 仅总览视图的首页页面（b
 OVERVIEW_LOG_FILE = "overview-home.log"  # 首页服务日志
 OVERVIEW_STATUS_FILE = ".overview-home-status.json"  # 首页运行状态（pid/端口/宿主标识），退出时删除
 OVERVIEW_START_LOCK_FILE = ".overview-home-start.lock"  # 并发首次启动的串行化锁
+VIDEO_RENDERS_DIR = "video-renders"  # 引擎渲染来源凭据目录（仅存 {root,engine,entry,inputs,sha256}，不算审阅业务数据）
 
 
 def overview_port_file() -> Path:

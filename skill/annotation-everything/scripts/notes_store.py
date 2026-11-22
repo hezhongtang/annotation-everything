@@ -151,6 +151,9 @@ def pre_read(value: Any, missing: Any, read: Callable[[], Any]) -> Any:
 
 
 VIDEO_COMMIT_FILE = ".video-note-commit.json"
+VIDEO_COMMIT_MAX_BYTES = 16 * 1024 * 1024
+VIDEO_DECODE_FAILURE_STATES = frozenset({"pending_review", "missing_evidence", "needs_relocate"})
+VIDEO_NON_RELOCATABLE_STATES = frozenset({"needs_reply", "failed", "returned"})
 
 
 def _require_dir(review_dir: Path) -> None:
@@ -163,9 +166,12 @@ def locked(review_dir: Path, *, deadline: float | None = None) -> Iterator[None]
     _require_dir(review_dir)
     with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True, deadline=deadline):
         journal = review_dir / VIDEO_COMMIT_FILE
-        if journal.exists():
-            fsutil.check_private_regular_file(journal)
-            pending = json.loads(journal.read_text(encoding="utf-8"))
+        try:
+            raw_journal = fsutil.read_private_text(journal, max_bytes=VIDEO_COMMIT_MAX_BYTES)
+        except FileNotFoundError:
+            raw_journal = None
+        if raw_journal is not None:
+            pending = json.loads(raw_journal)
             if pending.get("reviewId") != ledger.read_manifest(review_dir).get("reviewId"):
                 raise NoteError("待恢复的批注与批次不属于本审阅")
             _publish_video_commit(review_dir, journal, pending)
@@ -963,21 +969,10 @@ def _video_number(value: Any, name: str) -> float:
 
 
 def _clean_video_mark(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or value.get("kind") not in ("point", "region"):
-        raise NoteError("video.mark 须为归一化点或区域")
-    kind = value["kind"]
-    names = ("x", "y") if kind == "point" else ("x", "y", "width", "height")
-    if set(value) != {"kind", *names}:
-        raise NoteError("video.mark 含无法识别的字段")
-    mark = {"kind": kind, **{name: _video_number(value[name], f"mark.{name}") for name in names}}
-    if any(mark[name] < 0 or mark[name] > 1 for name in ("x", "y")):
-        raise NoteError("video.mark 坐标须在 0 至 1 之间")
-    if kind == "region":
-        if mark["width"] <= 0 or mark["height"] <= 0:
-            raise NoteError("video.mark 区域宽高须大于 0")
-        if mark["x"] + mark["width"] > 1 or mark["y"] + mark["height"] > 1:
-            raise NoteError("video.mark 区域不能超出实际视频画面")
-    return mark
+    try:
+        return video_review.clean_video_mark(value, label="video.mark")
+    except video_review.VideoError as exc:
+        raise NoteError(str(exc)) from None
 
 
 def _clean_video(value: Any) -> dict[str, Any] | None:
@@ -3184,7 +3179,7 @@ def video_decode_failed(
             return
         _check_video_evidence(note, expected_evidence)
         if (
-            vr.get("state") not in ("pending_review", "missing_evidence", "needs_relocate")
+            vr.get("state") not in VIDEO_DECODE_FAILURE_STATES
             or vr.get("batch") != seq
             or vr.get("versionId") != version_id
             or not expected_evidence
@@ -3235,7 +3230,7 @@ def _sync_decode_failures(review_dir: Path, pending: list[dict], doc: dict, ndoc
                 vr.get("versionId") != version_id
                 or vr.get("batch") != seq
                 or vr.get("decision")
-                or vr.get("state") not in ("pending_review", "missing_evidence", "needs_relocate")
+                or vr.get("state") not in VIDEO_DECODE_FAILURE_STATES
             ):
                 continue
             current = _video_evidence(note)
@@ -3526,7 +3521,7 @@ def _apply_receipt(review_dir, spec, actor, finish, authorize):
             _validate_receipt_note(note, nid, item, n_seq)
             version_meta = None
             cleaned_target = None
-            if entry["outcome"] in ("fixed", "deleted"):
+            if entry["outcome"] in ("fixed", "deleted", "needs_relocate"):
                 target_vid = (
                     entry.get("versionId")
                     or (entry["target"].get("versionId") if isinstance(entry["target"], dict) else None)
@@ -3541,7 +3536,11 @@ def _apply_receipt(review_dir, spec, actor, finish, authorize):
                         )
                     except video_review.VideoError as exc:
                         raise HandoffError(str(exc), code="invalid-receipt-target", id=nid) from None
-                if entry["target"] is not None and version_meta is not None:
+                if (
+                    entry["outcome"] in ("fixed", "deleted")
+                    and entry["target"] is not None
+                    and version_meta is not None
+                ):
                     try:
                         cleaned_target = video_review.clean_receipt_target(entry["target"], version_meta)
                     except video_review.VideoError as exc:
@@ -4056,9 +4055,11 @@ def relocate_video_note(
             )
         )
         had_batch = (batch_seq is not None) or (note.get("status") == "drafted")
+        if version_meta.get("playbackFailure"):
+            raise HandoffError("该版本成片已解码失败，不能作为复核目标", code="invalid-receipt-target", id=note_id)
         if batch_seq is not None and version_meta.get("batch") != batch_seq:
             raise HandoffError("请重定位到本批实际渲染的成片", code="invalid-receipt-target", id=note_id)
-        if prev_state in ("needs_reply", "failed", "returned"):
+        if prev_state in VIDEO_NON_RELOCATABLE_STATES:
             raise HandoffError("当前意见仍需要答复或返工", code="video-not-ready", id=note_id, reason=prev_state)
         if prev_vr and prev_vr.get("outcome") == "deleted" and cleaned_target.get("kind") != "cut":
             raise HandoffError("删镜复核需要剪口和上下文", code="invalid-receipt-target", id=note_id)

@@ -587,6 +587,32 @@ class PurgeGuardTests(unittest.TestCase):
         (self.ledger_home / "reviews.json").write_text("不是 JSON", encoding="utf-8")
         self.assertIsNotNone(ae.purge_guard(self.ledger_home))
 
+    def test_accepts_and_purges_video_render_receipts_but_rejects_foreign_files(self):
+        self.write_ledger()
+        renders = self.ledger_home / "video-renders"
+        renders.mkdir(mode=0o700)
+        valid = renders / ("a" * 64 + ".json")
+        valid.write_text('{"engine":"remotion"}\n', encoding="utf-8")
+        temp = renders / ".render-1234.tmp"
+        temp.write_text("partial", encoding="utf-8")
+        self.assertIsNone(ae.purge_guard(self.ledger_home))
+
+        foreign = renders / "notes.txt"
+        foreign.write_text("keep", encoding="utf-8")
+        self.assertIsNotNone(ae.purge_guard(self.ledger_home))
+        foreign.unlink()
+
+        outside = Path(self.temp.name) / "outside.json"
+        outside.write_text("{}", encoding="utf-8")
+        link = renders / ("b" * 64 + ".json")
+        link.symlink_to(outside)
+        self.assertIsNotNone(ae.purge_guard(self.ledger_home))
+        link.unlink()
+
+        self.assertIsNone(ae.purge_guard(self.ledger_home))
+        ae.purge_ledger(self.ledger_home)
+        self.assertFalse(self.ledger_home.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

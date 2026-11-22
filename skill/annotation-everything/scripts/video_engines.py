@@ -84,6 +84,8 @@ def _inside(root: Path, candidate: Path) -> bool:
 
 def _package_deps(root: Path) -> tuple[Path | None, set[str]]:
     package = root / "package.json"
+    if package.is_symlink() or not _inside(root, package):
+        raise EngineError("entryOutside", str(package))
     if not package.is_file():
         return None, set()
     try:
@@ -101,7 +103,14 @@ def _package_deps(root: Path) -> tuple[Path | None, set[str]]:
 
 
 def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
-    config = next((root / name for name in REMOTION_CONFIG_NAMES if (root / name).is_file()), None)
+    config = None
+    for name in REMOTION_CONFIG_NAMES:
+        cand = root / name
+        if cand.is_symlink() or not _inside(root, cand):
+            raise EngineError("entryOutside", str(cand))
+        if cand.is_file():
+            config = cand
+            break
     candidates: list[Path] = []
     if config is not None:
         try:
@@ -112,7 +121,7 @@ def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
             candidates.append(root / match.group(1))
     candidates += [root / name for name in REMOTION_ENTRY_NAMES]
     for candidate in candidates:
-        if not _inside(root, candidate):
+        if candidate.is_symlink() or not _inside(root, candidate):
             raise EngineError("entryOutside", str(candidate))
         if candidate.is_file():
             return candidate.resolve(), config
@@ -149,7 +158,7 @@ def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
     htmls = sorted(dict.fromkeys(htmls), key=lambda p: p.relative_to(root).as_posix())[:HTML_CAP]
     compositions: list[dict[str, Any]] = []
     for path in htmls:
-        if not _inside(root, path):
+        if path.is_symlink() or not _inside(root, path):
             raise EngineError("compositionOutside", str(path))
         try:
             with path.open(encoding="utf-8", errors="replace") as source:
@@ -412,15 +421,23 @@ def freshness_sources(info: dict[str, Any]) -> list[Path]:
     root = info["root"]
     sources = []
     for directory, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in {"node_modules", "out", "dist", "build"})
         here = Path(directory)
+        dirs[:] = sorted(
+            d
+            for d in dirs
+            if not d.startswith(".")
+            and d not in {"node_modules", "out", "dist", "build"}
+            and not (here / d).is_symlink()
+            and _inside(root, here / d)
+        )
         if here != root and "review.json" in files and "index.html" in files:
             dirs.clear()
             continue
         for name in sorted(files):
             path = here / name
-            if not name.startswith("."):
-                sources.append(path)
+            if name.startswith(".") or path.is_symlink() or not _inside(root, path):
+                continue
+            sources.append(path)
     return sources
 
 
@@ -428,10 +445,11 @@ def source_fingerprint(info: dict[str, Any]) -> str:
     import video_review
 
     digest = hashlib.sha256()
+    root = info["root"]
     for path in freshness_sources(info):
-        if not path.is_file():
+        if path.is_symlink() or not _inside(root, path) or not path.is_file():
             raise EngineError("movieUnreadable", str(path))
-        name = path.relative_to(info["root"]).as_posix().encode("utf-8")
+        name = path.relative_to(root).as_posix().encode("utf-8")
         digest.update(len(name).to_bytes(8, "big") + name)
         digest.update(bytes.fromhex(video_review.file_digest(path)))
     return digest.hexdigest()
@@ -449,7 +467,7 @@ def _render_evidence(info, chosen, source_hash, movie):
         "sha256": video_review.file_digest(movie),
     }
     key = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
-    return ledger.home() / "video-renders" / (key + ".json"), evidence
+    return ledger.home() / ledger.VIDEO_RENDERS_DIR / (key + ".json"), evidence
 
 
 def _private_evidence_directory(directory, *, create):
@@ -529,7 +547,21 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         except (ProcessLookupError, PermissionError):
             proc.kill()
     else:
-        proc.kill()
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+        except OSError:
+            pass
+        try:
+            proc.kill()
+        except OSError:
+            pass
 
 
 def _run(argv: list[str], cwd: Path, timeout: float, timeout_code: str) -> tuple[int, str, str]:
@@ -720,7 +752,10 @@ def _render(
             raise EngineError("renderInvalid", str(exc)) from exc
     except BaseException:
         _unlink(staging)
-        staging.parent.rmdir()
+        try:
+            staging.parent.rmdir()
+        except OSError:
+            pass
         raise
     if engine == ENGINE_REMOTION and not _matches(meta, chosen):
         warnings.append(

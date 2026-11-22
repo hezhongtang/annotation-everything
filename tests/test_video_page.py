@@ -409,6 +409,24 @@ class VideoPageWiringTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, self.source)
 
+    def test_review_fixes_for_i18n_old_service_blocking_compare_close_and_rework_title(self):
+        for fragment in (
+            'data-msg="viewer.video.source.fieldFrames"',
+            'tMsg("viewer.video.source.needRootEntry")',
+            'tMsg("viewer.video.versionAria")',
+            'tMsg("viewer.video.frameAria")',
+            "videoCompareRefreshLocale()",
+            'if(typeof videoCompareClose==="function")videoCompareClose();',
+            '["needs_reply","returned","failed"].includes(st)',
+            "docxBlocked()||pptxBlocked()||videoBlocked()",
+            'hasPrior?"viewer.hand.pickTitleRework":"viewer.hand.pickTitle"',
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.source)
+        self.assertNotIn('aria-label="Video version"', self.source)
+        self.assertNotIn('aria-label="Frame"', self.source)
+        self.assertNotIn('{message:"root / entry"}', self.source)
+
 
 if __name__ == "__main__":
     unittest.main()

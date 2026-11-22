@@ -3164,9 +3164,27 @@ def purge_guard(home_dir: Path) -> Optional[str]:
         if entry == resolved or resolved in entry.parents or entry in resolved.parents:
             return T("cli.ae.purge.insideHome", dir=review_dir)
     for child in home_dir.iterdir():
+        if child.name == VIDEO_RENDERS_DIR and child.is_dir() and not child.is_symlink():
+            for entry in child.iterdir():
+                if not is_video_render_file(entry.name) or entry.is_symlink() or not entry.is_file():
+                    return T("cli.ae.purge.foreign", name=f"{child.name}/{entry.name}")
+            continue
         if not is_ledger_file(child.name) or child.is_symlink() or not child.is_file():
             return T("cli.ae.purge.foreign", name=child.name)
     return None
+
+
+VIDEO_RENDERS_DIR = "video-renders"
+
+
+def is_video_render_file(name: str) -> bool:
+    """台账 video-renders 子目录里的已知文件：SHA-256 命名的渲染来源凭据与写入临时文件。"""
+    if name.startswith(".render-") and name.endswith(".tmp"):
+        return True
+    if len(name) == 69 and name.endswith(".json"):
+        stem = name[:-5]
+        return all(ch in "0123456789abcdef" for ch in stem)
+    return False
 
 
 def is_ledger_file(name: str) -> bool:
@@ -3189,9 +3207,14 @@ def is_ledger_file(name: str) -> bool:
 
 
 def purge_ledger(home_dir: Path) -> None:
-    """只删除已知台账文件；新出现的目录或未知文件由 rmdir 拒绝，绝不递归删除。"""
+    """只删除已知台账文件与 video-renders 凭据目录里的已知凭据；新出现的未知目录或文件由 rmdir 拒绝，绝不递归删除。"""
     for child in home_dir.iterdir():
-        if is_ledger_file(child.name) and child.is_file() and not child.is_symlink():
+        if child.name == VIDEO_RENDERS_DIR and child.is_dir() and not child.is_symlink():
+            for entry in child.iterdir():
+                if is_video_render_file(entry.name) and entry.is_file() and not entry.is_symlink():
+                    entry.unlink()
+            child.rmdir()
+        elif is_ledger_file(child.name) and child.is_file() and not child.is_symlink():
             child.unlink()
     home_dir.rmdir()
 

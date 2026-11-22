@@ -1228,6 +1228,14 @@ class Handler(BaseHTTPRequestHandler):
             )
             return updated
 
+    def _public_video_extra(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(manifest.get("video"), dict):
+            try:
+                return {"video": video_review.public_manifest(manifest)}
+            except video_review.VideoError:
+                pass
+        return {}
+
     def _link_source_project(self, body: dict[str, Any]) -> None:
         entry = body.get("entry")
         payload = {"engine": body.get("engine"), "root": body.get("root"), "entry": entry}
@@ -1367,12 +1375,7 @@ class Handler(BaseHTTPRequestHandler):
                     doc["stop"] = review_stop.public_status(d, manifest=self.server.manifest())
                 except (OSError, ValueError):
                     pass  # Keep annotations readable if lifecycle state cannot be read.
-            manifest = self.server.manifest()
-            if isinstance(manifest.get("video"), dict):
-                try:
-                    doc["video"] = video_review.public_manifest(manifest)
-                except video_review.VideoError:
-                    pass
+            doc.update(self._public_video_extra(self.server.manifest()))
             self._json(200, {**doc, **self._ident()})
         elif path == "/api/handoff" and cmd == "GET":
             self._json(200, {**self._handoff_state(full=True), **self._ident()})
@@ -1715,13 +1718,7 @@ class Handler(BaseHTTPRequestHandler):
                 reason=body.get("reason"),
                 by="page",
             )
-            manifest = self.server.manifest()
-            extra_video: dict[str, Any] = {}
-            if isinstance(manifest.get("video"), dict):
-                try:
-                    extra_video["video"] = video_review.public_manifest(manifest)
-                except video_review.VideoError:
-                    pass
+            extra_video = self._public_video_extra(self.server.manifest())
             vr_after = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else {}
             self.server.log("info", f"video-relocate {nid} version={vr_after.get('versionId', '-')}")
             self._json(
@@ -1764,13 +1761,7 @@ class Handler(BaseHTTPRequestHandler):
                 expected_evidence=body.get("expectedEvidence") or "",
                 by="page",
             )
-            manifest = self.server.manifest()
-            extra_video: dict[str, Any] = {}
-            if isinstance(manifest.get("video"), dict):
-                try:
-                    extra_video["video"] = video_review.public_manifest(manifest)
-                except video_review.VideoError:
-                    pass
+            extra_video = self._public_video_extra(self.server.manifest())
             self.server.log("info", f"video-decision {nid} action={action} replayed={result['replayed']}")
             self._json(
                 200,
@@ -3747,6 +3738,129 @@ def check(locale: str | None = None) -> int:
             if home_srv is not None:
                 home_srv.shutdown()
                 home_srv.server_close()
+
+        # ---------- 视频审阅路由：媒体范围、Host/Origin/Content-Type/同审阅标识与无 CORS ----------
+        video_srv = None
+        try:
+            import struct
+
+            def _box(kind: bytes, payload: bytes) -> bytes:
+                return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+            def _fbox(kind: bytes, ver: int, flg: int, payload: bytes) -> bytes:
+                return _box(kind, bytes((ver,)) + flg.to_bytes(3, "big") + payload)
+
+            frames, fps, width, height = 60, 30, 320, 180
+            mvhd = _fbox(b"mvhd", 0, 0, struct.pack(">IIIIII", 0, 0, fps, frames, 0x00010000, 0x01000000) + b"\0" * 80)
+            mdhd = _fbox(b"mdhd", 0, 0, struct.pack(">IIIIHH", 0, 0, fps, frames, 0x55C4, 0))
+            stts = _fbox(b"stts", 0, 0, struct.pack(">III", 1, frames, 1))
+            avc1 = b"\0" * 6 + struct.pack(">H", 1) + b"\0" * 16 + struct.pack(">HH", width, height) + b"\0" * 50
+            stsd = _fbox(b"stsd", 0, 0, struct.pack(">I", 1) + _box(b"avc1", avc1))
+            ftyp = _box(b"ftyp", b"isom" + bytes(4) + b"isomiso2avc1mp41")
+            mdat = _box(b"mdat", bytes((42,)) * frames)
+            stsc = _fbox(b"stsc", 0, 0, struct.pack(">IIII", 1, 1, frames, 1))
+            stsz = _fbox(b"stsz", 0, 0, struct.pack(">II", 1, frames))
+            stco = _fbox(b"stco", 0, 0, struct.pack(">II", 1, len(ftyp) + 8))
+            stbl = _box(b"stbl", stsd + stts + stsc + stsz + stco)
+            minf = _box(b"minf", stbl)
+            hdlr = _fbox(b"hdlr", 0, 0, b"\0" * 4 + b"vide" + b"\0" * 12 + b"Check video\0")
+            mdia = _box(b"mdia", mdhd + hdlr + minf)
+            tkhd = _fbox(
+                b"tkhd",
+                0,
+                3,
+                struct.pack(">IIIII", 0, 0, 1, 0, frames) + b"\0" * 52 + struct.pack(">II", width << 16, height << 16),
+            )
+            trak = _box(b"trak", tkhd + mdia)
+            mp4_bytes = ftyp + mdat + _box(b"moov", mvhd + trak)
+
+            video_src = tmp / "check.mp4"
+            video_src.write_bytes(mp4_bytes)
+            video_dir = tmp / "video-review"
+            built = build_viewer.build(video_src, None, video_dir, no_scan_skills=True, locale=i18n.current_locale())
+            vrid = built["reviewId"]
+            video_srv = ReviewServer(video_dir, 0, log_to_file=False, locale=i18n.current_locale())
+            vport = video_srv.port
+            vt = threading.Thread(target=video_srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+            vt.start()
+            ok(
+                video_srv.server_address[0] == "127.0.0.1",
+                T("serve.check.videoLoopback", host=video_srv.server_address[0]),
+            )
+            vg = {"Host": f"127.0.0.1:{vport}"}
+            media_path = f"/api/video/{vrid}/versions/V1/media"
+            s_ver, h_ver, _ = _req(vport, "GET", "/api/video/versions", vg)
+            s_one, h_one, _ = _req(vport, "GET", "/api/video/versions/V1", vg)
+            s_src, h_src, _ = _req(vport, "GET", "/api/video/source-project", vg)
+            s_med, h_med, b_med = _req(vport, "GET", media_path, {**vg, "Range": "bytes=0-7"})
+            s_head, h_head, _ = _req(vport, "HEAD", media_path, vg)
+            no_cors = all("access-control-allow-origin" not in hdr for hdr in (h_ver, h_one, h_src, h_med, h_head))
+            ok(
+                s_ver == 200
+                and s_one == 200
+                and s_src == 200
+                and s_med == 206
+                and b_med == mp4_bytes[:8]
+                and s_head == 200
+                and no_cors,
+                T("serve.check.videoRead"),
+            )
+            bad_host_codes = [
+                _req(vport, "GET", p, {"Host": f"evil.example:{vport}"})[0]
+                for p in ("/api/video/versions", "/api/video/source-project", media_path)
+            ]
+            ok(all(code == 421 for code in bad_host_codes), T("serve.check.videoBadHost", status=bad_host_codes[-1]))
+            scope_codes = [
+                _req(vport, "GET", p, vg)[0]
+                for p in (
+                    f"/api/video/{'0' * 16}/versions/V1/media",
+                    "/api/video/versions/V1/media",
+                    f"/api/video/{vrid}/versions/V2/media",
+                )
+            ]
+            ok(all(code == 404 for code in scope_codes), T("serve.check.videoMediaScope", status=scope_codes[-1]))
+            v_same = {
+                **vg,
+                "Origin": f"http://127.0.0.1:{vport}",
+                "Content-Type": "application/json",
+                "X-AE-Review": vrid,
+            }
+            v_paths = [video_dir / MANIFEST, video_dir / store.NOTES_FILE]
+            v_before = [p.read_bytes() if p.exists() else None for p in v_paths]
+            v_write_routes = (
+                ("/api/video/source-project", {"engine": "remotion", "root": str(tmp), "entry": {"id": "Main"}}),
+                ("/api/video/source-project/confirm", {"proposalRevision": "0" * 64}),
+                (
+                    "/api/video/playback-failure",
+                    {"batch": 1, "versionId": "V1", "noteId": "n1", "expectedEvidence": "x", "mediaError": 3},
+                ),
+                ("/api/notes/n1/video-relocate", {"versionId": "V1", "target": {"kind": "frame", "frame": 0}}),
+                ("/api/notes/n1/video-decision", {"action": "approve"}),
+            )
+            v_guards = [
+                ({"Host": f"evil.example:{vport}"}, 421, "Host"),
+                ({**v_same, "Origin": "http://evil.example"}, 403, "Origin"),
+                ({k: v for k, v in v_same.items() if k != "Origin"}, 403, "NoOrigin"),
+                ({**v_same, "Content-Type": "text/plain"}, 415, "ContentType"),
+                ({**v_same, "Sec-Fetch-Site": "cross-site"}, 403, "SecFetchSite"),
+                ({**v_same, "X-AE-Review": "otherreview"}, 409, "ReviewId"),
+            ]
+            for headers, expected, guard in v_guards:
+                outcomes = [_req(vport, "POST", p, headers, body) for p, body in v_write_routes]
+                ok(
+                    all(code == expected and "access-control-allow-origin" not in hdr for code, hdr, _ in outcomes),
+                    T("serve.check.videoWriteGuard", guard=guard, status=outcomes[-1][0]),
+                )
+            ok(
+                [p.read_bytes() if p.exists() else None for p in v_paths] == v_before,
+                T("serve.check.videoUnchanged"),
+            )
+        except Exception as e:
+            results.append((False, T("serve.check.videoCrashed", type=type(e).__name__, detail=e)))
+        finally:
+            if video_srv is not None:
+                video_srv.shutdown()
+                video_srv.server_close()
 
         log_text = (tmp / LOG_FILE).read_text(encoding="utf-8")
         ok(log_text.count("[reject]") >= 10, T("serve.check.rejectsLogged", count=log_text.count("[reject]")))

@@ -642,11 +642,11 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <div class="vrow"><label><span data-msg="viewer.video.source.entry">入口 ID</span><input id="vsrcEntry" type="text"></label></div>
 <p class="hint" data-msg="viewer.video.source.mediaHint">可填写工程成片的帧数、时长、帧率和尺寸以对照原片。请核对候选入口并确认关联。</p>
 <div class="vrow" id="vsrcMediaRow">
-<label>frames <input id="vsrcFrames" type="number" min="1" step="1"></label>
-<label>duration(s) <input id="vsrcDuration" type="number" min="0" step="0.001"></label>
-<label>fps <input id="vsrcFps" type="number" min="0" step="0.001"></label>
-<label>width <input id="vsrcWidth" type="number" min="1" step="1"></label>
-<label>height <input id="vsrcHeight" type="number" min="1" step="1"></label>
+<label><span data-msg="viewer.video.source.fieldFrames">帧数</span> <input id="vsrcFrames" type="number" min="1" step="1"></label>
+<label><span data-msg="viewer.video.source.fieldDuration">时长(秒)</span> <input id="vsrcDuration" type="number" min="0" step="0.001"></label>
+<label><span data-msg="viewer.video.source.fieldFps">帧率</span> <input id="vsrcFps" type="number" min="0" step="0.001"></label>
+<label><span data-msg="viewer.video.source.fieldWidth">宽</span> <input id="vsrcWidth" type="number" min="1" step="1"></label>
+<label><span data-msg="viewer.video.source.fieldHeight">高</span> <input id="vsrcHeight" type="number" min="1" step="1"></label>
 </div>
 <p class="hint" id="vsrcErr"></p></div></div></div>
 <div class="modal" id="always"><div class="dlg"><div class="bar"><h2 data-msg="viewer.always.dialogTitle">常驻技能</h2><button class="primary" id="alwaysSave"><span data-msg="viewer.always.save">保存</span><kbd><span class="kmod">⌘</span>↵</kbd></button><button data-close><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button></div>
@@ -829,6 +829,9 @@ function applyLocale(){
   if(typeof renderPptx==="function") renderPptx();
   if(VIDEO&&typeof renderVideoVersions==="function") renderVideoVersions();
   if(VIDEO&&typeof renderVideoFailure==="function") renderVideoFailure();
+  if(VIDEO&&typeof renderVideoSource==="function") renderVideoSource();
+  if(VIDEO&&$("vsrc").classList.contains("on")&&typeof renderVsrc==="function") renderVsrc();
+  if(VIDEO&&typeof videoCompareRefreshLocale==="function") videoCompareRefreshLocale();
   if(typeof showQuote==="function") showQuote();
   updatePageStat();
   updatePairText();
@@ -1101,7 +1104,7 @@ ${RCSS}
 </div>
 <div id="videoError" role="alert" hidden></div>
 <div id="videoFailureBanner" role="alert" hidden></div>
-<div id="videoControls"><span id="videoVersion"></span><select id="videoVersionPick" hidden aria-label="Video version"></select><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0" aria-label="Frame"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
+<div id="videoControls"><span id="videoVersion"></span><select id="videoVersionPick" hidden></select><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
 </section></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
@@ -1387,9 +1390,10 @@ function wellFormed(v){if(typeof v==="string")return v.toWellFormed?v.toWellForm
   if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v))o[k]=wellFormed(v[k]);return o}return v}
 async function api(method,path,body,timeout=REQ_TIMEOUT,headers={}){
   // 统一拦住队列外的定稿、复核和分析写入；停止服务是升级恢复入口，仍可使用。
-  if(method!=="GET"&&!["/api/server/stop","/api/server/save-protection","/api/overview/stop"].includes(path)&&(docxBlocked()||pptxBlocked()))
-    throw Object.assign(new Error(tMsg(docxBlocked()?"viewer.docx.oldService":"viewer.pptx.oldService")),
-      {status:409,code:docxBlocked()?"docx-required":"pptx-required"});
+  const vidBlk=typeof videoBlocked==="function"&&videoBlocked();
+  if(method!=="GET"&&!["/api/server/stop","/api/server/save-protection","/api/overview/stop"].includes(path)&&(docxBlocked()||pptxBlocked()||vidBlk))
+    throw Object.assign(new Error(tMsg(docxBlocked()?"viewer.docx.oldService":pptxBlocked()?"viewer.pptx.oldService":"viewer.video.oldService")),
+      {status:409,code:docxBlocked()?"docx-required":pptxBlocked()?"pptx-required":"video-required"});
   const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),timeout);
   // 旧版审阅宿主只核对 X-AE-Review，用首页标识让它同样拒绝误发的请求。
   const identity=OVERVIEW_HOME?{"X-AE-Host":OVERVIEW_HOME.id,"X-AE-Review":OVERVIEW_HOME.id}:{"X-AE-Review":RID};
@@ -2061,7 +2065,7 @@ function videoReceiptCardHtml(note,manifest,opts){
       parts.push(`<details class="vr-hist"><summary>${escH(tMsg("viewer.video.historyToggle",{count:hist.length}))}</summary><ul>${hist.map(h=>`<li>${escH(h.text)}</li>`).join("")}</ul></details>`)}
   const vers=m&&Array.isArray(m.versions)?m.versions:[];
   const approvedDone=st==="approved";
-  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!(!approvedDone&&note.status!=="resolved"&&(vr||note.status==="drafted"||vers.length>1));
+  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!(!approvedDone&&note.status!=="resolved"&&!["needs_reply","returned","failed"].includes(st)&&(vr||note.status==="drafted"||vers.length>1));
   if(canCompare||canRelocate)
     parts.push(`<div class="vr-acts">${canCompare?`<button type="button" class="vr-jump" data-act="video-compare" data-id="${eid}">${escH(tMsg("viewer.video.compareBtn"))}</button>`:""}${canRelocate?`<button type="button" class="vr-jump" data-act="video-relocate" data-id="${eid}">${escH(tMsg("viewer.video.relocateBtn"))}</button>`:""}</div>`);
   parts.push("</div>");return parts.join("")}
@@ -2075,7 +2079,9 @@ function videoCurrentVersion(){return videoFindVersion(videoActiveVersionId)}
 function renderVideoFailure(){const m=videoManifest(),banner=sr&&sr.getElementById("videoFailureBanner");if(!banner||!m)return;
   const lf=m.lastFailure;if(!lf||!lf.reason){banner.hidden=true;banner.textContent="";return}
   banner.hidden=false;banner.textContent=tMsg("viewer.video.failureBanner",{batch:lf.batch||"—",reason:lf.reason,version:m.currentVersionId||"V1"})}
-function renderVideoVersions(){const m=videoManifest(),pick=sr&&sr.getElementById("videoVersionPick"),verEl=sr&&sr.getElementById("videoVersion");if(!m)return;
+function renderVideoVersions(){const m=videoManifest(),pick=sr&&sr.getElementById("videoVersionPick"),verEl=sr&&sr.getElementById("videoVersion"),frameEl=sr&&sr.getElementById("videoFrame");if(!m)return;
+  if(pick&&pick.setAttribute)pick.setAttribute("aria-label",tMsg("viewer.video.versionAria"));
+  if(frameEl&&frameEl.setAttribute)frameEl.setAttribute("aria-label",tMsg("viewer.video.frameAria"));
   const vers=Array.isArray(m.versions)?m.versions:[];const active=videoCurrentVersion(),activeId=active?active.versionId:(m.currentVersionId||"V1");
   videoActiveVersionId=activeId;if(verEl)verEl.textContent=activeId;if(!pick)return;
   pick.innerHTML=vers.map(v=>`<option value="${escH(v.versionId)}"${v.versionId===activeId?" selected":""}>${escH(v.versionId===m.currentVersionId?tMsg("viewer.video.versionOption",{version:v.versionId}):v.versionId)}</option>`).join("");
@@ -2120,6 +2126,7 @@ function videoDraftAt(mark=videoPendingMark){const m=videoManifest(),version=vid
 function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version);videoRangeEnd=null;
   sr.getElementById("videoFrame").value=videoCurrentFrame();videoDrawMarks()}
 function videoJumpPlay(version,temporal){const player=videoEl();if(!version||!player)return;
+  if(typeof videoCompareClose==="function")videoCompareClose();
   videoActiveVersionId=version.versionId;renderVideoVersions();
   if(player.getAttribute("src")!==version.url){player.src=version.url;player.load()}
   videoRangeEnd=null;
@@ -2330,9 +2337,13 @@ function videoRelocatePopulate(pair,showForm){
   box.hidden=!videoRelocateOpen;
   if(!videoRelocateOpen||!pair)return;
   const m=videoManifest(),vers=(m&&Array.isArray(m.versions))?m.versions:[];
+  const playable=vers.filter(v=>!v.playbackFailure);
+  const selectable=playable.length?playable:vers;
   const verSel=sr.getElementById("videoRelocateVersion");
-  const pickedVer=pair.after.versionId||(m&&m.currentVersionId)||"V1";
-  if(verSel){verSel.innerHTML=vers.map(v=>`<option value="${escH(v.versionId)}"${v.versionId===pickedVer?" selected":""}>${escH(v.versionId)}</option>`).join("");
+  const batchVer=pair.batch!=null?selectable.find(v=>v.batch===pair.batch):null;
+  const afterPlayable=pair.after.versionId&&selectable.some(v=>v.versionId===pair.after.versionId)?pair.after.versionId:null;
+  const pickedVer=afterPlayable||(batchVer&&batchVer.versionId)||(m&&selectable.some(v=>v.versionId===m.currentVersionId)&&m.currentVersionId)||(selectable[0]&&selectable[0].versionId)||"V1";
+  if(verSel){verSel.innerHTML=selectable.map(v=>`<option value="${escH(v.versionId)}"${v.versionId===pickedVer?" selected":""}>${escH(v.versionId)}</option>`).join("");
     verSel.value=pickedVer}
   const tgt=pair.after.target;
   const kind=(tgt&&tgt.kind)||(pair.before.spec&&pair.before.spec.kind==="range"?"range":"frame");
@@ -2417,6 +2428,47 @@ function videoCompareClose(){
   const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage");
   if(cs)cs.hidden=true;if(vp)vp.hidden=false;if(ctrl)ctrl.hidden=false;
   videoLayout()}
+function videoCompareRefreshLocale(){
+  if(!videoCompareNoteId)return;
+  const note=notes.find(n=>n.id===videoCompareNoteId);
+  const pair=note?videoComparePair(note,videoManifest()):videoComparePairState;
+  if(!pair)return;
+  videoComparePairState=pair;
+  videoCompareRenderLabels();
+  const stEl=sr.getElementById("videoCompareState");
+  if(stEl)stEl.textContent=tMsg("viewer.video.state."+pair.state)+(pair.after.versionId?" · "+pair.after.versionId:"");
+  const retBtn=sr.getElementById("videoCompareReturnBtn");
+  if(retBtn)retBtn.textContent=tMsg(pair.state==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn");
+  const retIn=sr.getElementById("videoCompareReturnReason"),retLbl=sr.getElementById("videoCompareReturnLbl");
+  if(retLbl)retLbl.textContent=tMsg("viewer.video.returnBtn");
+  if(retIn)retIn.placeholder=tMsg("viewer.video.returnPlaceholder");
+  const repIn=sr.getElementById("videoCompareReplyInput"),repLbl=sr.getElementById("videoCompareReplyLbl");
+  if(repLbl)repLbl.textContent=tMsg("viewer.video.replySaveBtn");
+  if(repIn)repIn.placeholder=tMsg("viewer.video.replyPlaceholder");
+  const bInfo=sr.getElementById("videoCompareBeforeInfo"),bTime=sr.getElementById("videoCompareBeforeTime"),bPlay=sr.getElementById("videoComparePlayBefore");
+  if(bInfo)bInfo.textContent=pair.before.url?pair.before.versionId:tMsg("viewer.video.versionMissing",{version:pair.before.versionId||"—"});
+  if(bTime)bTime.textContent=videoCompareFormatReadout(pair.before.versionId,pair.before.spec,pair.before.version);
+  if(bPlay)bPlay.textContent=tMsg(pair.before.spec&&pair.before.spec.playRange?"viewer.video.compare.playRange":"viewer.video.compare.playFrame");
+  const aInfo=sr.getElementById("videoCompareAfterInfo"),aTime=sr.getElementById("videoCompareAfterTime"),aPlay=sr.getElementById("videoComparePlayAfter");
+  if(aInfo)aInfo.textContent=pair.after.url?pair.after.versionId:tMsg("viewer.video.versionMissing",{version:pair.after.versionId||"—"});
+  if(aTime)aTime.textContent=videoCompareFormatReadout(pair.after.versionId,pair.after.spec,pair.after.version);
+  if(aPlay)aPlay.textContent=tMsg(pair.after.spec&&pair.after.spec.kind==="cut"?"viewer.video.compare.playContext":pair.after.spec&&pair.after.spec.playRange?"viewer.video.compare.playRange":"viewer.video.compare.playFrame");
+  const reasonEl=sr.getElementById("videoCompareAfterReason");
+  if(reasonEl){const notesOut=[];
+    if(pair.after.outcome==="deleted")notesOut.push(tMsg("viewer.video.deletedShotTag"));
+    if(pair.after.summary)notesOut.push(tMsg("viewer.video.changeSummary",{version:pair.after.versionId||"—",summary:pair.after.summary}));
+    if(pair.after.relocateReason)notesOut.push(tMsg("viewer.video.relocateLabel",{reason:pair.after.relocateReason}));
+    if(pair.after.relocatedReason)notesOut.push(tMsg("viewer.video.relocatedReason",{reason:pair.after.relocatedReason}));
+    if(pair.after.relocatedFrom){const prior=videoPriorSummary(pair.after.relocatedFrom);if(prior)notesOut.push(tMsg("viewer.video.relocatedFrom",{detail:prior}))}
+    if(pair.after.question)notesOut.push(tMsg("viewer.video.questionLabel",{question:pair.after.question}));
+    if(pair.after.reply)notesOut.push(tMsg("viewer.video.replyLabel",{reply:pair.after.reply}));
+    if(pair.after.failure)notesOut.push(tMsg("viewer.video.failureLabel",{reason:pair.after.failure}));
+    if(pair.after.returnReason)notesOut.push(tMsg("viewer.video.returnLabel",{reason:pair.after.returnReason}));
+    if(pair.state==="approved"&&pair.after.decision==="approved")
+      notesOut.push(tMsg("viewer.video.approvedInfo",{version:pair.after.versionId||"—",batch:pair.after.decisionBatch!=null?pair.after.decisionBatch:(pair.batch!=null?pair.batch:"—"),by:pair.after.decidedBy||"page"}));
+    reasonEl.hidden=!notesOut.length;reasonEl.textContent=notesOut.join(" · ")}
+  const histEl=sr.getElementById("videoCompareHistory");
+  if(histEl){const items=pair.after.history||[];histEl.hidden=!items.length;histEl.textContent=items.map(h=>h.text).join(" | ")}}
 function videoCompareSync(){
   if(!videoCompareNoteId)return;
   const found=notes.find(n=>n.id===videoCompareNoteId);
@@ -2640,7 +2692,7 @@ function updateCounts(){const c=allStats,b=$("ncount");
 function markBtnLabel(){const b=$("pinBtn"),rn=markMode&&remarkId?notes.find(n=>n.id===remarkId):null;
   const label=b.querySelector("[data-msg]");
   if(label)label.textContent=markMode?(rn?tMsg("viewer.markRehint",{title:clip(noteSummary(rn),12)}):tMsg("viewer.markHint")):tMsg("viewer.markPin")}
-function setMarkMode(on){if(on&&(docxBlocked()||pptxBlocked())){docxBlocked()?docxBlockToast():pptxBlockToast();return}
+function setMarkMode(on){if(on&&(docxBlocked()||pptxBlocked()||videoBlocked())){docxBlocked()?docxBlockToast():pptxBlocked()?pptxBlockToast():videoBlockToast();return}
   if(on&&typeof videoCompareClose==="function")videoCompareClose();
   markMode=on;stage.classList.toggle("markmode",on);const b=$("pinBtn");b.classList.toggle("on",on);
   markBtnLabel();
@@ -3606,7 +3658,7 @@ function renderHandPick(){
   if(!handPickSel)handPickSel=hasPrior?new Set():new Set(open.map(x=>x.id));
   const hasReturned=open.some(x=>videoNoteState(x)==="returned");
   const count=open.reduce((n,x)=>n+(handPickSel.has(x.id)?1:0),0);
-  box.innerHTML=`<div class="hp-head"><span>${tMsg("viewer.hand.pickTitle")}</span>`
+  box.innerHTML=`<div class="hp-head"><span>${tMsg(hasPrior?"viewer.hand.pickTitleRework":"viewer.hand.pickTitle")}</span>`
     +`<button type="button" data-pick="all">${tMsg("viewer.hand.pickAll")}</button>`
     +(hasReturned?`<button type="button" data-pick="returned">${tMsg("viewer.hand.pickReturned")}</button>`:"")
     +`<button type="button" data-pick="none">${tMsg("viewer.hand.pickNone")}</button>`
@@ -3687,7 +3739,7 @@ $("vsrcLink").onclick=async()=>{
   const engine=$("vsrcEngine").value==="hyperframes"?"hyperframes":"remotion",
     root=$("vsrcRoot").value.trim(),id=$("vsrcEntry").value.trim(),err=$("vsrcErr");
   err.textContent="";
-  if(!root||!id){err.textContent=tMsg("viewer.video.source.linkFailed",{message:"root / entry"});return}
+  if(!root||!id){err.textContent=tMsg("viewer.video.source.linkFailed",{message:tMsg("viewer.video.source.needRootEntry")});return}
   const body={engine,root,entry:{kind:engine==="hyperframes"?"scene":"composition",id}};
   const fields=[["vsrcFrames","frames"],["vsrcDuration","duration"],["vsrcFps","fps"],["vsrcWidth","width"],["vsrcHeight","height"]];
   const media={};fields.forEach(([el,key])=>{const raw=$(el).value.trim();

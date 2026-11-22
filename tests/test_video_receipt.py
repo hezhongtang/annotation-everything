@@ -1257,6 +1257,58 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         self.assertEqual(edata["code"], "video-not-ready")
         self.assertIn("not ready", edata["error"])
 
+    def test_needs_relocate_tracks_batch_version_for_decode_failure_and_blocks_failed_target(self):
+        store.handoff_submit(self.review, "检查镜头移位", note_ids=["n1"])
+        store.handoff_claim(self.review, by="claude", seq=1)
+        v2_file = self.root / "v2-reloc.mp4"
+        v2_file.write_bytes(synthetic_mp4(frames=192))
+
+        with self.assertRaises(store.HandoffError) as bad_ver:
+            store.video_receipt(
+                self.review,
+                seq=1,
+                receipt_id="rcpt-reloc-badver",
+                movie=v2_file,
+                receipt=[{"noteId": "n1", "outcome": "needs_relocate", "versionId": "V1", "relocateReason": "错版"}],
+                by="claude",
+            )
+        self.assertEqual(bad_ver.exception.code, "invalid-receipt-target")
+
+        res = store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="rcpt-reloc-ok",
+            movie=v2_file,
+            receipt=[{"noteId": "n1", "outcome": "needs_relocate", "relocateReason": "剪辑变化较大需确认"}],
+            by="claude",
+        )
+        self.assertEqual(res["version"]["versionId"], "V2")
+        n1 = next(n for n in store.load(self.review)["notes"] if n["id"] == "n1")
+        self.assertEqual(n1["videoReview"]["state"], "needs_relocate")
+        self.assertEqual(n1["videoReview"]["versionId"], "V2")
+
+        # V2 解码失败后，needs_relocate 条目随批次一起转入 failed，且不能被重定位回已损坏的 V2
+        store.video_decode_failed(
+            self.review,
+            note_id="n1",
+            version_id="V2",
+            seq=1,
+            expected_evidence=n1["videoReview"]["evidenceRevision"],
+            review_id=self.rid,
+            reason="MediaError 3",
+        )
+        n1_after = next(n for n in store.load(self.review)["notes"] if n["id"] == "n1")
+        self.assertEqual(n1_after["videoReview"]["state"], "failed")
+        with self.assertRaises(store.HandoffError) as broken_target:
+            store.relocate_video_note(
+                self.review,
+                "n1",
+                target={"kind": "frame", "frame": 10},
+                version_id="V2",
+                summary="尝试指向损坏版",
+            )
+        self.assertEqual(broken_target.exception.code, "invalid-receipt-target")
+
 
 if __name__ == "__main__":
     unittest.main()

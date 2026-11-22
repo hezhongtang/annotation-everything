@@ -859,6 +859,33 @@ class SourceProjectLinkTests(EngineEnvMixin):
         manifest = json.loads((out / "review.json").read_text(encoding="utf-8"))
         self.assertNotIn("sourceProject", manifest["video"])
 
+    def test_symlinked_config_and_external_sources_are_blocked_or_skipped(self):
+        outside = self.root / "outside.json"
+        outside.write_text('{"dependencies":{"remotion":"4.0.0"}}', encoding="utf-8")
+
+        pkg_proj = self.root / "symlink-pkg"
+        pkg_proj.mkdir()
+        (pkg_proj / "package.json").symlink_to(outside)
+        with self.assertRaises(video_engines.EngineError) as pkg_err:
+            video_engines.detect_project(pkg_proj)
+        self.assertEqual(pkg_err.exception.code, "entryOutside")
+
+        cfg_proj = self.copy_fixture("remotion")
+        (cfg_proj / "remotion.config.ts").symlink_to(outside)
+        with self.assertRaises(video_engines.EngineError) as cfg_err:
+            video_engines.detect_project(cfg_proj)
+        self.assertEqual(cfg_err.exception.code, "entryOutside")
+
+        clean_proj = self.copy_fixture("hyperframes")
+        (clean_proj / "ext.txt").symlink_to(outside)
+        (clean_proj / "dangling.mp4").symlink_to(self.root / "missing-target.mp4")
+        info = video_engines.detect_project(clean_proj)
+        names = {p.name for p in video_engines.freshness_sources(info)}
+        self.assertNotIn("ext.txt", names)
+        self.assertNotIn("dangling.mp4", names)
+        fp = video_engines.source_fingerprint(info)
+        self.assertEqual(len(fp), 64)
+
 
 if __name__ == "__main__":
     unittest.main()

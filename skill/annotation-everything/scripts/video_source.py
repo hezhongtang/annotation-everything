@@ -121,11 +121,15 @@ def _differences(version: dict[str, Any], media: dict[str, Any] | None) -> list[
         if name in media and name in version and media[name] != version[name]:
             out.append({"field": name, "review": version[name], "project": media[name]})
     for name in CLOSE_FIELDS:
-        if (
-            name in media
-            and name in version
-            and not math.isclose(float(media[name]), float(version[name]), rel_tol=1e-6, abs_tol=1e-6)
-        ):
+        if name not in media or name not in version:
+            continue
+        project_val, review_val = float(media[name]), float(version[name])
+        mismatch = (
+            abs(project_val - review_val) >= video_engines.FPS_TOLERANCE
+            if name == "fps"
+            else not math.isclose(project_val, review_val, rel_tol=1e-3, abs_tol=1e-2)
+        )
+        if mismatch:
             out.append({"field": name, "review": version[name], "project": media[name]})
     return out
 
@@ -206,9 +210,14 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
         # JSX 字面量仅作人工选择线索，动态生成的合成以工程 CLI 巡检为准。
         declarations = []
         for source in video_engines.freshness_sources(info):
-            if source.suffix not in (".tsx", ".jsx") or source.is_symlink() or source.stat().st_size > 1024 * 1024:
+            if source.suffix not in (".tsx", ".jsx") or source.is_symlink():
                 continue
-            text = source.read_text(encoding="utf-8", errors="replace")
+            try:
+                if source.stat().st_size > 1024 * 1024:
+                    continue
+                text = source.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
             for tag in re.finditer(r"<Composition\b[^>]*>", text):
                 ident = re.search(r"""\bid\s*=\s*["']([^"']+)["']""", tag[0])
                 if not ident:
@@ -247,7 +256,7 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
         payload["media"] = declared
     verified = False
     if engine == "hyperframes" and len(discovered) == 1 and selected and not _differences(version, declared):
-        source_time = max((p.stat().st_mtime for p in video_engines.freshness_sources(info)), default=0)
+        source_time = max((video_engines._mtime(p) for p in video_engines.freshness_sources(info)), default=0.0)
         movies = video_engines.scan_movies(root)
         if len(movies) == 1:
             movie = movies[0]
@@ -283,14 +292,21 @@ def confirm(video: dict[str, Any], *, choice: str | None = None, by: str = "page
         if picked is None:
             raise SourceError("unknownChoice", choice=choice)
         new_sp.update(engine=picked["engine"], root=picked["root"], entry=picked["entry"], confirmedChoice=picked["id"])
-        if picked.get("media") is not None:
-            basis = dict(new_sp.get("basis") or {})
+        basis = dict(new_sp.get("basis") or {})
+        if picked.get("media"):
             basis.update(kind="media-features", media=picked["media"])
+            basis.pop("sha256", None)
             new_sp["basis"] = basis
             version = video_review.registered_version(
                 {"video": out}, str(new_sp.get("versionId") or out.get("currentVersionId"))
             )
             new_sp["differences"] = _differences(version, picked["media"])
+        else:
+            basis.pop("media", None)
+            basis.pop("sha256", None)
+            basis["kind"] = "confirmed-candidate"
+            new_sp["basis"] = basis
+            new_sp["differences"] = []
     elif choice:
         raise SourceError("noChoice")
     new_sp.update(status="linked", match="confirmed", confirmedAt=_now_iso(), confirmedBy=by)
