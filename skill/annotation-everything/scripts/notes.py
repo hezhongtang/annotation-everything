@@ -338,10 +338,11 @@ def trail_text(n: dict[str, Any], last: int = 4, lang: str | None = None) -> str
     return " → ".join(parts)
 
 
-def target_text(h: dict[str, Any], lang: str | None = None) -> str:
+def target_text(h: dict[str, Any], lang: str | None = None, *, video: bool = False) -> str:
     """这批的要求：做到定稿还是停在待复核、能不能派子代理、要不要全量勾稽。"""
     t = cli_text(lang)
-    out = t("cli.hand.target.review" if h.get("target") == "review" else "cli.hand.target.final")
+    review_required = video or h.get("videoStats") is not None or h.get("target") == "review"
+    out = t("cli.hand.target.review" if review_required else "cli.hand.target.final")
     out += t("cli.hand.subagents.ok" if h.get("allowSubagents") else "cli.hand.subagents.no")
     if h.get("fullCheck"):
         out += t("cli.hand.fullCheck")
@@ -2914,27 +2915,32 @@ def wait(
         )
     if message := store.handoff_user_message(item):
         print(t("cli.hand.userMessage", message=message))
-    print(t("cli.batch.requirement", target=target_text(item, lang)))
+    video = manifest.get("format", {}).get("report") == "video"
+    print(t("cli.batch.requirement", target=target_text(item, lang, video=video)))
     if item.get("fullCheck"):
         print(analysis_check_text(analysis_store.full_check_context(d), d, lang))
     print(sub_line)
     alw = store.always_skills(d)
     if alw:
         print(t("cli.hand.alwaysLine", list=always_text(t, alw)))
-    need = sorted(
-        {x for n in store.load(d)["notes"] if n.get("status", "open") == "open" for x in (n.get("skills") or [])}
-    )
+    doc = store.load(d)
+    open_ids = set(item.get("openIds") or [])
+    mine = {n["id"] for n in doc["notes"] if n.get("id") in open_ids and n.get("status", "open") == "open"}
+    needed_notes = (n for n in doc["notes"] if n.get("status", "open") == "open" and (not video or n["id"] in mine))
+    need = sorted({x for n in needed_notes for x in (n.get("skills") or [])})
     if need:
         print(t("cli.hand.moreSkills", list=sep.join(need)))
     print(
         t("cli.hand.openCount", count=item.get("openCount"), pages=pages)
         + (t("cli.hand.claimedNote") if claim else t("cli.hand.noClaimNote"))
     )
-    end_hint = t("cli.hand.endReview" if item.get("target") == "review" else "cli.hand.endFinal")
-    print(t("cli.hand.finishLine", dir=d, seq=item["seq"], end=end_hint) + "\n")
-    doc = store.load(d)
-    open_ids = set(item.get("openIds") or [])
-    mine = {n["id"] for n in doc["notes"] if n.get("id") in open_ids and n.get("status", "open") == "open"}
+    if video:
+        print(
+            t("cli.hand.videoFinish", dir=fsutil.quote_cli(str(d)), seq=item["seq"], review=manifest["reviewId"]) + "\n"
+        )
+    else:
+        end_hint = t("cli.hand.endReview" if item.get("target") == "review" else "cli.hand.endFinal")
+        print(t("cli.hand.finishLine", dir=d, seq=item["seq"], end=end_hint) + "\n")
     others = [n for n in doc["notes"] if n.get("id") in open_ids and n.get("status") == "drafted"]
     if others:  # 提交后被别的批次初改了的：等那一批复核，不要动
         print(

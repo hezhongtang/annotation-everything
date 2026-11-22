@@ -1614,6 +1614,7 @@
     "cli.hand.agentBindingError": "审阅自动接入配置阻止了本次认领：{reason}",
     "cli.hand.eventWaitRefused": "本审阅已绑定提交事件接入。由绑定聊天接收后 claim；不要另开 wait 提前认领。只读等待可用 --no-claim。",
     "cli.hand.reviewStopped": "这份审阅已停止或正在停止；等待者退出。只有显式启动服务才能重新接收工作。",
+    "cli.hand.videoFinish": "修改关联工程并渲染新版，再用 notes.py video-receipt {dir} --review-id {review} --seq {seq} --receipt-id KEY --receipt FILE --movie NEW.mp4 逐条回执。审阅人查看前后证据后决定是否通过。",
     "cli.hand.videoSource": "源工程：{engine}，入口 {entry}（{root}），对准成片 {version}",
     "cli.hand.videoSourceEntry": "{kind} {id}",
     "viewer.agent.unknown": "接手未确认 · 请查看处理记录",

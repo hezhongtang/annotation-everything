@@ -1774,6 +1774,7 @@
     "cli.hand.agentBindingError": "The review delivery binding prevents this claim: {reason}",
     "cli.hand.eventWaitRefused": "This review uses event delivery. The bound chat must claim after receipt. Do not start another claiming waiter; use --no-claim for observation.",
     "cli.hand.reviewStopped": "This review is stopped or stopping; the waiter is exiting. Explicitly start the service to accept work again.",
+    "cli.hand.videoFinish": "Edit the linked project and render the new cut. Return the selected results with notes.py video-receipt {dir} --review-id {review} --seq {seq} --receipt-id KEY --receipt FILE --movie NEW.mp4. The reviewer compares the evidence and decides which changes to approve.",
     "cli.hand.videoSource": "Source project: {engine}, entry {entry} ({root}), against video {version}",
     "cli.hand.videoSourceEntry": "{kind} {id}",
     "viewer.agent.unknown": "Chat receipt unconfirmed · see processing history",
