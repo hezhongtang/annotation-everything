@@ -2177,6 +2177,7 @@ async function submitVideoDecision(noteId,action,opts={}){
   if(Number.isInteger(expBatch)&&expBatch>0)body.expectedBatch=expBatch;
   if(typeof expVer==="string"&&expVer)body.expectedVersion=expVer;
   try{
+    if(action==="approve"&&!await videoApprovalPlayable([note],videoManifest())){onErr(tMsg("viewer.video.playbackUnavailable"));return null}
     const res=await api("POST","/api/notes/"+encodeURIComponent(noteId)+"/video-decision",body);
     if(action==="return"&&typeof videoReturnOpen!=="undefined"&&videoReturnOpen===noteId){
       videoReturnOpen=null;if(typeof videoReturnBuf!=="undefined")delete videoReturnBuf[noteId]}
@@ -2189,11 +2190,26 @@ async function submitVideoDecision(noteId,action,opts={}){
       toast(tMsg(key),4000)}
     return res;
   }catch(e){onErr(videoDecisionError(e));return null}}
-const videoFailedVersions=new Set();
+const videoFailedVersions=new Set(),videoDecodedVersions=new Set();
+async function videoApprovalPlayable(selected,manifest){
+  const ids=new Set(selected.flatMap(note=>[note?.video?.versionId,note?.videoReview?.versionId]));
+  const results=await Promise.all([...ids].map(id=>{
+    const version=manifest?.versions?.find(v=>v.versionId===id);
+    if(!version?.url)return false;
+    if(videoDecodedVersions.has(id))return true;
+    return new Promise(resolve=>{
+      const player=document.createElement("video");
+      const finish=ok=>{clearTimeout(timer);player.onloadeddata=null;player.onerror=null;
+        player.removeAttribute("src");player.load();videoPlaybackState(id,ok);resolve(ok)};
+      const timer=setTimeout(()=>finish(false),10000);
+      player.muted=true;player.preload="auto";player.onloadeddata=()=>finish(true);player.onerror=()=>finish(false);
+      player.src=version.url;player.load()})}));
+  return results.length>0&&results.every(Boolean)}
 function videoPlaybackState(id,readable){
   if(!id)return;
   const changed=readable?videoFailedVersions.delete(id):!videoFailedVersions.has(id);
-  if(!readable)videoFailedVersions.add(id);
+  if(readable)videoDecodedVersions.add(id);
+  else{videoFailedVersions.add(id);videoDecodedVersions.delete(id)}
   if(changed&&typeof refreshList==="function"){refreshList(true);renderFinalizeAll()}}
 function videoCompareEl(side){return sr.getElementById(side==="before"?"videoCompareBefore":"videoCompareAfter")}
 function videoCompareMarksEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeMarks":"videoCompareAfterMarks")}
@@ -3243,6 +3259,8 @@ async function finalizeAll(){
     if(VIDEO){
       const picked=videoSelectedBatches(plan,preSel);
       if(!picked.count){finalizeAllError="empty";return}
+      const ids=new Set(picked.batches.flatMap(b=>b.ids));
+      if(!await videoApprovalPlayable(notes.filter(n=>ids.has(n.id)),videoManifest())){toast(tMsg("viewer.video.playbackUnavailable"),7000);return}
       const batches=picked.batches.map(b=>tMsg("viewer.finalizeAll.batch",{seq:b.seq,count:b.ids.length})).join(tMsg("viewer.finalizeAll.separator"));
       if(!confirm(tMsg("viewer.finalizeAll.confirm",{count:picked.count,batches,skipped:plan?plan.skipped.length:0})))return;
       const r=await api("POST","/api/handoff/finalize-all",{batches:picked.batches,evidence:Object.fromEntries(preSel)});

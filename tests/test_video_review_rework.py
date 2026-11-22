@@ -1154,7 +1154,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             + ";let mode='server',finalizeAllSupported=true,finalizingAll=false,finalizeAllError='',finalizeAllResult=null,busy=0;"
             "let hand={finalizable:" + json.dumps(plan) + "};let notes=" + json.dumps(notes, ensure_ascii=False) + ";"
             "const pend={get:()=>[]},failed={get:()=>[]},isDraft=x=>x.status==='drafted',videoManifest=()=>VIDEO;"
-            "const toasts=[],confirms=[],apiCalls=[];"
+            "const toasts=[],confirms=[],apiCalls=[];let playable=false;const videoApprovalPlayable=async()=>playable;"
             "const toast=m=>toasts.push(m);const confirm=m=>{confirms.push(m);return true};"
             "const flush=async()=>true,updateMode=()=>{},loadBatches=()=>{},sameReview=()=>true;"
             "const applyServer=(d,q)=>{if(d.notes)notes=d.notes;if(d.handoff)hand=d.handoff;if(typeof videoSyncApproveSel==='function')videoSyncApproveSel();renderFinalizeAll()};"
@@ -1179,18 +1179,22 @@ class VideoPageReworkUITests(unittest.TestCase):
             renderFinalizeAll();
             const btnAfterPick = $("finalizeAllBtn").textContent;
             await finalizeAll();
+            const blockedCount=apiCalls.length;
+            playable=true;
+            await finalizeAll();
             const postPicked = apiCalls[0] ? apiCalls[0].b : null;
 
             // 全选待复核只能选中 n1, n2（其余 n3..n7 全部排除）
             videoSelectAllReady();
             const selAll = [...videoApproveSel.keys()];
-            return { initialDisabled, initialSelSize, blockedHtml, selAfterPick, btnAfterPick, postPicked, selAll };
+            return { initialDisabled, initialSelSize, blockedHtml, selAfterPick, btnAfterPick, postPicked, selAll, blockedCount };
             """,
             locale="zh-CN",
         )
         self.assertTrue(actual["initialDisabled"])
         self.assertEqual(actual["initialSelSize"], 0)
         self.assertTrue(actual["blockedHtml"])
+        self.assertEqual(actual["blockedCount"], 0)
         self.assertEqual(actual["selAfterPick"], ["n1"])
         self.assertIn("1", actual["btnAfterPick"])
         self.assertEqual(actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}], "evidence": {"n1": "legacy"}})
@@ -1326,7 +1330,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             "const srNodes=new Map();"
             "const makeBox=id=>({id,hidden:false,disabled:false,value:'',textContent:'',innerHTML:'',clientWidth:600,clientHeight:340,style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},appendChild(){},querySelectorAll(){return []},addEventListener(){},pause(){},load(){},setAttribute(){},getAttribute(){return null},currentTime:0,duration:6.4,paused:true,muted:false});"
             "const getEl=id=>{if(!srNodes.has(id))srNodes.set(id,makeBox(id));return srNodes.get(id)};"
-            "const sr={getElementById:getEl},document={createElement:()=>makeBox('d')};"
+            "const sr={getElementById:getEl},probes=[];let decode=false;const document={createElement:tag=>tag==='video'?{removeAttribute(){this.src=''},load(){if(this.src){probes.push(this.src);queueMicrotask(()=>decode?this.onloadeddata():this.onerror())}}}:makeBox('d')};"
             "const videoEl=()=>getEl('videoPlayer'),videoManifest=()=>VIDEO,videoFindVersion=vid=>VIDEO.versions.find(v=>v.versionId===(vid||videoActiveVersionId))||null,videoCurrentVersion=()=>videoFindVersion(videoActiveVersionId);"
             "const videoLayout=()=>{},setMarkMode=()=>{},mutate=()=>{};"
             "const apiCalls=[],toasts=[],applyCalls=[];"
@@ -1340,6 +1344,9 @@ class VideoPageReworkUITests(unittest.TestCase):
             setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-decisions", "video-evidence-revision"] });
             videoCompareOpen(notes[0], false);
             await videoCompareDecision("approve");
+            const blockedCount=apiCalls.length;
+            decode=true;
+            await videoCompareDecision("approve");
             getEl("videoCompareReturnReason").value = "  ";
             await videoCompareDecision("return");
             const emptyErr = getEl("videoCompareDecisionErr").textContent;
@@ -1351,10 +1358,12 @@ class VideoPageReworkUITests(unittest.TestCase):
             const replyBoxHidden = getEl("videoCompareReplyBox").hidden;
             getEl("videoCompareReplyInput").value = "换成轻快的纯音乐";
             await videoCompareDecision("reply");
-            return { apiCalls, emptyErr, appHiddenOnReply, retHiddenOnReply, replyBoxHidden, applyCount: applyCalls.length };
+            return { apiCalls, blockedCount, probes, emptyErr, appHiddenOnReply, retHiddenOnReply, replyBoxHidden, applyCount: applyCalls.length };
             """,
             locale="zh-CN",
         )
+        self.assertEqual(cmp_actual["blockedCount"], 0)
+        self.assertEqual(set(cmp_actual["probes"]), {"/api/video/versions/V1/media", "/api/video/versions/V2/media"})
         self.assertTrue(cmp_actual["emptyErr"])
         self.assertEqual(len(cmp_actual["apiCalls"]), 3)
         self.assertEqual(cmp_actual["apiCalls"][0]["path"], "/api/notes/n2/video-decision")
