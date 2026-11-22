@@ -52,3 +52,9 @@
 另用两个全新的工程和审阅目录重复上述流程。Remotion 从工程外的工作目录用相对 `--out review` 渲染 V1，再次构建时自动复用与 `Demo` 唯一匹配的成片。HyperFrames 使用工程外的 MP4 保存 5 条意见，页面列出入口并经确认后才交给接收会话。两边第二批都只领取原音乐批注，Remotion 的 ID 为 `mwrolddh0p04bx`，HyperFrames 为 `mwromhlrmrbs9s`。两份 V3 均停在待复核。各版帧数、解码画面和音乐电平复现了上表结果。
 
 本轮本机记录在 `skill/annotation-everything-workspace/video-191-final-20261122/`。各引擎目录下的 `v2-browser.json` 和 `v3-browser.json` 含播放时间、解码音频字节数和原批注历史。另用 Remotion 审阅的独立副本验证了新版审阅页的批准操作。Chrome 读取原片和 V3，服务按页面所见的证据修订登记通过。该操作记录在 `remotion/copy-final-decode-approval.json`。
+
+### 成片来源与失败恢复
+
+发布候选又用一份来自 HyperFrames 的真实参考片测试 Remotion 入口。它与所选合成同为 640 × 360、30 fps、180 帧，修改时间也足够新。由于本机台账没有该工程和入口渲染过这份成片的凭据，构建要求明确确认，审阅目录中没有生成清单。移走参考片后，工程实际渲染 V1。将该成片复制回工程再构建时，AE 从同一台账核对源输入、入口和 SHA-256 后自动复用。两项结果分别保存在 `skill/annotation-everything-workspace/video-191-release-20261122/remotion/` 的 `foreign/result.json` 和 `logs/fresh-reuse-evidence.json`。
+
+独立的 Chrome 回归场景还交回一份样本表完整、浏览器无法解码的 V4。服务记录解码错误，页面继续播放 V3，同一接收会话在原批次补交 V5 后，原批注再次显示待复核。

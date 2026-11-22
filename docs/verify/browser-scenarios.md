@@ -74,7 +74,7 @@ uv run --no-project --with playwright python tests/e2e_browser.py --skills-only 
 
 ## 视频场景的媒体与证据
 
-`video-review` 需要本机 Chrome 和带 H.264、AAC 编码器的 FFmpeg。它从 `fixtures/video/make_demos.py` 生成的原图与 PCM 现场编码 V1（180 帧）、V2 与 V3（各 192 帧）。项目直入的一份审阅演示歧义、确认复用、剪口和人工重定位。另一份从 MP4 开始，先写五条批注再关联工程，实际提交三条，收回 V2、通过字幕、退回音量，随后只将音量重交至 V3。
+`video-review` 需要本机 Chrome 和带 H.264、AAC 编码器的 FFmpeg。它从 `fixtures/video/make_demos.py` 生成的原图与 PCM 现场编码 V1（180 帧）、V2 与 V3（各 192 帧）。项目直入的一份审阅演示歧义、确认复用、剪口和人工重定位。另一份从 MP4 开始，先写五条批注再关联工程，实际提交三条，收回 V2、通过字幕、退回音量，随后只将音量重交至 V3。场景还用能登记但浏览器无法解码的合成 V4 验证失败回报，确认上一有效版可播放，再由同一接收会话在原批次补交 V5。
 
 浏览器分别核对字幕区域的解码像素、前后播放器的定位和 AAC 解码、区间末端停止、原批注上的回执及人工决定。设置 `AE_DELIVERY_ARTIFACTS` 后，`video-review/video-mp4-review/` 下会保留字幕和音频对照截图、领取数据与最终批注历史。双引擎实际改源、使用各自引擎渲染及接收会话的交付记录见 [视频验收说明](../video-acceptance.zh-CN.md)。
 
