@@ -20,7 +20,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-video-receipt-home-"))
+sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+host_isolation.require_for_module(__name__)
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-receipt-home-")
 
 import build_viewer  # noqa: E402
 import ledger  # noqa: E402
@@ -127,6 +132,23 @@ class VideoVersionRegistryTests(unittest.TestCase):
             )
         after_reject = json.loads((self.review / "review.json").read_text(encoding="utf-8"))
         self.assertEqual([v["versionId"] for v in after_reject["video"]["versions"]], ["V1", "V2"])
+
+    def test_interrupted_manifest_write_can_resume_publication_of_the_same_render(self):
+        from unittest.mock import patch
+
+        self.source.write_bytes(self.v2_bytes)
+        original = os.replace
+
+        def fail_manifest(source, destination):
+            if Path(destination) == self.review / "review.json":
+                raise OSError("synthetic disk interruption")
+            return original(source, destination)
+
+        with patch.object(os, "replace", side_effect=fail_manifest), self.assertRaises(OSError):
+            video_review.register_version(self.review, self.source, batch=1, by="agent", receipt_id="retry")
+        v2 = video_review.register_version(self.review, self.source, batch=1, by="agent", receipt_id="retry")
+        self.assertEqual(v2["versionId"], "V2")
+        self.assertEqual([v["versionId"] for v in ledger.read_manifest(self.review)["video"]["versions"]], ["V1", "V2"])
 
     def test_failure_recording_and_unplayable_movie_keep_v1_and_clear_on_recovery(self):
         bad = self.root / "broken.mp4"
@@ -299,7 +321,7 @@ class VideoVersionRegistryTests(unittest.TestCase):
         self.assertFalse(video_review.review_readiness(drafted_without_vr, manifest, review_dir=self.review)[0])
 
         plain_open = {"id": "n3", "page": 1, "status": "open", "video": ready_note["video"]}
-        self.assertTrue(video_review.review_readiness(plain_open, manifest, review_dir=self.review)[0])
+        self.assertFalse(video_review.review_readiness(plain_open, manifest, review_dir=self.review)[0])
 
         # 媒体缺失或不可读时拒绝通过
         (self.review / "media" / "v2.mp4").unlink()
@@ -326,6 +348,7 @@ class VideoReceiptStoreTests(unittest.TestCase):
             root=str(self.root / "proj"),
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
+            verified_source=True,
         )
         (self.review / "review.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self.rid = manifest["reviewId"]
@@ -592,6 +615,31 @@ class VideoReceiptStoreTests(unittest.TestCase):
         self.assertGreaterEqual(len(by_id3["n1"]["videoReview"]["history"]), 2)
         self.assertEqual(by_id3["n1"]["videoReview"]["state"], "pending_review")
 
+    def test_received_fix_requires_a_render_from_the_claimed_batch(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review)
+        with self.assertRaises(store.HandoffError) as why:
+            store.video_receipt(
+                self.review,
+                seq=1,
+                by="agent",
+                review_id=self.rid,
+                receipt_id="wrong-cut",
+                receipt={
+                    "notes": [
+                        {
+                            "noteId": "n1",
+                            "outcome": "fixed",
+                            "summary": "字幕已调整",
+                            "versionId": "V1",
+                            "target": {"kind": "frame", "frame": 96},
+                        }
+                    ]
+                },
+            )
+        self.assertEqual(why.exception.code, "invalid-receipt-target")
+        self.assertEqual(store.load(self.review)["notes"][0]["status"], "open")
+
     def test_idempotency_and_stale_cross_review_and_patch_import_protection(self):
         store.handoff_submit(self.review, "第一批", note_ids=["n1"])
         store.handoff_claim(self.review, by="claude", seq=1)
@@ -686,7 +734,7 @@ class VideoReceiptStoreTests(unittest.TestCase):
         self.assertNotIn("videoReview", forged_saved)
 
         # 已人工通过的批注不能被回执覆盖
-        store.set_status(self.review, "n1", "resolved", by="page")
+        store.set_status(self.review, "n1", "resolved", by="page", reviewer=True)
         # 即使人工在另一处写入较新记录或有人尝试传回执给已 resolved 的 n1
         with self.assertRaises(store.HandoffError):
             store.video_receipt(
@@ -729,7 +777,7 @@ class VideoReceiptStoreTests(unittest.TestCase):
         # 非完备条目（待答复、待定位、缺证据）即使 by="page" 也绝不能通过
         for bad_id in ("n2", "n3", "n4"):
             with self.subTest(bad_id=bad_id), self.assertRaises(store.HandoffError) as exc2:
-                store.set_status(self.review, bad_id, "resolved", by="page")
+                store.set_status(self.review, bad_id, "resolved", by="page", reviewer=True)
             self.assertEqual(exc2.exception.code, "video-not-ready")
 
         # _finalizable 只列 n1；handoff_finalize_all 不能夹带 n2/n3/n4
@@ -822,6 +870,7 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             root=str(self.root / "proj"),
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
+            verified_source=True,
         )
         (self.review / "review.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self.rid = manifest["reviewId"]
@@ -860,6 +909,22 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_env)
         return code, out.getvalue(), err.getvalue()
+
+    def test_agent_display_name_cannot_authorize_a_reviewer_decision(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="screen-ready",
+            movie=self.v1_path,
+            receipt=[
+                {"noteId": "n1", "outcome": "fixed", "summary": "修正字幕", "target": {"kind": "frame", "frame": 96}}
+            ],
+        )
+        code, _, _ = self.run_cli(["resolve", str(self.review), "n1", "--by", "page"])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n1")["status"], "drafted")
 
     def test_cli_video_receipt_show_and_claim_payload_across_partial_and_retry(self):
         store.handoff_submit(self.review, "先改前三条", note_ids=["n1", "n2", "n3"])
@@ -1080,7 +1145,18 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         self.assertEqual(n1_after["videoReview"]["state"], "pending_review")
 
         # 完备条目页面 PATCH resolve -> 200
-        ok_code, _, ok_body = serve._req(server.port, "PATCH", "/api/notes/n1", headers, {"status": "resolved"})
+        ok_code, _, ok_body = serve._req(
+            server.port,
+            "PATCH",
+            "/api/notes/n1",
+            headers,
+            {
+                "status": "resolved",
+                "expectedEvidence": next(n for n in store.load(self.review)["notes"] if n["id"] == "n1")["videoReview"][
+                    "evidenceRevision"
+                ],
+            },
+        )
         self.assertEqual(ok_code, 200, ok_body)
         self.assertEqual(json.loads(ok_body)["note"]["status"], "resolved")
 

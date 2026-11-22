@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+host_isolation.require_for_module(__name__)
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-handoff-home-")
 
 import build_viewer  # noqa: E402
@@ -71,6 +77,7 @@ class VideoHandoffBase(unittest.TestCase):
     def link_source(self, **kwargs) -> dict:
         """把源工程关联写进清单；默认参数是一份与 V1 完全一致的成片特征。"""
         kwargs.setdefault("media", V1_MEDIA)
+        kwargs.setdefault("verified_source", True)
         manifest = self.manifest()
         manifest["video"] = video_source.link(
             manifest["video"],
@@ -114,7 +121,7 @@ class SelectiveSubmitTests(VideoHandoffBase):
     def test_submit_rejects_unknown_or_not_open_ids(self):
         with self.assertRaises(store.NoteError):
             store.handoff_submit(self.d, note_ids=["n1", "ghost"])
-        store.set_status(self.d, "n2", "resolved", resolution="已改", by="page")
+        store.set_status(self.d, "n2", "drafted", resolution="供复核", by="agent")
         with self.assertRaises(store.NoteError):
             store.handoff_submit(self.d, note_ids=["n1", "n2"])
         with self.assertRaises(store.NoteError):
@@ -188,6 +195,7 @@ class VideoSourceTests(VideoHandoffBase):
             root=str(self.root / "project"),
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
+            verified_source=True,
         )
         sp = video["sourceProject"]
         self.assertEqual(sp["status"], "linked")
@@ -196,6 +204,16 @@ class VideoSourceTests(VideoHandoffBase):
         self.assertEqual(sp["engine"], "remotion")
         self.assertEqual(sp["entry"], {"kind": "composition", "id": "Main"})
         self.assertTrue(video_source.linked(video))
+
+    def test_entered_frame_rate_does_not_establish_source_identity(self):
+        video = video_source.link(
+            self.manifest()["video"],
+            engine="remotion",
+            root=str(self.root / "project"),
+            entry={"kind": "composition", "id": "Main"},
+            media={"fps": 30},
+        )
+        self.assertEqual(video["sourceProject"]["status"], "pending")
 
     def test_media_differences_require_manual_confirmation(self):
         video = video_source.link(
@@ -268,6 +286,7 @@ class VideoSourceTests(VideoHandoffBase):
         video = video_source.link(
             self.manifest()["video"],
             engine="remotion",
+            verified_source=True,
             root="/abs/project",
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
@@ -356,7 +375,9 @@ class ClaimPayloadTests(VideoHandoffBase):
         code, payload = self.run_claim()
         self.assertEqual(code, 0)
         self.assertEqual(payload["sourceProject"]["root"], str(self.root / "project"))
-        self.assertEqual([(m["noteId"], m["text"]) for m in payload["materials"]], [("n2","音乐太响"), ("n1","字幕遮挡图标")])
+        self.assertEqual(
+            [(m["noteId"], m["text"]) for m in payload["materials"]], [("n2", "音乐太响"), ("n1", "字幕遮挡图标")]
+        )
         self.assertEqual(payload["materials"][0]["video"]["startFrame"], 120)
 
     def test_wait_output_lists_only_selected_notes_with_source_line(self):
@@ -409,7 +430,9 @@ class ServeHandoffTests(VideoHandoffBase):
             "Origin": f"http://127.0.0.1:{self.server.port}",
             "Content-Type": "application/json",
         }
-        return serve._req(self.server.port, "POST", path, headers, {"receiverBindingId": self.binding["bindingId"], **body})
+        return serve._req(
+            self.server.port, "POST", path, headers, {"receiverBindingId": self.binding["bindingId"], **body}
+        )
 
     def get(self, path: str):
         serve = sys.modules["serve"]
@@ -444,6 +467,22 @@ class ServeHandoffTests(VideoHandoffBase):
         self.assertTrue(json.loads(body)["merged"])
         self.assertEqual(len(store.handoff_load(self.d)["items"]), 1)
 
+    def test_replay_returns_original_batch_after_source_relink(self):
+        self.link_source()
+        payload = {
+            "noteIds": ["n1"],
+            "submitId": "replay",
+            "sourceProject": video_source.agent_brief(self.manifest()["video"]),
+        }
+        code, _, body = self.post("/api/handoff", payload)
+        self.assertEqual(code, 200, body)
+        self.link_source(root=str(self.root / "second"))
+        code, _, body = self.post("/api/handoff", payload)
+        self.assertEqual(code, 200, body)
+        self.assertTrue(json.loads(body)["merged"])
+        code, _, body = self.post("/api/handoff", {**payload, "submitId": "new", "noteIds": ["n2"]})
+        self.assertEqual((code, json.loads(body)["code"]), (409, "video-source-changed"))
+
     def test_video_handoff_rejects_bad_note_ids(self):
         self.link_source()
         code, _h, body = self.post("/api/handoff", {"message": "x", "noteIds": ["n1", "ghost"]})
@@ -465,6 +504,9 @@ class ServeSourceProjectTests(VideoHandoffBase):
         super().setUp()
         import serve
         import threading
+
+        for engine, folder in (("remotion", "project"), ("hyperframes", "hf"), ("remotion", "p")):
+            shutil.copytree(ROOT / "tests" / "fixtures" / "video" / engine, self.root / folder)
 
         self.server = serve.ReviewServer(self.d, 0, log_to_file=False)
         worker = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
@@ -494,7 +536,7 @@ class ServeSourceProjectTests(VideoHandoffBase):
     def test_unbound_video_submission_retains_the_selected_annotations(self):
         self.link_source()
         self.add_notes(video_note("only", frame=22))
-        code, _headers, data = self.post("/api/handoff", {"noteIds":["only"], "submitId":"unbound"})
+        code, _headers, data = self.post("/api/handoff", {"noteIds": ["only"], "submitId": "unbound"})
         self.assertEqual((code, json.loads(data)["code"]), (409, "receiver-required"))
         self.assertEqual(store.handoff_load(self.d)["items"], [])
 
@@ -503,7 +545,7 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertEqual(code, 200)
         self.assertIsNone(json.loads(body)["sourceProject"])
 
-    def test_post_with_matching_media_links_directly(self):
+    def test_matching_shape_alone_lists_project_candidates_for_confirmation(self):
         code, _h, body = self.post(
             "/api/video/source-project",
             {
@@ -515,9 +557,31 @@ class ServeSourceProjectTests(VideoHandoffBase):
         )
         self.assertEqual(code, 200, body)
         sp = json.loads(body)["sourceProject"]
-        self.assertEqual(sp["status"], "linked")
-        self.assertEqual(sp["match"], "verified")
+        self.assertEqual(sp["status"], "pending")
+        self.assertEqual({c["entry"]["id"] for c in sp["candidates"]}, {"Main", "Intro"})
+        self.assertIsNone(sp.get("match"))
         self.assertEqual(self.manifest()["video"]["sourceProject"]["entry"]["id"], "Main")
+
+    def test_unique_project_cut_and_entry_link_by_actual_bytes(self):
+        project = self.root / "hf"
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "index.html").write_text('<html data-fps="30"></html>')
+        (project / "out").mkdir()
+        (project / "out" / "cut.mp4").write_bytes(self.source.read_bytes())
+        code, _, body = self.post(
+            "/api/video/source-project",
+            {"engine": "hyperframes", "root": str(project), "entry": {"kind": "scene", "id": "index.html"}},
+        )
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(body)["sourceProject"]["match"], "verified")
+        self.assertEqual(json.loads(body)["sourceProject"]["basis"]["kind"], "sha256")
+        (project / "out" / "alternate.mp4").write_bytes(self.source.read_bytes())
+        code, _, body = self.post(
+            "/api/video/source-project",
+            {"engine": "hyperframes", "root": str(project), "entry": {"kind": "scene", "id": "index.html"}},
+        )
+        self.assertEqual(code, 200, body)
+        self.assertEqual(json.loads(body)["sourceProject"]["status"], "pending")
 
     def test_post_with_differences_returns_pending_then_confirm_links(self):
         code, _h, body = self.post(
@@ -525,7 +589,7 @@ class ServeSourceProjectTests(VideoHandoffBase):
             {
                 "engine": "hyperframes",
                 "root": str(self.root / "hf"),
-                "entry": {"kind": "scene", "id": "Intro"},
+                "entry": {"kind": "scene", "id": "index.html"},
                 "media": {**V1_MEDIA, "fps": 25},
             },
         )
@@ -534,7 +598,10 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertEqual(sp["status"], "pending")
         self.assertTrue(sp["differences"])
 
-        code, _h, body = self.post("/api/video/source-project/confirm", {"choice": None})
+        code, _h, body = self.post(
+            "/api/video/source-project/confirm",
+            {"choice": next(c["id"] for c in sp["candidates"] if c["entry"]["id"] == "index.html")},
+        )
         self.assertEqual(code, 200, body)
         sp2 = json.loads(body)["sourceProject"]
         self.assertEqual(sp2["status"], "linked")

@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -29,11 +30,9 @@ DEFAULT_RENDER_TIMEOUT = 1800.0
 LISTING_TIMEOUT_CAP = 180.0
 RENDER_TIMEOUT_ENV = "AE_VIDEO_RENDER_TIMEOUT"
 FPS_TOLERANCE = 0.01
-FRESHNESS_SLACK = 2.0
 MOVIE_PATTERNS = ("*.mp4", "out/*.mp4")
 MOVIE_CAP = 64
 HTML_CAP = 32
-STAGING_TRIES = 16
 STDERR_TAIL = 2000
 REMOTION_ENTRY_NAMES = tuple(f"src/index.{ext}" for ext in ("tsx", "ts", "jsx", "js"))
 REMOTION_CONFIG_NAMES = ("remotion.config.ts", "remotion.config.js", "remotion.config.mjs")
@@ -357,6 +356,8 @@ def scan_movies(root: Path) -> list[dict[str, Any]]:
     paths = list(dict.fromkeys(paths))[:MOVIE_CAP]
     movies: list[dict[str, Any]] = []
     for path in paths:
+        if path.is_symlink() or not _inside(root, path) or not path.is_file():
+            continue
         try:
             meta = video_review.probe(path)
         except video_review.VideoError as exc:
@@ -373,11 +374,21 @@ def _mtime(path: Path) -> float:
         return 0.0
 
 
-def freshness_sources(info: dict[str, Any], composition: dict[str, Any]) -> list[Path]:
-    sources = [info.get("package"), info.get("entry"), info.get("config")]
-    if info["engine"] == ENGINE_HYPERFRAMES:
-        sources.append(info["root"] / composition["id"])
-    return [p for p in sources if p is not None and p.is_file()]
+def freshness_sources(info: dict[str, Any]) -> list[Path]:
+    """包含工程源码和静态素材；项目根或 out 中供复用的导出物不算输入。"""
+    root = info["root"]
+    sources = []
+    for directory, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in {"node_modules", "out", "dist", "build"})
+        here = Path(directory)
+        if here != root and "review.json" in files and "index.html" in files:
+            dirs.clear()
+            continue
+        for name in sorted(files):
+            path = here / name
+            if not name.startswith(".") and not (here == root and path.suffix.lower() == ".mp4"):
+                sources.append(path)
+    return sources
 
 
 def _matches(meta: dict[str, Any], comp: dict[str, Any]) -> bool:
@@ -506,7 +517,7 @@ def resolve_source(
     compositions = list_compositions(info)
     chosen = choose_composition(compositions, composition, engine, info["root"])
     warnings: list[str] = []
-    sources = freshness_sources(info, chosen)
+    sources = freshness_sources(info)
     source_mtime = max((_mtime(p) for p in sources), default=0.0)
 
     if reuse_movie is not None:
@@ -521,7 +532,7 @@ def resolve_source(
             raise EngineError("movieUnreadable", str(exc)) from exc
         if not _matches(meta, chosen):
             raise EngineError("movieMismatch", f"{movie} {_compare(meta, chosen)}")
-        if _mtime(movie) < source_mtime - FRESHNESS_SLACK:
+        if _mtime(movie) < source_mtime:
             warnings.append(_warn(locale, "engine.warn.staleReuse", path=str(movie), composition=chosen["id"]))
         warnings.append(_warn(locale, "engine.warn.reused", path=str(movie), composition=chosen["id"]))
         return {
@@ -536,10 +547,13 @@ def resolve_source(
 
     movies = scan_movies(info["root"])
     matching = [m for m in movies if m["meta"] and _matches(m["meta"], chosen)]
-    fresh = [m for m in matching if m["mtime"] >= source_mtime - FRESHNESS_SLACK]
+    fresh = [m for m in matching if m["mtime"] >= source_mtime]
     if not no_reuse and engine == ENGINE_REMOTION:
         if len(fresh) == 1:
             picked = fresh[0]
+            possible = [c["id"] for c in compositions if _matches(picked["meta"], c)]
+            if len(possible) != 1:
+                raise EngineError("movieConfirm", f"{picked['path']} {_describe(picked)} — {', '.join(possible)}")
             warnings.append(_warn(locale, "engine.warn.reused", path=str(picked["path"]), composition=chosen["id"]))
             return {
                 "action": "reused",
@@ -589,30 +603,26 @@ def _render(
     bin_path: Path = info["bin"]
     if not bin_path.is_file():
         raise EngineError("depsMissing", str(bin_path))
-    staging_dir = Path(review_dir) / ".render"
-    staging_dir.mkdir(parents=True, exist_ok=True)
-    staging = next(
-        (
-            staging_dir / f"v1-{os.getpid()}-{try_index}.mp4"
-            for try_index in range(STAGING_TRIES)
-            if not (staging_dir / f"v1-{os.getpid()}-{try_index}.mp4").exists()
-        ),
-        None,
-    )
-    if staging is None:
+    staging_dir = Path(review_dir).resolve() / ".render"
+    if staging_dir.is_symlink():
         raise EngineError("stagingExists", str(staging_dir))
+    staging_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=staging_dir)) / "v1.mp4"
     argv = render_argv(engine, bin_path, info.get("entry") or info["root"], chosen["id"], staging)
-    code, _out, err = _run(argv, cwd=info["root"], timeout=timeout, timeout_code="renderTimeout")
-    if code != 0:
-        _unlink(staging)
-        raise EngineError("renderFailed", f"exit={code} {_tail(err)}")
-    if not staging.is_file():
-        raise EngineError("renderNoOutput", str(staging))
     try:
-        meta = video_review.probe(staging)
-    except video_review.VideoError as exc:
+        code, _out, err = _run(argv, cwd=info["root"], timeout=timeout, timeout_code="renderTimeout")
+        if code != 0:
+            raise EngineError("renderFailed", f"exit={code} {_tail(err)}")
+        if staging.is_symlink() or not staging.is_file():
+            raise EngineError("renderNoOutput", str(staging))
+        try:
+            meta = video_review.probe(staging)
+        except video_review.VideoError as exc:
+            raise EngineError("renderInvalid", str(exc)) from exc
+    except BaseException:
         _unlink(staging)
-        raise EngineError("renderInvalid", str(exc)) from exc
+        staging.parent.rmdir()
+        raise
     if engine == ENGINE_REMOTION and not _matches(meta, chosen):
         warnings.append(
             _warn(
@@ -658,7 +668,7 @@ def inspect(project: Path, render_timeout: float | None = None) -> dict[str, Any
     _resolve_timeout(render_timeout)  # 只做参数校验，巡检本身不渲染
     info = detect_project(project)
     compositions = list_compositions(info)
-    sources = [p for c in compositions for p in freshness_sources(info, c)]
+    sources = freshness_sources(info)
     source_mtime = max((_mtime(p) for p in dict.fromkeys(sources)), default=0.0)
     movies = scan_movies(info["root"])
     return {
@@ -675,7 +685,7 @@ def inspect(project: Path, render_timeout: float | None = None) -> dict[str, Any
                 "meta": m["meta"],
                 "reason": m["reason"],
                 "mtime": m["mtime"],
-                "fresh": m["mtime"] >= source_mtime - FRESHNESS_SLACK,
+                "fresh": m["mtime"] >= source_mtime,
                 "matches": [c["id"] for c in compositions if m["meta"] and _matches(m["meta"], c)],
             }
             for m in movies

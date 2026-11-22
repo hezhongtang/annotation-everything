@@ -21,7 +21,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-video-rework-home-"))
+sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+host_isolation.require_for_module(__name__)
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-rework-home-")
 
 import build_viewer  # noqa: E402
 import ledger  # noqa: E402
@@ -56,6 +61,7 @@ class VideoReviewReworkBase(unittest.TestCase):
             root=str(self.root / "proj"),
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
+            verified_source=True,
         )
         (self.review / "review.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self.rid = manifest["reviewId"]
@@ -170,7 +176,7 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(b1["videoStats"]["pendingReviewIds"], ["n2"])
 
         # 通过 set_status("resolved", by="page") 审批 n2 也记录完整人工决定并把第 1 批收尾为 done
-        store.set_status(self.review, "n2", "resolved", by="page")
+        store.set_status(self.review, "n2", "resolved", by="page", reviewer=True)
         n2 = self._note("n2")
         self.assertEqual(n2["videoReview"]["decision"], "approved")
         self.assertEqual(n2["videoReview"]["state"], "approved")
@@ -195,10 +201,44 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(len(n1_after["trail"]), trail_len)
 
         # set_status 再次 resolved 同批也不重复追加 history / trail
-        store.set_status(self.review, "n2", "resolved", by="page")
+        store.set_status(self.review, "n2", "resolved", by="page", reviewer=True)
         n2_after = self._note("n2")
         self.assertEqual(len(n2_after["videoReview"]["history"]), 2)
         self.assertEqual(len(n2_after["trail"]), 2)
+
+    def test_page_decision_retry_finishes_batch_after_an_interrupted_write(self):
+        from unittest.mock import patch
+
+        self._deliver_v2_mixed_batch()
+        replace = os.replace
+
+        def fail_batch(source, destination):
+            if Path(destination) == self.review / "handoff.json":
+                raise OSError("synthetic handoff write interruption")
+            return replace(source, destination)
+
+        with patch.object(os, "replace", side_effect=fail_batch), self.assertRaises(OSError):
+            store.video_decision(self.review, "n1", action="approve")
+        replay = store.video_decision(self.review, "n1", action="approve")
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["draftedIds"], ["n2"])
+        self.assertEqual(len(self._note("n1")["videoReview"]["history"]), 2)
+
+    def test_approval_requires_the_evidence_revision_selected_by_the_reviewer(self):
+        self._deliver_v2_mixed_batch()
+        stale = "older-location"
+        with self.assertRaises(store.HandoffError) as why:
+            store.video_decision(
+                self.review, "n1", action="approve", expected_batch=1, expected_version="V2", expected_evidence=stale
+            )
+        self.assertEqual(why.exception.code, "stale-decision")
+        result = store.handoff_finalize_all(
+            self.review,
+            {1: {"n1", "n2"}},
+            evidence={"n1": stale, "n2": self._note("n2")["videoReview"]["evidenceRevision"]},
+        )
+        self.assertEqual(result["finalizedIds"], ["n2"])
+        self.assertEqual(self._note("n1")["status"], "drafted")
 
     def test_selective_batch_finalize_approves_only_picked_ready_items_and_blocks_all_unready_states(self):
         self._deliver_v2_mixed_batch()
@@ -680,7 +720,12 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
                 "POST",
                 "/api/notes/n1/video-decision",
                 headers,
-                {"action": "approve", "expectedBatch": 1, "expectedVersion": "V2"},
+                {
+                    "action": "approve",
+                    "expectedBatch": 1,
+                    "expectedVersion": "V2",
+                    "expectedEvidence": self._note("n1")["videoReview"]["evidenceRevision"],
+                },
             )
             self.assertEqual(c1, 200, raw1)
             d1 = json.loads(raw1)
@@ -693,7 +738,12 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
                 "POST",
                 "/api/notes/n1/video-decision",
                 headers,
-                {"action": "approve", "expectedBatch": 1, "expectedVersion": "V2"},
+                {
+                    "action": "approve",
+                    "expectedBatch": 1,
+                    "expectedVersion": "V2",
+                    "expectedEvidence": self._note("n1")["videoReview"]["evidenceRevision"],
+                },
             )
             self.assertEqual(c1r, 200, raw1r)
             self.assertTrue(json.loads(raw1r)["replayed"])
@@ -1125,7 +1175,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             // 试图直接勾选一个不可复核条目也不得生效，只勾选 n1
             videoToggleApprovePick("n3", true);
             videoToggleApprovePick("n1", true);
-            const selAfterPick = [...videoApproveSel];
+            const selAfterPick = [...videoApproveSel.keys()];
             renderFinalizeAll();
             const btnAfterPick = $("finalizeAllBtn").textContent;
             await finalizeAll();
@@ -1133,7 +1183,7 @@ class VideoPageReworkUITests(unittest.TestCase):
 
             // 全选待复核只能选中 n1, n2（其余 n3..n7 全部排除）
             videoSelectAllReady();
-            const selAll = [...videoApproveSel];
+            const selAll = [...videoApproveSel.keys()];
             return { initialDisabled, initialSelSize, blockedHtml, selAfterPick, btnAfterPick, postPicked, selAll };
             """,
             locale="zh-CN",
@@ -1143,7 +1193,7 @@ class VideoPageReworkUITests(unittest.TestCase):
         self.assertTrue(actual["blockedHtml"])
         self.assertEqual(actual["selAfterPick"], ["n1"])
         self.assertIn("1", actual["btnAfterPick"])
-        self.assertEqual(actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}]})
+        self.assertEqual(actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}], "evidence": {"n1": "legacy"}})
         self.assertEqual(actual["selAll"], ["n1", "n2"])
 
     def test_selective_rework_handpick_and_compare_decisions_wire_cleanly(self):
@@ -1201,7 +1251,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             + json.dumps(manifest)
             + ";let mode='server',handMode=null,srvNoSelect=false,handPickSel=null,flight=new Set(['n9']);"
             "const clip=(s,n)=>String(s||'').slice(0,n);"
-            "$('hPickOld').style={};"
+            "$('hPickOld').style={};$('handMsg').addEventListener=()=>{};const LS={set:()=>true},HOPT='options';"
             "let handPickClick=null;$('handPick').addEventListener=(ev,fn)=>{if(ev==='click')handPickClick=fn};"
             "$('handPick').querySelector=()=>null;"
             "let notes="
@@ -1287,7 +1337,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             [(self.PURE_START, self.PURE_END), (self.COMPARE_START, self.COMPARE_END)],
             cmp_setup,
             """
-            setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-decisions"] });
+            setVideoServerFeatures({ features: ["video", "video-receipt", "video-compare", "video-relocate", "video-decisions", "video-evidence-revision"] });
             videoCompareOpen(notes[0], false);
             await videoCompareDecision("approve");
             getEl("videoCompareReturnReason").value = "  ";
@@ -1309,7 +1359,8 @@ class VideoPageReworkUITests(unittest.TestCase):
         self.assertEqual(len(cmp_actual["apiCalls"]), 3)
         self.assertEqual(cmp_actual["apiCalls"][0]["path"], "/api/notes/n2/video-decision")
         self.assertEqual(
-            cmp_actual["apiCalls"][0]["body"], {"action": "approve", "expectedBatch": 2, "expectedVersion": "V2"}
+            cmp_actual["apiCalls"][0]["body"],
+            {"action": "approve", "expectedBatch": 2, "expectedVersion": "V2", "expectedEvidence": "legacy"},
         )
         self.assertEqual(
             cmp_actual["apiCalls"][1]["body"],

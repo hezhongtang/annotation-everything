@@ -244,7 +244,7 @@ class VideoPagePureTests(unittest.TestCase):
                     "pending_review",
                 ],
             )
-            self.assertEqual(actual["ready"], [True, False, False, False, False, True, True, True])
+            self.assertEqual(actual["ready"], [True, False, False, False, False, False, False, True])
             self.assertFalse(actual["oobReady"])
             self.assertFalse(actual["noVerReady"])
             self.assertEqual(

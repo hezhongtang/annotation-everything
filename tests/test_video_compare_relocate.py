@@ -24,7 +24,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-os.environ.setdefault("AE_HOME", tempfile.mkdtemp(prefix="ae-video-compare-home-"))
+sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+host_isolation.require_for_module(__name__)
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-compare-home-")
 
 import build_viewer  # noqa: E402
 import docx_review  # noqa: E402
@@ -170,6 +175,7 @@ class VideoRelocateStoreTests(unittest.TestCase):
             root=str(self.root / "proj"),
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
+            verified_source=True,
         )
         (self.review / "review.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self.rid = manifest["reviewId"]
@@ -223,7 +229,7 @@ class VideoRelocateStoreTests(unittest.TestCase):
         self.assertEqual(n3_before["videoReview"]["state"], "needs_relocate")
         # needs_relocate 不可直接通过
         with self.assertRaises(store.HandoffError) as err:
-            store.set_status(self.review, "n3", "resolved", by="page")
+            store.set_status(self.review, "n3", "resolved", by="page", reviewer=True)
         self.assertEqual(err.exception.code, "video-not-ready")
 
         # 审阅人人工重定位到 V2 第 24 帧并补齐说明 -> 变成 pending_review / drafted，且第 1 批从 done 恢复成可定稿 drafted
@@ -261,7 +267,7 @@ class VideoRelocateStoreTests(unittest.TestCase):
         self.assertEqual(batch1["videoStats"]["needsRelocateCount"], 0)
 
         # 继续复核并人工通过（保留前两轮历史并记录人工通过决定）
-        store.set_status(self.review, "n3", "resolved", by="page")
+        store.set_status(self.review, "n3", "resolved", by="page", reviewer=True)
         n3_done = next(n for n in store.load(self.review)["notes"] if n["id"] == "n3")
         self.assertEqual(n3_done["status"], "resolved")
         self.assertEqual(n3_done["videoReview"]["decision"], "approved")
@@ -318,7 +324,7 @@ class VideoRelocateStoreTests(unittest.TestCase):
         ready, _ = video_review.review_readiness(n1_partial, manifest, review_dir=self.review)
         self.assertFalse(ready)
         with self.assertRaises(store.HandoffError):
-            store.set_status(self.review, "n1", "resolved", by="page")
+            store.set_status(self.review, "n1", "resolved", by="page", reviewer=True)
 
         # 补齐 summary 后转为 pending_review，且保留先前的 relocatedFrom 与完整 history
         _, n1_ready, _ = store.relocate_video_note(
@@ -381,10 +387,10 @@ class VideoRelocateStoreTests(unittest.TestCase):
         )
         self.assertEqual(n4_supp["video"]["frame"], 170)
         self.assertEqual(n4_supp["video"]["versionId"], "V1")
-        self.assertEqual(n4_supp["videoReview"]["state"], "pending_review")
+        self.assertEqual(n4_supp["videoReview"]["state"], "missing_evidence")
         self.assertEqual(n4_supp["videoReview"]["target"]["frame"], 182)
         manifest = json.loads((self.review / "review.json").read_text(encoding="utf-8"))
-        self.assertTrue(video_review.review_readiness(n4_supp, manifest, review_dir=self.review)[0])
+        self.assertFalse(video_review.review_readiness(n4_supp, manifest, review_dir=self.review)[0])
 
 
 class VideoRelocateServerAndCliTests(unittest.TestCase):
@@ -406,6 +412,7 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
             root=str(self.root / "proj"),
             entry={"kind": "composition", "id": "Main"},
             media=V1_MEDIA,
+            verified_source=True,
         )
         (self.review / "review.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         self.rid = manifest["reviewId"]
@@ -570,7 +577,18 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
                 self.assertIn(token, sout)
 
         # 人工通过后再重定位应拒绝
-        res_code, _, res_body = serve._req(server.port, "PATCH", "/api/notes/n3", headers, {"status": "resolved"})
+        res_code, _, res_body = serve._req(
+            server.port,
+            "PATCH",
+            "/api/notes/n3",
+            headers,
+            {
+                "status": "resolved",
+                "expectedEvidence": next(n for n in store.load(self.review)["notes"] if n["id"] == "n3")["videoReview"][
+                    "evidenceRevision"
+                ],
+            },
+        )
         self.assertEqual(res_code, 200, res_body)
         decided_code, _, decided_body = serve._req(
             server.port,

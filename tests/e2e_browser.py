@@ -10407,6 +10407,9 @@ def video_mp4_rework(page, review, identity, movies):
     page.fill("#vsrcEntry", "index.html")
     linked = video_click_post(page, "#vsrcLink", "/api/video/source-project")
     ok(linked["sourceProject"]["status"] == "pending", "先批 MP4 可保留五条批注，补关联时展示待确认状态")
+    entries = linked["sourceProject"]["candidates"]
+    selected = next(c for c in entries if c["entry"]["id"] == "index.html")
+    page.check(f'#vsrc input[name="vsrcChoice"][value="{selected["id"]}"]')
     linked = video_click_post(page, "#vsrcConfirm", "/api/video/source-project/confirm")
     ok(
         linked["sourceProject"]["status"] == "linked" and len(page.request.get("/api/notes").json()["notes"]) == 5,

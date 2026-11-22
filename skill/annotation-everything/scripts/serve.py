@@ -107,6 +107,7 @@ FEATURES = [
     "video-compare",
     "video-relocate",
     "video-decisions",
+    "video-evidence-revision",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -825,7 +826,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handoff_state(self, *, full: bool) -> dict[str, Any]:
         reads = self._request_reads()
-        return store.handoff_state(self.server.review_dir, full=full, handoff=reads.handoff(), notes=reads.notes_list())
+        return store.handoff_state(
+            self.server.review_dir,
+            full=full,
+            handoff=reads.handoff(),
+            notes=reads.notes_list(),
+            manifest=self.server.manifest(),
+        )
 
     def _notes_doc(self) -> dict[str, Any]:
         return self._request_reads().notes_doc()
@@ -1204,7 +1211,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 updated = change(manifest)
             except video_source.SourceError as error:
-                raise Reject(400, "bad-source-project", self._t("serve.err.sourceProject", reason=str(error))) from None
+                raise Reject(
+                    400,
+                    "bad-source-project",
+                    self._t("serve.err.sourceProject", reason=error.localized(self.server.locale)),
+                ) from None
             fsutil.atomic_write(
                 manifest_path,
                 json.dumps(updated, ensure_ascii=False, indent=2) + "\n",
@@ -1219,7 +1230,7 @@ class Handler(BaseHTTPRequestHandler):
             if body.get(key) is not None:
                 payload[key] = body[key]
         manifest = self._update_video_source(
-            lambda m: {**m, "video": video_source.link(m["video"], by="page", **payload)}
+            lambda m: {**m, "video": video_source.local_project_link(m["video"], by="page", **payload)}
         )
         sp = video_source.public(manifest["video"]) or {}
         self.server.log("info", f"video source-project status={sp.get('status')} engine={clean(sp.get('engine'))}")
@@ -1346,9 +1357,8 @@ class Handler(BaseHTTPRequestHandler):
             submit_id = body.get("submitId")
             if submit_id is not None and (not isinstance(submit_id, str) or not 1 <= len(submit_id) <= 64):
                 raise Reject(400, "bad-submit-id", self._t("serve.err.submitId"))
-            # 元数据与提交使用同一份源工程关联，写入期间其他页面不能换绑。
-            with ledger.metadata_lock(d, exclusive=False):
-                manifest = ledger.read_manifest(d)
+
+            def validate_submission(manifest):
                 video = manifest.get("video")
                 if isinstance(video, dict):
                     if not video_source.linked(video):
@@ -1357,22 +1367,25 @@ class Handler(BaseHTTPRequestHandler):
                         raise Reject(400, "video-selection-required", self._t("viewer.hand.oldSelect"))
                     if "sourceProject" in body and body["sourceProject"] != video_source.agent_brief(video):
                         raise Reject(409, "video-source-changed", self._t("viewer.hand.sourceChanged"))
-                message = (
-                    body["userMessage"]
-                    if body.get("fullCheck") is True and "userMessage" in body
-                    else str(body.get("message") or "")
-                )
-                _h, item, merged = store.handoff_submit(
-                    d,
-                    message,
-                    by="page",
-                    target=str(body.get("target") or "final"),
-                    allow_subagents=body.get("allowSubagents") is True,
-                    full_check=body.get("fullCheck"),
-                    authorize=lambda: self._check_receiver(body, required=isinstance(video, dict)),
-                    note_ids=note_ids,
-                    submit_id=submit_id,
-                )
+
+            message = (
+                body["userMessage"]
+                if body.get("fullCheck") is True and "userMessage" in body
+                else str(body.get("message") or "")
+            )
+            is_video = isinstance(self.server.manifest().get("video"), dict)
+            _h, item, merged = store.handoff_submit(
+                d,
+                message,
+                by="page",
+                target=str(body.get("target") or "final"),
+                allow_subagents=body.get("allowSubagents") is True,
+                full_check=body.get("fullCheck"),
+                authorize=lambda: self._check_receiver(body, required=is_video),
+                validate_submission=validate_submission,
+                note_ids=note_ids,
+                submit_id=submit_id,
+            )
             self.server.log(
                 "info", f"handoff seq={item['seq']} open={item['openCount']} merged={merged} target={item['target']}"
             )
@@ -1555,7 +1568,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
                 selections[seq] = set(ids)
                 seen.update(ids)
-            result = store.handoff_finalize_all(d, selections)
+            evidence = body.get("evidence", {})
+            if not isinstance(evidence, dict) or any(not isinstance(v, str) or len(v) > 128 for v in evidence.values()):
+                raise Reject(400, "bad-request", self._t("serve.err.badFinalizeSelection"))
+            result = store.handoff_finalize_all(d, selections, evidence=evidence)
             self.server.log("info", f"finalize-all count={result['finalizedCount']} skipped={result['skippedCount']}")
             self._json(
                 200,
@@ -1583,6 +1599,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.log("info", f"handoff-review seq={seq}")
                 self.server.run_hook(item, False, event="review")
             else:
+                if self.server.manifest().get("format", {}).get("report") == "video":
+                    raise Reject(
+                        400, "video-selection-required", self._t("viewer.video.batchSelectionHint", selected=0, ready=0)
+                    )
                 item = store.handoff_finalize(d, seq, by="page")
                 self.server.log("info", f"handoff-finalize seq={seq}")
             self._json(
@@ -1608,7 +1628,13 @@ class Handler(BaseHTTPRequestHandler):
             body = self._expect_obj(self._body())
             if "status" in body:
                 doc, note = store.set_status(
-                    d, m.group(1), str(body["status"]), resolution=str(body.get("resolution") or ""), by="page"
+                    d,
+                    m.group(1),
+                    str(body["status"]),
+                    resolution=str(body.get("resolution") or ""),
+                    by="page",
+                    reviewer=True,
+                    expected_evidence=body.get("expectedEvidence") or "",
                 )
             else:
                 doc, note = store.update(d, m.group(1), body, by="page")
@@ -1658,7 +1684,7 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif decision_match and cmd == "POST":
             body = self._expect_obj(self._body())
-            if set(body) - {"action", "reason", "reply", "expectedVersion", "expectedBatch"}:
+            if set(body) - {"action", "reason", "reply", "expectedVersion", "expectedBatch", "expectedEvidence"}:
                 raise Reject(400, "bad-request", self._t("serve.err.videoDecisionBody"))
             action = body.get("action")
             if not isinstance(action, str) or action not in store.VIDEO_DECISION_ACTIONS:
@@ -1685,6 +1711,7 @@ class Handler(BaseHTTPRequestHandler):
                 reply=body.get("reply") or "",
                 expected_batch=expected_batch,
                 expected_version=expected_version,
+                expected_evidence=(body.get("expectedEvidence") or "") if action == "approve" else None,
                 by="page",
             )
             manifest = self.server.manifest()

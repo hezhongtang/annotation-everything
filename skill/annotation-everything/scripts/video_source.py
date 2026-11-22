@@ -1,9 +1,7 @@
 """视频审阅的源工程关联（#193）：人工关联、唯一匹配直绑、歧义待确认。
 
-只定义数据结构与判定，不读取工程文件、不调用渲染器、不引入 Node 依赖。
-引擎探测（从工程根找出 composition / scene 候选）与渲染由 #194 提供，接入点是
-本模块的 `probe` 契约：输入工程根，输出候选列表（engine / root / entry / media），
-候选交给 `link(..., candidates=...)` 后仍走这里的同一套人工确认流程。
+页面关联只静态读取工程资料和已生成的成片。Remotion 的动态入口由 CLI 探测，
+候选与差异通过同一套确认流程写入清单。
 
 关联记录存在 review.json 的 manifest["video"]["sourceProject"]：
     v / status（linked | pending）/ engine（remotion | hyperframes）/ root（本机工程根）/
@@ -16,10 +14,15 @@
 from __future__ import annotations
 
 import math
+import fsutil
 import os
+import re
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
+import i18n
+import video_engines
 import video_review
 
 SOURCE_VERSION = 1
@@ -31,7 +34,12 @@ MEDIA_FIELDS = ("duration", "fps", "frames", "width", "height")
 
 
 class SourceError(ValueError):
-    """源工程关联的输入无效，或当前状态不允许这个操作。"""
+    def __init__(self, code: str, **params):
+        self.code, self.params = code, params
+        super().__init__(self.localized("zh-CN"))
+
+    def localized(self, locale: str) -> str:
+        return i18n.translate(i18n.catalog(locale), "video.source.error." + self.code, **self.params)
 
 
 def _now_iso() -> str:
@@ -39,29 +47,29 @@ def _now_iso() -> str:
 
 
 def _clean_engine(engine: Any) -> str:
-    if engine not in ENGINES:
-        raise SourceError(f"engine 须为 {'/'.join(sorted(ENGINES))} 之一")
+    if not isinstance(engine, str) or engine not in ENGINES:
+        raise SourceError("engine")
     return str(engine)
 
 
 def _clean_root(root: Any) -> str:
     if not isinstance(root, str) or not root.strip() or "\0" in root:
-        raise SourceError("root 须为本机工程根的绝对路径")
+        raise SourceError("root")
     path = os.path.expanduser(root.strip())
-    if not os.path.isabs(path):
-        raise SourceError("root 须为本机工程根的绝对路径")
+    if not os.path.isabs(path) or fsutil.is_unc_or_device_path(path):
+        raise SourceError("root")
     return os.path.normpath(path)
 
 
 def _clean_entry(engine: str, entry: Any) -> dict[str, str]:
     if not isinstance(entry, dict):
-        raise SourceError("entry 须为入口对象")
+        raise SourceError("entry")
     kind = entry.get("kind", ENGINES[engine])
     identifier = entry.get("id")
     if kind != ENGINES[engine]:
-        raise SourceError(f"{engine} 的入口须为 {ENGINES[engine]}")
+        raise SourceError("kind", engine=engine, kind=ENGINES[engine])
     if not isinstance(identifier, str) or not identifier.strip() or len(identifier) > 200:
-        raise SourceError("entry.id 须为非空入口标识")
+        raise SourceError("entryId")
     out = {"kind": kind, "id": identifier.strip()}
     label = entry.get("label")
     if isinstance(label, str) and label.strip():
@@ -74,21 +82,21 @@ def _clean_media(media: Any) -> dict[str, Any] | None:
     if media is None:
         return None
     if not isinstance(media, dict):
-        raise SourceError("media 须为工程侧成片特征对象")
+        raise SourceError("media")
     out: dict[str, Any] = {}
     for name in MEDIA_FIELDS:
         if name not in media:
             continue
         value = media[name]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
-            raise SourceError(f"media.{name} 须为有限数字")
+            raise SourceError("number", field=name)
         out[name] = value
     return out or None
 
 
 def _clean_candidate(raw: Any, index: int) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        raise SourceError("candidates 每项须为候选对象")
+        raise SourceError("candidate")
     engine = _clean_engine(raw.get("engine"))
     out = {
         "id": str(raw.get("id") or f"c{index + 1}"),
@@ -98,7 +106,7 @@ def _clean_candidate(raw: Any, index: int) -> dict[str, Any]:
         "media": _clean_media(raw.get("media")),
     }
     if not out["id"] or len(out["id"]) > 64:
-        raise SourceError("候选 id 须为 1 至 64 个字符")
+        raise SourceError("candidateId")
     return out
 
 
@@ -123,7 +131,7 @@ def _differences(version: dict[str, Any], media: dict[str, Any] | None) -> list[
 def _source_project(video: dict[str, Any]) -> dict[str, Any]:
     sp = video.get("sourceProject") if isinstance(video, dict) else None
     if not isinstance(sp, dict):
-        raise SourceError("这份视频审阅还没有源工程关联")
+        raise SourceError("missing")
     return sp
 
 
@@ -137,17 +145,18 @@ def link(
     filename: str | None = None,
     candidates: list[dict[str, Any]] | None = None,
     by: str = "page",
+    verified_source: bool = False,
 ) -> dict[str, Any]:
     """记录一次用户明确的源工程关联。返回带 sourceProject 的新 video（原字典不改）。
 
-    唯一确认（工程侧成片特征与登记版本完全一致、且没有多候选）时直接 linked/verified；
+    调用方已核实成片来源、声明相符且没有多个入口时直接 linked/verified；
     有差异、只有文件名或给出多个候选时进入 pending，等审阅人 `confirm`。
     仅文件名相同不能证明匹配（filename 只入依据，不参与核验）。
     """
     engine = _clean_engine(engine)
     current = video["currentVersionId"] if isinstance(video, dict) else None
     if not current:
-        raise SourceError("这份清单没有视频版本")
+        raise SourceError("version")
     version = video_review.registered_version({"video": video}, str(current))
     clean_media = _clean_media(media)
     clean_candidates = [_clean_candidate(c, i) for i, c in enumerate(candidates or [])]
@@ -157,7 +166,7 @@ def link(
     if isinstance(filename, str) and filename.strip():
         basis["filename"] = filename.strip()[:200]
     differences = _differences(version, clean_media)
-    unique = clean_media is not None and not differences and len(clean_candidates) <= 1
+    unique = verified_source and not differences and len(clean_candidates) <= 1
     sp: dict[str, Any] = {
         "v": SOURCE_VERSION,
         "status": "linked" if unique else "pending",
@@ -176,20 +185,101 @@ def link(
     return out
 
 
+def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
+    """本地表单只读取工程数据，不执行工程代码。动态 Remotion 入口可由 CLI 巡检后人工确认。"""
+    engine = _clean_engine(payload.get("engine"))
+    root = Path(_clean_root(payload.get("root")))
+    entry = _clean_entry(engine, payload.get("entry"))
+    try:
+        info = video_engines.detect_project(root)
+    except video_engines.EngineError as exc:
+        raise SourceError("project", root=str(root)) from exc
+    if engine != info["engine"]:
+        raise SourceError("engineMismatch", engine=info["engine"])
+    if engine == "hyperframes":
+        declarations = info["compositions"]
+        if entry["id"] not in {c["id"] for c in declarations}:
+            raise SourceError("entries", entries=", ".join(c["id"] for c in declarations))
+    else:
+        # JSX 字面量仅作人工选择线索，动态生成的合成以工程 CLI 巡检为准。
+        declarations = []
+        for source in video_engines.freshness_sources(info):
+            if source.suffix not in (".tsx", ".jsx") or source.is_symlink() or source.stat().st_size > 1024 * 1024:
+                continue
+            text = source.read_text(encoding="utf-8", errors="replace")
+            for tag in re.finditer(r"<Composition\b[^>]*>", text):
+                ident = re.search(r"""\bid\s*=\s*["']([^"']+)["']""", tag[0])
+                if not ident:
+                    continue
+                comp = {"id": ident[1]}
+                for name, attr in (
+                    ("fps", "fps"),
+                    ("width", "width"),
+                    ("height", "height"),
+                    ("frames", "durationInFrames"),
+                ):
+                    value = re.search(r"\b" + attr + r"\s*=\s*\{(\d+(?:\.\d+)?)\}", tag[0])
+                    if value:
+                        comp[name] = float(value[1])
+                declarations.append(comp)
+    discovered = [
+        {
+            "engine": engine,
+            "root": str(root),
+            "entry": {"kind": entry["kind"], "id": comp["id"]},
+            "media": {k: comp[k] for k in MEDIA_FIELDS if comp.get(k) is not None},
+        }
+        for comp in declarations
+    ]
+    if len(discovered) > 1:
+        payload["candidates"] = discovered
+    elif payload.get("candidates"):
+        provided = [_clean_candidate(raw, i) for i, raw in enumerate(payload["candidates"])]
+        if any(c["engine"] != engine or Path(c["root"]) != root for c in provided):
+            raise SourceError("candidate")
+        payload["candidates"] = provided
+    version = video_review.registered_version({"video": video}, video["currentVersionId"])
+    selected = next((c for c in discovered if c["entry"]["id"] == entry["id"]), None)
+    declared = selected["media"] if selected else {}
+    if not payload.get("media") and declared:
+        payload["media"] = declared
+    verified = False
+    if engine == "hyperframes" and len(discovered) == 1 and selected and not _differences(version, declared):
+        source_time = max((p.stat().st_mtime for p in video_engines.freshness_sources(info)), default=0)
+        movies = video_engines.scan_movies(root)
+        if len(movies) == 1:
+            movie = movies[0]
+            verified = bool(
+                movie["meta"]
+                and movie["mtime"] >= source_time
+                and not _differences(version, movie["meta"])
+                and video_review.file_digest(movie["path"]) == version["sha256"]
+            )
+    updated = link(video, **payload, verified_source=verified)
+    sp = updated["sourceProject"]
+    if verified:
+        sp["basis"].update(kind="sha256", sha256=version["sha256"])
+    else:
+        for diff in _differences(version, declared):
+            if diff not in sp["differences"]:
+                sp["differences"].append(diff)
+    return updated
+
+
 def confirm(video: dict[str, Any], *, choice: str | None = None, by: str = "page") -> dict[str, Any]:
     """审阅人确认待定关联：多候选必须指明 choice，差异确认不指明。"""
     sp = _source_project(video)
     if sp.get("status") != "pending":
-        raise SourceError("只有待确认的关联需要确认")
+        raise SourceError("pending")
     out = dict(video)
     new_sp = dict(sp)
     candidates = [c for c in sp.get("candidates") or [] if isinstance(c, dict)]
     if len(candidates) > 1:
         if not choice:
-            raise SourceError("多个候选须指明确认哪一个")
+            raise SourceError("choice")
         picked = next((c for c in candidates if c.get("id") == choice), None)
         if picked is None:
-            raise SourceError(f"没有这个候选：{choice}")
+            raise SourceError("unknownChoice", choice=choice)
         new_sp.update(engine=picked["engine"], root=picked["root"], entry=picked["entry"], confirmedChoice=picked["id"])
         if picked.get("media") is not None:
             basis = dict(new_sp.get("basis") or {})
@@ -200,7 +290,7 @@ def confirm(video: dict[str, Any], *, choice: str | None = None, by: str = "page
             )
             new_sp["differences"] = _differences(version, picked["media"])
     elif choice:
-        raise SourceError("这个关联没有候选可选，直接确认即可")
+        raise SourceError("noChoice")
     new_sp.update(status="linked", match="confirmed", confirmedAt=_now_iso(), confirmedBy=by)
     out["sourceProject"] = new_sp
     return out

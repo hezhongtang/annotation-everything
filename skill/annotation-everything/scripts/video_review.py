@@ -9,14 +9,17 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import mmap
 import os
 import re
 import struct
 import sys
+import tempfile
 from datetime import datetime, timezone
 from fractions import Fraction
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import fsutil  # noqa: E402
@@ -87,13 +90,68 @@ def _media_time(data: bytes, start: int, end: int, kind: bytes) -> tuple[int, in
     return scale, duration
 
 
-def _video_track(data: bytes, start: int, end: int) -> dict[str, Any]:
+def _check_samples(data: bytes, tables: dict, media: list[tuple[int, int]], frames: int) -> None:
+    def rows(kind: bytes, fmt: str):
+        start, end = tables.get(kind, (0, 0))
+        if end - start < 8:
+            raise VideoError("MP4 缺少视频样本表")
+        count = struct.unpack_from(">I", data, start + 4)[0]
+        if count == 0 or end - start - 8 != count * struct.calcsize(fmt):
+            raise VideoError("MP4 视频样本表长度无效")
+        return struct.iter_unpack(fmt, data[start + 8 : end])
+
+    offsets = rows(b"stco", ">I") if b"stco" in tables else rows(b"co64", ">Q")
+    chunks = list(rows(b"stsc", ">III"))
+    if chunks[0][0] != 1 or any(a[0] >= b[0] for a, b in zip(chunks, chunks[1:])):
+        raise VideoError("MP4 视频分块表无效")
+    start, end = tables.get(b"stsz", tables.get(b"stz2", (0, 0)))
+    if end - start < 12:
+        raise VideoError("MP4 缺少视频样本大小")
+    size, count = struct.unpack_from(">II", data, start + 4)
+    if count != frames or frames > sum(b - a for a, b in media):
+        raise VideoError("MP4 视频样本数与帧时间表不符")
+    field = size & 255 if b"stsz" not in tables else 0 if size else 32
+    if field not in (0, 4, 8, 16, 32) or end - start - 12 != (count * field + 7) // 8:
+        raise VideoError("MP4 视频样本大小表无效")
+    pos = start + 12
+    index = run = 0
+    for chunk, (offset,) in enumerate(offsets, 1):
+        if run + 1 < len(chunks) and chunk == chunks[run + 1][0]:
+            run += 1
+        samples, desc = chunks[run][1:]
+        if not desc or not samples or index + samples > frames:
+            raise VideoError("MP4 视频样本分块无效")
+        if field:
+            length = 0
+            for sample in range(index, index + samples):
+                if field == 4:
+                    n = data[pos + sample // 2]
+                    n = n & 15 if sample % 2 else n >> 4
+                else:
+                    width = field // 8
+                    n = int.from_bytes(data[pos + sample * width : pos + (sample + 1) * width], "big")
+                if not n:
+                    raise VideoError("MP4 含有空的视频样本")
+                length += n
+        else:
+            length = size * samples
+        if not any(a <= offset and offset + length <= b for a, b in media):
+            raise VideoError("MP4 视频样本超出媒体数据范围")
+        index += samples
+    if index != frames or run != len(chunks) - 1:
+        raise VideoError("MP4 视频分块未覆盖所有样本")
+
+
+def _video_track(data: bytes, start: int, end: int, media: list[tuple[int, int]]) -> dict[str, Any]:
     scale = duration = None
     frames = delta = width = height = None
     variable = False
+    tables = {}
     pending = list(_children(data, start, end))
     while pending:
         kind, child_start, child_end = pending.pop(0)
+        if kind in (b"stsz", b"stz2", b"stsc", b"stco", b"co64"):
+            tables[kind] = (child_start, child_end)
         if kind in CONTAINERS:
             pending[0:0] = list(_children(data, child_start, child_end))
             continue
@@ -131,6 +189,7 @@ def _video_track(data: bytes, start: int, end: int) -> dict[str, Any]:
         raise VideoError("MP4 缺少可批注的视频轨、画面尺寸或帧时间表")
     if variable or not delta:
         raise VideoError("MP4 使用可变帧时长，首版只支持恒定帧率视频")
+    _check_samples(data, tables, media, frames)
     frame_clock = Fraction(delta, scale)
     fps = 1 / frame_clock
     seconds = Fraction(duration, scale)
@@ -147,15 +206,20 @@ def _video_track(data: bytes, start: int, end: int) -> dict[str, Any]:
 def probe(path: Path) -> dict[str, Any]:
     """读取 MP4 元数据；无法确认精确帧定位时明确拒绝，不猜测帧率。"""
     try:
-        data = path.read_bytes()
+        with path.open("rb") as source:
+            if not os.fstat(source.fileno()).st_size:
+                raise VideoError("MP4 文件为空")
+            with mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                return _probe_container(data)
     except OSError as exc:
         raise VideoError(f"无法读取 MP4：{exc}") from exc
-    if not data:
-        raise VideoError("MP4 文件为空")
-    try:
-        top = list(_boxes(data))
-    except VideoError:
-        raise
+
+
+def _probe_container(data: mmap.mmap) -> dict[str, Any]:
+    top = list(_boxes(data))
+    media = [(start, end) for kind, start, end in top if kind == b"mdat" and end > start]
+    if not media:
+        raise VideoError("MP4 缺少可读取的视频样本数据")
     if not any(kind == b"ftyp" for kind, _start, _end in top):
         raise VideoError("不是可识别的 MP4：缺少 ftyp 媒体盒")
     moov = next(((start, end) for kind, start, end in top if kind == b"moov"), None)
@@ -177,7 +241,7 @@ def probe(path: Path) -> dict[str, Any]:
             tracks.append((start, end))
     if len(tracks) != 1:
         raise VideoError("MP4 必须恰好包含一条可批注的视频轨")
-    return _video_track(data, *tracks[0])
+    return _video_track(data, *tracks[0], media)
 
 
 def registered_version(manifest: dict[str, Any], version_id: str) -> dict[str, Any]:
@@ -217,27 +281,37 @@ def media_path(review_dir: Path, manifest: dict[str, Any], version_id: str) -> P
     return resolved
 
 
+def file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _stage_and_probe_mp4(source: Path, review_dir: Path, version_num: int) -> dict[str, Any]:
+def _stage_and_probe_mp4(
+    source: Path, review_dir: Path, version_num: int, before_publish: Callable | None = None
+) -> dict[str, Any]:
     """将源成片拷入私有临时文件（0600 + fsync）并做 MP4 探测，通过后再原子替换为 media/v{N}.mp4。"""
     review_dir.mkdir(parents=True, exist_ok=True)
     media_dir = review_dir / "media"
-    media_dir.mkdir(exist_ok=True)
+    if media_dir.is_symlink():
+        raise VideoError("视频媒体目录不能是符号链接")
+    media_dir.mkdir(mode=0o700, exist_ok=True)
     rel_path = f"media/v{version_num}.mp4"
     target = media_dir / f"v{version_num}.mp4"
     if target.exists() or target.is_symlink():
         raise VideoError(f"{rel_path} 已存在但未登记；拒绝覆盖本机材料")
-    temporary = media_dir / f".v{version_num}-{os.getpid()}.tmp"
-    if temporary.exists() and not temporary.is_symlink() and not temporary.is_dir():
-        temporary.unlink()
+    fd, tmp = tempfile.mkstemp(dir=media_dir, prefix=f".v{version_num}-", suffix=".tmp")
+    temporary = Path(tmp)
     digest = hashlib.sha256()
     try:
         try:
-            with source.open("rb") as src, temporary.open("xb") as dst:
-                os.chmod(temporary, 0o600)
+            with os.fdopen(fd, "wb") as dst, source.open("rb") as src:
                 while chunk := src.read(1024 * 1024):
                     digest.update(chunk)
                     dst.write(chunk)
@@ -252,7 +326,9 @@ def _stage_and_probe_mp4(source: Path, review_dir: Path, version_num: int) -> di
             "sha256": digest.hexdigest(),
             **metadata,
         }
-        os.replace(temporary, target)
+        if before_publish:
+            before_publish(version)
+        os.link(temporary, target)
     finally:
         try:
             temporary.unlink()
@@ -304,7 +380,7 @@ def prepare(source: Path, review_dir: Path, existing: dict[str, Any] | None = No
         private = media_path(review_dir, existing, version["versionId"])
         if source.resolve() != private:
             raise VideoError("这份审阅已经登记 V1；重建须使用审阅内已登记的媒体")
-        digest = hashlib.sha256(private.read_bytes()).hexdigest()
+        digest = file_digest(private)
         if digest != version.get("sha256"):
             raise VideoError("审阅内 V1 的 SHA-256 与清单不符；请恢复原始证据后再重建")
         return json.loads(json.dumps(existing["video"]))
@@ -340,15 +416,40 @@ def register_version(
                 if isinstance(item, dict) and item.get("batch") == batch and item.get("receiptId") == rid_key:
                     return json.loads(json.dumps(item))
 
-        version_num = _next_version_number(video)
-        version = _stage_and_probe_mp4(Path(source_mp4), Path(review_dir), version_num)
-        version.update(batch=batch, by=actor, at=_now_iso())
-        if rid_key:
-            version["receiptId"] = rid_key
+        journal = Path(review_dir) / ".video-registration.json"
+        if journal.exists():
+            pending = json.loads(journal.read_text(encoding="utf-8"))
+            if pending["reviewId"] != manifest["reviewId"]:
+                raise VideoError("待恢复的视频版本与审阅标识不匹配")
+            entry = pending["version"]
+            expected = f"media/v{_next_version_number(video)}.mp4"
+            if entry.get("path") == expected and (Path(review_dir) / expected).exists():
+                candidate = {**manifest, "video": {**video, "versions": [*video["versions"], entry]}}
+                published = media_path(Path(review_dir), candidate, entry["versionId"])
+                if file_digest(published) != entry["sha256"]:
+                    raise VideoError("待恢复的视频内容与登记信息不匹配")
+                video["versions"].append(entry)
+                video["currentVersionId"] = entry["versionId"]
+                video.pop("lastFailure", None)
+                _write_manifest(manifest_path, manifest)
+                journal.unlink()
+                if entry.get("receiptId") == rid_key and entry["batch"] == batch:
+                    return entry
+            else:
+                journal.unlink()
+
+        def save_intent(entry):
+            entry.update(batch=batch, by=actor, at=_now_iso())
+            if rid_key:
+                entry["receiptId"] = rid_key
+            _write_manifest(journal, {"reviewId": manifest["reviewId"], "version": entry})
+
+        version = _stage_and_probe_mp4(Path(source_mp4), Path(review_dir), _next_version_number(video), save_intent)
         video["versions"].append(version)
         video["currentVersionId"] = version["versionId"]
         video.pop("lastFailure", None)
         _write_manifest(manifest_path, manifest)
+        journal.unlink()
         return json.loads(json.dumps(version))
 
 
@@ -658,6 +759,13 @@ def clean_receipt_target(raw_target: Any, version_meta: dict[str, Any]) -> dict[
     return out
 
 
+@lru_cache(maxsize=64)
+def _verified_local_media(path: Path, digest: str, identity: tuple[int, ...]) -> bool:
+    # 每次检查重新 stat；文件身份、内容时间或大小变化时重新探测并核对登记摘要。
+    probe(path)
+    return file_digest(path) == digest
+
+
 def review_readiness(
     note: dict[str, Any], manifest: dict[str, Any], *, review_dir: Path | None = None
 ) -> tuple[bool, str]:
@@ -668,7 +776,7 @@ def review_readiness(
     vr = note.get("videoReview")
     is_video = isinstance(note.get("video"), dict) or isinstance(manifest.get("video"), dict)
     if vr is None:
-        if note.get("status") == "drafted" and is_video:
+        if is_video:
             return False, "missing-video-review"
         return True, "ok"
     if not isinstance(vr, dict):
@@ -686,8 +794,10 @@ def review_readiness(
         version_meta = registered_version(manifest, version_id)
     except VideoError:
         return False, "unregistered-version"
+    if not isinstance(vr.get("batch"), int) or version_meta.get("batch") != vr["batch"]:
+        return False, "unregistered-version"
     target = vr.get("target")
-    if not isinstance(target, dict):
+    if not isinstance(target, dict) or vr.get("outcome") == "deleted" and target.get("kind") != "cut":
         return False, "missing-target"
     try:
         clean_receipt_target(target, version_meta)
@@ -698,9 +808,15 @@ def review_readiness(
         base_dir = Path(manifest["reviewDir"])
     if base_dir is not None:
         try:
-            path = media_path(base_dir, manifest, version_id)
-            with path.open("rb") as fh:
-                if len(fh.read(8)) < 8:
+            original = (note.get("video") or {}).get("versionId")
+            if not original:
+                return False, "missing-target"
+            for vid in {version_id, original}:
+                cut = registered_version(manifest, vid)
+                path = media_path(base_dir, manifest, vid)
+                stat = path.stat()
+                identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+                if not _verified_local_media(path, cut.get("sha256", ""), identity):
                     return False, "media-unreadable"
         except (OSError, VideoError):
             return False, "media-unreadable"

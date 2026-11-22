@@ -40,7 +40,12 @@ def synthetic_mp4(*, frames: int = 180, fps: int = 30, width: int = 640, height:
     stts = full_box("stts".encode(), 0, 0, struct.pack(">III", 1, frames, 1))
     avc1 = b"\0" * 6 + struct.pack(">H", 1) + b"\0" * 16 + struct.pack(">HH", width, height) + b"\0" * 50
     stsd = full_box("stsd".encode(), 0, 0, struct.pack(">I", 1) + box(b"avc1", avc1))
-    stbl = box(b"stbl", stsd + stts)
+    header = box(b"ftyp", b"isom" + bytes(4) + b"isomiso2avc1mp41")
+    media = box(b"mdat", bytes((42,)) * frames)
+    stsc = full_box(b"stsc", 0, 0, struct.pack(">IIII", 1, 1, frames, 1))
+    stsz = full_box(b"stsz", 0, 0, struct.pack(">II", 1, frames))
+    stco = full_box(b"stco", 0, 0, struct.pack(">II", 1, len(header) + 8))
+    stbl = box(b"stbl", stsd + stts + stsc + stsz + stco)
     minf = box(b"minf", stbl)
     hdlr = full_box("hdlr".encode(), 0, 0, b"\0" * 4 + b"vide" + b"\0" * 12 + b"Synthetic video\0")
     mdia = box(b"mdia", mdhd + hdlr + minf)
@@ -52,7 +57,7 @@ def synthetic_mp4(*, frames: int = 180, fps: int = 30, width: int = 640, height:
     )
     trak = box(b"trak", tkhd + mdia)
     moov = box(b"moov", mvhd + trak)
-    return box(b"ftyp", b"isom\0\0\2\0isomiso2avc1mp41") + moov + box(b"mdat", b"synthetic-media")
+    return header + media + moov
 
 
 class VideoBuildTests(unittest.TestCase):
@@ -125,6 +130,39 @@ class VideoBuildTests(unittest.TestCase):
         manifest = json.loads((self.out / "review.json").read_text(encoding="utf-8"))
         private = self.out / manifest["video"]["versions"][0]["path"]
         self.assertEqual(private.read_bytes(), self.media)
+
+    def test_cut_with_metadata_but_no_media_samples_cannot_be_registered(self):
+        self.source.write_bytes(self.media.replace(b"mdat", b"free", 1))
+        with self.assertRaisesRegex(build_viewer.BuildError, "MP4|mp4"):
+            self.build()
+
+    def test_chunk_offset_must_point_to_the_registered_media_samples(self):
+        data = bytearray(self.media)
+        struct.pack_into(">I", data, data.index(b"stco") + 12, 0)
+        self.source.write_bytes(data)
+        with self.assertRaisesRegex(build_viewer.BuildError, "MP4|mp4"):
+            self.build()
+
+    def test_rebuild_preserves_a_version_published_during_page_generation(self):
+        from unittest.mock import patch
+        import video_review
+
+        self.build()
+        v2 = self.root / "revision.mp4"
+        v2.write_bytes(synthetic_mp4(frames=192))
+        original = Path.read_text
+
+        def publish_during_rebuild(path, *args, **kwargs):
+            result = original(path, *args, **kwargs)
+            if path == build_viewer.TEMPLATE:
+                video_review.register_version(self.out, v2, batch=1, by="agent", receipt_id="concurrent")
+            return result
+
+        with patch.object(Path, "read_text", publish_during_rebuild):
+            self.assertEqual(build_viewer.main(["--rebuild", str(self.out)]), 0)
+        manifest = json.loads((self.out / "review.json").read_text())
+        self.assertEqual(manifest["video"]["currentVersionId"], "V2")
+        self.assertIn('"currentVersionId": "V2"', (self.out / "index.html").read_text())
 
     def test_non_mp4_and_invalid_mp4_are_rejected_with_specific_reason(self):
         bogus = self.root / "broken.mp4"

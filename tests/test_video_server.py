@@ -14,6 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "skill" / "annotation-everything" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(ROOT))
+
+import host_isolation  # noqa: E402
+
+host_isolation.require_for_module(__name__)
 os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-server-home-")
 
 import build_viewer  # noqa: E402

@@ -1481,7 +1481,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
         print(t("cli.notes.warning", reason=warn), file=sys.stderr)
 
     def authorize():
-        wakeup.assert_claim_owner(d, getattr(a, "harness", None), getattr(a, "session", None))
+        wakeup.assert_claim_owner(d, getattr(a, "harness", None), getattr(a, "session", None), manifest=manifest)
 
     def authorize_new_work():
         review_stop.assert_accepts_work(d, manifest=manifest)
@@ -2193,7 +2193,7 @@ SNAP_MAX = 50 * 1024 * 1024
 def snapshot(d: Path, item: dict[str, Any], label: str) -> Path | None:
     """两段批次：把报告与讲稿源文件存进审阅目录 .snapshots/batch-N/<label>/（仅本机、目录 0700、文件 0600）。
     单段批次不存。读不到源文件、遇到符号链接或其他错误只警告，不影响批次状态（批次已经接收 / 收尾了）。"""
-    if not store.two_stage(item):
+    if "videoSubmission" in item or not store.two_stage(item):
         return None
     try:
         return _snapshot(d, int(item["seq"]), label)
@@ -2748,7 +2748,7 @@ def wait(
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
-    state = store.handoff_state(d, full=False)
+    state = store.handoff_state(d, full=False, manifest=manifest)
     if state.get("claimed") or state.get("reviewing"):
         print(t("cli.hand.waitHint", count=state.get("claimed", 0) + state.get("reviewing", 0)), file=sys.stderr)
     want = store.CLAIM_STATUSES[stage]
@@ -2793,6 +2793,7 @@ def wait(
             sig = tuple(_poll_signature(p) for p in watch)
             now = time.monotonic()
             if sig != last_sig or now >= next_force:  # 变了、或到了强制重读周期：完整读一次
+                initial_poll = last_sig is None
                 last_sig, next_force = sig, now + force_read
                 if not review_stop.accepts_work(d, manifest=manifest):
                     print(t("cli.hand.reviewStopped"), file=sys.stderr)
@@ -2800,7 +2801,11 @@ def wait(
                 if claim:
                     try:
                         wakeup.assert_claim_owner(
-                            d, harness, session, expected_binding=(binding or {}).get("bindingId")
+                            d,
+                            harness,
+                            session,
+                            expected_binding=(binding or {}).get("bindingId"),
+                            manifest=manifest if initial_poll and not binding else None,
                         )
                     except (OSError, ValueError, KeyError) as error:
                         print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)

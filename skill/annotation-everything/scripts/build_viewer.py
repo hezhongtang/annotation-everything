@@ -936,6 +936,7 @@ def _remove_render_staging(path: Path) -> None:
     """V1 已登记（或登记失败）后清掉引擎渲染暂存；清不掉只警告，不阻塞审阅。"""
     try:
         path.unlink()
+        path.parent.rmdir()
     except FileNotFoundError:
         pass
     except OSError as exc:
@@ -1044,9 +1045,14 @@ def build(
                     entry=engine_result["entry"],
                     media=engine_result["declaration"],
                     by="build",
+                    verified_source=reuse_movie is None,
                 )
+                if reuse_movie is not None and not video_meta["sourceProject"]["differences"]:
+                    video_meta = video_source.confirm(video_meta, by="cli")
             except video_source.SourceError as exc:
-                raise BuildError(diag(locale_choice, "build.video.error", path=report, reason=str(exc))) from exc
+                raise BuildError(
+                    diag(locale_choice, "build.video.error", path=report, reason=exc.localized(locale_choice))
+                ) from exc
         doc = ""
         rtitle, rcss = "", ""
         sects = [{"n": 1, "key": "video-v1", "stable": True, "title": esc(video_default_title), "html": ""}]
@@ -1248,13 +1254,18 @@ def build(
         "OVERVIEW_HOME": _js(None),
     }  # 对照页不是总览首页宿主；总览视图按 hash 路由照旧
     # 一次性替换，避免内容里恰好出现占位符文字时被二次替换；CSP 要等脚本定稿后再算哈希
-    page_html = re.sub(
-        r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|VIDEO|OVERVIEW_HOME)__",
-        lambda m: values[m.group(1)],
-        TEMPLATE.read_text(encoding="utf-8"),
-    )
-    page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
-    write_private(out / "index.html", page_html)
+    template = TEMPLATE.read_text(encoding="utf-8")
+
+    def render_page():
+        page_html = re.sub(
+            r"__(TITLE|INTRO|PAGES|SECTIONS|NS|NAME|RID|RCSS|SECT|ROOTFS|SKILLS|ALWAYS|SKILL_CONTEXT|FULL_CHECK_COMPAT|CATALOGS|LOCALE|REPORT_LANG|DOCX|PPTX|VIDEO|OVERVIEW_HOME)__",
+            lambda m: values[m.group(1)],
+            template,
+        )
+        page_html = page_html.replace("__CSP__", page_csp(page_html), 1)
+        return page_html
+
+    page_html = render_page()
     rr, rs = report.resolve(), (script.resolve() if script else None)
     out_resolved = out.resolve()
 
@@ -1320,6 +1331,16 @@ def build(
         manifest["locale"] = locale_choice
         manifest["build"]["locale"] = locale_choice
     with ledger.metadata_lock(out, exclusive=True):
+        if video_meta is not None and preview.get("video"):
+            current = ledger.read_manifest(out)
+            if current.get("reviewId") != preview.get("reviewId") or not isinstance(current.get("video"), dict):
+                raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
+            if current["video"] != video_meta:
+                video_meta = current["video"]
+                values["VIDEO"] = _js(video_review.public_manifest(current))
+                page_html = render_page()
+                manifest["video"] = video_meta
+        write_private(out / "index.html", page_html)
         write_private(out / "review.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     # 已有批注：按页面键校正页码（重排、增删页之后批注跟着原来的页走）
     key_count: dict[str, int] = {}

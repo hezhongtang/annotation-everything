@@ -640,7 +640,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <div class="vrow"><label><span data-msg="viewer.video.source.engine">引擎</span><select id="vsrcEngine"><option value="remotion">Remotion</option><option value="hyperframes">HyperFrames</option></select></label></div>
 <div class="vrow"><label><span data-msg="viewer.video.source.root">工程根（本机绝对路径）</span><input id="vsrcRoot" type="text" data-ph="viewer.video.source.rootPh"></label></div>
 <div class="vrow"><label><span data-msg="viewer.video.source.entry">入口 ID</span><input id="vsrcEntry" type="text"></label></div>
-<p class="hint" data-msg="viewer.video.source.mediaHint">可选：填工程侧成片的帧数、时长（秒）、fps、宽、高，与登记成片一致时直接绑定；不填或对不上时进入待确认。</p>
+<p class="hint" data-msg="viewer.video.source.mediaHint">可填写工程成片的帧数、时长、帧率和尺寸以对照原片。请核对候选入口并确认关联。</p>
 <div class="vrow" id="vsrcMediaRow">
 <label>frames <input id="vsrcFrames" type="number" min="1" step="1"></label>
 <label>duration(s) <input id="vsrcDuration" type="number" min="0" step="0.001"></label>
@@ -1655,7 +1655,7 @@ function handPollKeyOf(d){const h=d&&d.handoff||null;
   return JSON.stringify([h&&h.latest||null,h?h.total:null,h&&Array.isArray(h.inFlightIds)?h.inFlightIds:[],
     h&&h.finalizable||null,d&&d.agentDelivery||null])}
 function supportsVideoHandoff(d){return hasFeature(d,"selective-handoff")&&hasFeature(d,"video-handoff-snapshot")
-  &&hasFeature(d,"video-source")&&hasFeature(d,"video-receipt")&&hasFeature(d,"video-decisions")}
+  &&hasFeature(d,"video-source")&&hasFeature(d,"video-receipt")&&hasFeature(d,"video-decisions")&&hasFeature(d,"video-evidence-revision")}
 function applyServer(d,quietHand){
   agentDelivery=d.agentDelivery||null;
   receiver=d.receiver||null;
@@ -1671,7 +1671,7 @@ function applyServer(d,quietHand){
     if(stopSnapshot?.state==="stopped")mode="offline";
     else if(["legacy","offline","mismatch"].includes(stopProblem))stopProblem=""
   }
-  finalizeAllSupported=hasFeature(d,"finalize-all");srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
+  finalizeAllSupported=hasFeature(d,"finalize-all")&&(!VIDEO||hasFeature(d,"video-evidence-revision"));srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
   srvNoSelect=!supportsVideoHandoff(d);srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
   if(typeof setVideoServerFeatures==="function")setVideoServerFeatures(d);
   if(VIDEO&&mode==="server"&&!videoSourceLoaded){videoSourceLoaded=true;loadVideoSource()}
@@ -1925,11 +1925,13 @@ function videoTargetValid(target,version){
     if(hasStart&&(!Number.isInteger(target.contextStart)||!Number.isInteger(target.contextEnd)||target.contextStart<0||target.contextStart>=target.contextEnd||target.contextEnd>version.frames||target.frame<target.contextStart||target.frame>target.contextEnd))return false;
     return true}
   return false}
+function videoEvidence(note){return note?.videoReview?.evidenceRevision||"legacy"}
 function videoReceiptReady(note,manifest){
   if(!note||typeof note!=="object")return false;
   const vr=note.videoReview;
-  if(!vr)return note.status!=="drafted";
-  if(typeof vr!=="object"||vr.state!=="pending_review")return false;
+  if(!vr)return false;
+  if(typeof videoFailedVersions!=="undefined"&&(videoFailedVersions.has(vr.versionId)||videoFailedVersions.has(note.video?.versionId)))return false;
+  if(typeof vr!=="object"||vr.state!=="pending_review"||vr.outcome==="deleted"&&vr.target?.kind!=="cut")return false;
   if(typeof vr.summary!=="string"||!vr.summary.trim())return false;
   const verId=vr.versionId;if(typeof verId!=="string"||!/^V[1-9][0-9]*$/.test(verId))return false;
   const versions=(manifest&&Array.isArray(manifest.versions))?manifest.versions:[];
@@ -2003,8 +2005,8 @@ function videoComparePair(note,manifest){
   const afterVer=findVer(afterVerId)||vers[0]||null;
   const afterSpec=vr&&vr.target?videoTargetPlaySpec(vr.target,afterVer||vr.target):null;
   const approved=note.status==="resolved"||(vr&&vr.decision==="approved");
-  const canRelocate=!!(!approved&&(vr||note.status==="drafted"||vers.length>1));
-  return{noteId:note.id||"",text:note.text||"",state:videoNoteState(note),ready:videoReceiptReady(note,m),canRelocate,
+  const canRelocate=!!(!approved&&!["needs_reply","returned","failed"].includes(vr?.state)&&(vr||note.status==="drafted"||vers.length>1));
+  return{noteId:note.id||"",evidence:videoEvidence(note),text:note.text||"",state:videoNoteState(note),ready:videoReceiptReady(note,m),canRelocate,
     batch:vr&&vr.batch!=null?vr.batch:(note.draftBatch!=null?note.draftBatch:null),
     versionId:vr&&vr.versionId||null,
     before:{version:beforeVer,versionId:beforeVer&&beforeVer.versionId||null,url:beforeVer&&beforeVer.url||null,anchor:orig,spec:beforeSpec,mark:orig&&orig.mark||null},
@@ -2131,7 +2133,8 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
   renderVideoSource();
   if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{const cur=videoCurrentVersion()||version;if(Math.abs(player.videoWidth-cur.width)>0||Math.abs(player.videoHeight-cur.height)>0){
       sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.dimensionMismatch")}videoLayout()})}
-  player.addEventListener("error",()=>{const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
+  player.addEventListener("loadeddata",()=>videoPlaybackState(videoActiveVersionId,true));
+  player.addEventListener("error",()=>{videoPlaybackState(videoActiveVersionId,false);const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
   player.addEventListener("timeupdate",()=>{videoRangeTick(player);sr.getElementById("videoFrame").value=videoCurrentFrame()});
   sr.getElementById("videoPrevFrame").onclick=()=>videoSeekDraftFrame(videoCurrentFrame()-1);sr.getElementById("videoNextFrame").onclick=()=>videoSeekDraftFrame(videoCurrentFrame()+1);
   sr.getElementById("videoFrame").onchange=e=>videoSeekDraftFrame(+e.target.value);
@@ -2156,10 +2159,11 @@ async function submitVideoDecision(noteId,action,opts={}){
   if(!noteId)return null;
   const onErr=typeof opts.onErr==="function"?opts.onErr:(msg=>toast(msg,6000));
   if(mode!=="server"){onErr(tMsg("viewer.video.decisionNeedServer"));return null}
-  if(!serverSupports("video-decisions")){onErr(tMsg("viewer.video.decisionOldService"));return null}
+  if(!serverSupports("video-decisions")||!serverSupports("video-evidence-revision")){onErr(tMsg("viewer.video.decisionOldService"));return null}
   const note=(typeof notes!=="undefined"&&Array.isArray(notes))?notes.find(n=>n.id===noteId):null;
   const vr=note&&note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
   const body={action};
+  if(action==="approve")body.expectedEvidence=opts.expectedEvidence||videoEvidence(note);
   if(action==="return"){
     const rsn=String(opts.reason||"").trim();
     if(!rsn){onErr(tMsg("viewer.video.returnNeedReason"));return null}
@@ -2185,6 +2189,12 @@ async function submitVideoDecision(noteId,action,opts={}){
       toast(tMsg(key),4000)}
     return res;
   }catch(e){onErr(videoDecisionError(e));return null}}
+const videoFailedVersions=new Set();
+function videoPlaybackState(id,readable){
+  if(!id)return;
+  const changed=readable?videoFailedVersions.delete(id):!videoFailedVersions.has(id);
+  if(!readable)videoFailedVersions.add(id);
+  if(changed&&typeof refreshList==="function"){refreshList(true);renderFinalizeAll()}}
 function videoCompareEl(side){return sr.getElementById(side==="before"?"videoCompareBefore":"videoCompareAfter")}
 function videoCompareMarksEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeMarks":"videoCompareAfterMarks")}
 function videoCompareBoxEl(side){return sr.getElementById(side==="before"?"videoCompareBeforeBox":"videoCompareAfterBox")}
@@ -2421,7 +2431,7 @@ async function videoCompareDecision(action){
   const reason=action==="return"?String((sr.getElementById("videoCompareReturnReason")||{}).value||"").trim():"";
   const reply=action==="reply"?String((sr.getElementById("videoCompareReplyInput")||{}).value||"").trim():"";
   const res=await submitVideoDecision(videoCompareNoteId,action,{
-    reason,reply,expectedBatch:pair?pair.batch:null,expectedVersion:pair?pair.versionId:null,onErr:setErr});
+    reason,reply,expectedBatch:pair?pair.batch:null,expectedVersion:pair?pair.versionId:null,expectedEvidence:pair?.evidence,onErr:setErr});
   if(res&&res.note){
     if(action!=="reply")videoCompareReturnOpen=false;
     videoCompareOpen(res.note,false)}
@@ -2439,6 +2449,14 @@ function videoCompareInit(){
   const sBefore=sr.getElementById("videoComparePauseBefore");if(sBefore)sBefore.onclick=()=>videoComparePause("before");
   const pAfter=sr.getElementById("videoComparePlayAfter");if(pAfter)pAfter.onclick=()=>videoComparePlay("after").catch(()=>{});
   const sAfter=sr.getElementById("videoComparePauseAfter");if(sAfter)sAfter.onclick=()=>videoComparePause("after");
+  for(const side of ["before","after"]){
+    const player=videoCompareEl(side);if(!player)continue;
+    const changed=ok=>{const info=videoComparePairState?.[side];if(!info?.url||player.getAttribute("src")!==info.url)return;
+      videoPlaybackState(info.versionId,ok);
+      const button=sr.getElementById("videoCompareApprove");
+      if(button)button.disabled=["before","after"].some(s=>{const el=videoCompareEl(s);return el?.error||el?.readyState<2});
+      if(!ok){const err=sr.getElementById("videoCompareDecisionErr");if(err){err.hidden=false;err.textContent=tMsg("viewer.video.playbackUnavailable")}}};
+    player.addEventListener("loadeddata",()=>changed(true));player.addEventListener("error",()=>changed(false))}
   const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");
   if(bEl){bEl.addEventListener("timeupdate",()=>videoCompareTick("before"));bEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("before"))}
   if(aEl){aEl.addEventListener("timeupdate",()=>videoCompareTick("after"));aEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("after"))}
@@ -2730,9 +2748,9 @@ $("bottomPanel").addEventListener("click",e=>{const b=e.target.closest("[data-ac
       if(pg&&(np!==x.page||x.orphan))Object.assign(body,{page:pg.n,key:pg.stable?pg.key:"",title:unH(pg.title),orphan:false,...docxDrop(x),...pptxDrop(x)});   // 挪到别的页（或确认原页）
       mutate({kind:"patch",id,body});if(body.page&&body.page!==P[i].n)toast(tMsg("viewer.movedPage",{page:body.page}));break}
     case "unpin":stashEdit();mutate({kind:"patch",id,body:{pin:null,region:null,...docxPatch(id,null),...pptxPatch(id,null)}});drawPins();refreshList(true);break;
-    case "resolve":if(VIDEO){const x=notes.find(n=>n.id===id);if(x&&x.videoReview&&typeof submitVideoDecision==="function"){submitVideoDecision(id,"approve");break}}mutate({kind:"patch",id,body:{status:"resolved"}});break;
+    case "resolve":if(VIDEO){submitVideoDecision(id,"approve");break}mutate({kind:"patch",id,body:{status:"resolved"}});break;
     case "reopen":mutate({kind:"patch",id,body:{status:"open"}});break;
-    case "video-approve":if(typeof submitVideoDecision==="function")submitVideoDecision(id,"approve");else mutate({kind:"patch",id,body:{status:"resolved"}});break;
+    case "video-approve":submitVideoDecision(id,"approve");break;
     case "video-return-open":if(typeof videoReturnOpen!=="undefined"){videoReturnOpen=videoReturnOpen===id?null:id;refreshList(true)}break;
     case "video-return-cancel":if(typeof videoReturnOpen!=="undefined"){videoReturnOpen=null;if(typeof videoReturnBuf!=="undefined")delete videoReturnBuf[id];refreshList(true)}break;
     case "video-return-save":{const card=b.closest(".note"),ta=card&&card.querySelector("[data-vid-return]"),rsn=ta?ta.value.trim():String((typeof videoReturnBuf!=="undefined"&&videoReturnBuf[id])||"").trim();if(typeof submitVideoDecision==="function")submitVideoDecision(id,"return",{reason:rsn});break}
@@ -3088,7 +3106,7 @@ const HAND_SCOPE={all:"viewer.hand.scope.all",报告:"viewer.hand.scope.report",
 const handScope=s=>tMsg(HAND_SCOPE[s]||"viewer.hand.scope.all");
 function draftedBatches(){const L=hand&&hand.latest,H=(hand&&hand.history)||[];
   return [...(L?[L]:[]),...H.filter(h=>h&&(!L||h.seq!==L.seq))].filter(h=>h&&(h.status==="drafted"||h.status==="review"))}
-function renderHandDrafts(){const ds=handMode?[]:draftedBatches();
+function renderHandDrafts(){const ds=handMode||VIDEO?[]:draftedBatches();
   $("handDrafts").innerHTML=ds.map(h=>{const blocked=VIDEO&&notes.some(n=>isDraft(n)&&n.draftBatch===+h.seq&&!videoReceiptReady(n,videoManifest()));
     return h.status==="review"
       ?`<div class="hd"><span>${tMsg("viewer.hand.drafts.review",{seq:+h.seq,n:+h.draftedCount||0})}</span><button data-hfinal="${+h.seq}"${blocked?" disabled":""}>${tMsg("viewer.hand.drafts.finalize")}</button></div>`
@@ -3142,19 +3160,19 @@ function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===
   if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
 const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavailable",changed:"changed",unconfirmed:"unconfirmed",unready:"unready"};
-let videoApproveSel=new Set(),videoReturnOpen=null,videoReturnBuf={},videoReplyBuf={};
+let videoApproveSel=new Map(),videoReturnOpen=null,videoReturnBuf={},videoReplyBuf={};
 function videoSyncApproveSel(){
   if(!VIDEO){videoApproveSel.clear();return}
   const readyIds=new Set(notes.filter(n=>videoBatchApprovable(n,videoManifest())).map(n=>n.id));
-  for(const id of [...videoApproveSel])if(!readyIds.has(id))videoApproveSel.delete(id)}
+  for(const [id,rev] of videoApproveSel)if(!readyIds.has(id)||videoEvidence(notes.find(n=>n.id===id))!==rev)videoApproveSel.delete(id)}
 function videoToggleApprovePick(id,checked){
   const x=notes.find(n=>n.id===id);
   if(!x||!videoBatchApprovable(x,videoManifest()))return false;
-  if(checked)videoApproveSel.add(id);else videoApproveSel.delete(id);
+  if(checked)videoApproveSel.set(id,videoEvidence(x));else videoApproveSel.delete(id);
   return true}
 function videoSelectAllReady(){
   videoSyncApproveSel();
-  notes.forEach(n=>{if(videoBatchApprovable(n,videoManifest()))videoApproveSel.add(n.id)});
+  notes.forEach(n=>{if(videoBatchApprovable(n,videoManifest()))videoApproveSel.set(n.id,videoEvidence(n))});
   renderFinalizeAll();if(typeof refreshList==="function")refreshList(true)}
 function videoClearApproveSel(){
   videoApproveSel.clear();renderFinalizeAll();if(typeof refreshList==="function")refreshList(true)}
@@ -3215,7 +3233,7 @@ function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAll
 async function finalizeAll(){
   if(finalizingAll)return;
   const problem=finalizeAllProblem();if(problem){toast(tMsg("viewer.finalizeAll."+problem),7000);return}
-  const preSel=VIDEO?new Set(videoApproveSel):null;
+  const preSel=VIDEO?new Map(videoApproveSel):null;
   finalizingAll=true;finalizeAllError="";busy++;renderFinalizeAll();
   try{
     if(!await flush()||pend.get().length||failed.get().length){finalizeAllError="unsaved";return}
@@ -3227,7 +3245,7 @@ async function finalizeAll(){
       if(!picked.count){finalizeAllError="empty";return}
       const batches=picked.batches.map(b=>tMsg("viewer.finalizeAll.batch",{seq:b.seq,count:b.ids.length})).join(tMsg("viewer.finalizeAll.separator"));
       if(!confirm(tMsg("viewer.finalizeAll.confirm",{count:picked.count,batches,skipped:plan?plan.skipped.length:0})))return;
-      const r=await api("POST","/api/handoff/finalize-all",{batches:picked.batches});
+      const r=await api("POST","/api/handoff/finalize-all",{batches:picked.batches,evidence:Object.fromEntries(preSel)});
       if(!sameReview(r.doc)||!Number.isInteger(r.finalizedCount)||!Number.isInteger(r.skippedCount)
         ||!Array.isArray(r.finalizedIds)||r.finalizedIds.length!==r.finalizedCount
         ||!Array.isArray(r.batches)||!Array.isArray(r.skipped)||r.skipped.length!==r.skippedCount){finalizeAllError="unknown";return}
@@ -3469,9 +3487,9 @@ function renderBatches(){
           ?`<div class="bt">${escH(tMsg("viewer.batch.videoFailureTag",{receiptId:r.receiptId||"",reason:r.failure.reason||""}))}</div>`
           :r.versionId?`<div class="bt">${escH(tMsg("viewer.batch.videoVersionTag",{receiptId:r.receiptId||"",version:r.versionId,n:(r.items||[]).length}))}</div>`:"").join(""):"")
       +(h.summary?`<div class="bsum">${tMsg("viewer.batch.summary",{summary:escH(h.summary)})}</div>`:h.status==="done"?`<div class="bt">${tMsg("viewer.batch.noSummary")}</div>`:"")
-      +(h.status==="drafted"?(()=>{const blocked=VIDEO&&notes.some(n=>isDraft(n)&&n.draftBatch===+h.seq&&!videoReceiptReady(n,videoManifest()));
+      +(!VIDEO&&h.status==="drafted"?(()=>{const blocked=VIDEO&&notes.some(n=>isDraft(n)&&n.draftBatch===+h.seq&&!videoReceiptReady(n,videoManifest()));
         return `<div class="bact">${VIDEO?"":`<button data-breview="${+h.seq}">${tMsg("viewer.hand.drafts.reviewBtn")}</button>`}<button data-bfinal="${+h.seq}"${blocked?` disabled title="${escH(tMsg("viewer.batch.videoUnreadyFinalize"))}"`:""}>${tMsg("viewer.hand.drafts.finalize")}</button></div>`})()
-        :h.status==="review"?`<div class="bact"><button data-bfinal="${+h.seq}" title="${tMsg("viewer.batch.finalizeTitle")}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`:"")
+        :!VIDEO&&h.status==="review"?`<div class="bact"><button data-bfinal="${+h.seq}" title="${tMsg("viewer.batch.finalizeTitle")}">${tMsg("viewer.hand.drafts.finalize")}</button></div>`:"")
       +(Array.isArray(h.draftedIds)&&h.draftedIds.length?`<details data-seq="d${+h.seq}"${(batchOpen?batchOpen.has("d"+(+h.seq)):h.status==="drafted")?" open":""}><summary>${tMsg("viewer.batch.draftedList",{count:h.draftedIds.length})}</summary>${h.draftedIds.map(id=>{const x=byId.get(id);
         return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${x.resolution?`<span class="br">${tMsg("viewer.batch.draftNote",{text:escH(clip(x.resolution,100))})}</span>`:""}${VIDEO&&x.videoReview?`<span class="br">${escH(tMsg("viewer.batch.videoNoteState",{state:tMsg("viewer.video.state."+videoNoteState(x))}))}</span>`:""}</div>`:""}).join("")}</details>`:"")
       +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>${tMsg("viewer.batch.resolvedList",{count:ids.length})}</summary>${ids.map(id=>{const x=byId.get(id);

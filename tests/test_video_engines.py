@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import struct
 import sys
 import tempfile
 import textwrap
@@ -29,39 +28,7 @@ import build_viewer  # noqa: E402
 import video_engines  # noqa: E402
 
 
-# ── 合成 MP4（与 test_video_review 同口径：只有元数据与占位媒体字节） ─────────
-
-
-def box(kind: bytes, payload: bytes) -> bytes:
-    return struct.pack(">I4s", len(payload) + 8, kind) + payload
-
-
-def full_box(kind: bytes, version: int, flags: int, payload: bytes) -> bytes:
-    return box(kind, bytes((version,)) + flags.to_bytes(3, "big") + payload)
-
-
-def synthetic_mp4(*, frames: int = 180, fps: int = 30, width: int = 640, height: int = 360) -> bytes:
-    duration = frames
-    mvhd = full_box(
-        "mvhd".encode(), 0, 0, struct.pack(">IIIIII", 0, 0, fps, duration, 0x00010000, 0x01000000) + b"\0" * 80
-    )
-    mdhd = full_box("mdhd".encode(), 0, 0, struct.pack(">IIIIHH", 0, 0, fps, duration, 0x55C4, 0))
-    stts = full_box("stts".encode(), 0, 0, struct.pack(">III", 1, frames, 1))
-    avc1 = b"\0" * 6 + struct.pack(">H", 1) + b"\0" * 16 + struct.pack(">HH", width, height) + b"\0" * 50
-    stsd = full_box("stsd".encode(), 0, 0, struct.pack(">I", 1) + box(b"avc1", avc1))
-    stbl = box(b"stbl", stsd + stts)
-    minf = box(b"minf", stbl)
-    hdlr = full_box("hdlr".encode(), 0, 0, b"\0" * 4 + b"vide" + b"\0" * 12 + b"Synthetic video\0")
-    mdia = box(b"mdia", mdhd + hdlr + minf)
-    tkhd = full_box(
-        "tkhd".encode(),
-        0,
-        3,
-        struct.pack(">IIIII", 0, 0, 1, 0, duration) + b"\0" * 52 + struct.pack(">II", width << 16, height << 16),
-    )
-    trak = box(b"trak", tkhd + mdia)
-    moov = box(b"moov", mvhd + trak)
-    return box(b"ftyp", b"isom\0\0\2\0isomiso2avc1mp41") + moov + box(b"mdat", b"synthetic-media")
+from tests.test_video_review import synthetic_mp4  # noqa: E402
 
 
 # ── 假引擎 bin：只实现 AE 会用到的固定 argv 模板 ──────────────────────────────
@@ -388,6 +355,28 @@ class ReuseTests(EngineEnvMixin):
         commands = [entry["argv"][0] if entry["argv"] else "" for entry in self.read_bin_log()]
         self.assertEqual(commands, ["compositions"])
 
+    def test_same_shape_compositions_require_explicit_movie_choice(self):
+        self.make_movie(self.project / "out" / "Main.mp4")
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP, {**MAIN_COMP, "id": "Alternate"}]))
+        with self.assertRaises(video_engines.EngineError) as reason:
+            self.resolve(composition="Alternate")
+        self.assertEqual(reason.exception.code, "movieConfirm")
+        self.assertIn("Main", reason.exception.detail)
+        self.assertIn("Alternate", reason.exception.detail)
+
+    def test_changed_project_asset_prevents_automatic_reuse(self):
+        movie = self.project / "out" / "Main.mp4"
+        self.make_movie(movie)
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        asset = self.project / "public" / "audio.wav"
+        asset.parent.mkdir()
+        asset.write_bytes(b"synthetic new audio")
+        os.utime(asset, (movie.stat().st_mtime + 1, movie.stat().st_mtime + 1))
+        with self.assertRaises(video_engines.EngineError) as reason:
+            self.resolve()
+        self.assertEqual(reason.exception.code, "movieStale")
+
     def test_reuse_needs_listing_so_missing_deps_reports_recovery(self):
         self.make_movie(self.project / "out" / "Main.mp4")
         # 没有 node_modules/.bin/remotion：列出合成的第一步就给出安装依赖的恢复信息
@@ -489,7 +478,8 @@ class RenderTests(EngineEnvMixin):
         self.assertEqual(render_argv[1], str((self.project / "src" / "index.tsx").resolve()))
         self.assertEqual(render_argv[2], "Main")
         self.assertEqual(render_argv[4:], ["--codec=h264", "--overwrite=false"])
-        self.assertTrue(render_argv[3].startswith(str(self.review / ".render")))
+        self.assertTrue(Path(render_argv[3]).is_absolute())
+        self.assertEqual(Path(render_argv[3]).parent.parent, self.review.resolve() / ".render")
         self.assertEqual(entries[1]["cwd"], str(self.project.resolve()))
 
     def test_render_failure_reports_recovery_and_retry_continues_same_review(self):
@@ -711,6 +701,16 @@ class SourceProjectLinkTests(EngineEnvMixin):
         self.assertEqual(sp["differences"], [])
         self.assertEqual(sp["candidates"], [])
         self.assertIn("linkedAt", sp)
+
+    def test_explicit_reuse_marks_the_project_as_reviewer_confirmed(self):
+        project = self.copy_fixture("remotion")
+        movie = project / "out" / "Main.mp4"
+        self.arm_render(project, "remotion", self.make_movie(movie))
+        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
+        out = self.root / "review"
+        self.build_from_project(project, out, reuse_movie=movie)
+        source = json.loads((out / "review.json").read_text())["video"]["sourceProject"]
+        self.assertEqual((source["status"], source["match"]), ("linked", "confirmed"))
 
     def test_hyperframes_rendered_v1_links_verified_scene_entry(self):
         project = self.copy_fixture("hyperframes")

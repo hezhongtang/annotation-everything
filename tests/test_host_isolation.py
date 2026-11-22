@@ -517,6 +517,14 @@ class ModuleRequirementTests(TemporaryLockDirTestCase):
 
     def test_sensitive_modules_are_declared_and_exist(self):
         self.assertEqual(hi.resources_for_module("tests.test_review_stop"), ("host-state",))
+        for module in (
+            "tests.test_video_compare_relocate",
+            "tests.test_video_handoff",
+            "tests.test_video_receipt",
+            "tests.test_video_review_rework",
+            "tests.test_video_server",
+        ):
+            self.assertEqual(hi.resources_for_module(module), ("host-state",), module)
         for name in hi.MODULE_RESOURCES:
             path = ROOT / (name.replace(".", "/") + ".py")
             self.assertTrue(path.is_file(), "敏感清单里的模块不存在：%s" % name)
