@@ -941,9 +941,25 @@ class ReviewStopTests(unittest.TestCase):
             code, _, stopped = retry.result()
             self.assertEqual((code, stopped["state"]), (200, "stopped"), stopped)
 
+        desktop.start_hold = threading.Event()
         restarted, _ = self.start_server(target)
+
+        def stop_restarted_target():
+            # The recovered analysis hook needs the desktop until its delivery and cancellation finish.
+            desktop.start_hold.set()
+            code, _, result = self.request(restarted, "POST", save_path, {**page, "closing": True}, target_rid)
+            self.assertEqual(code, 200, result)
+            stopped = self.cli("serve.py", "stop", target_rid, "--timeout", "3")
+            self.assertEqual(stopped.returncode, 0, stopped.stdout + stopped.stderr)
+            self.assertEqual(json.loads(stopped.stdout)["components"]["hooks"]["workers"], [])
+
+        self.addCleanup(stop_restarted_target)
         code, _, doc = self.request(restarted, "GET", "/api/notes", rid=target_rid)
         self.assertEqual((code, [note["text"] for note in doc["notes"]]), (200, [annotation["text"]]))
+        self.assertTrue(
+            self.wait_until(lambda: sum(r["method"] == "thread-follower-start-turn" for r in desktop.requests) == 2),
+            "the restart should dispatch the pending analysis again",
+        )
 
     @unittest.skipUnless(_HAS_UNIX_DESKTOP_IPC, "Unix domain socket desktop IPC is POSIX-only")
     def test_concurrent_stops_share_a_single_cancellation(self):
