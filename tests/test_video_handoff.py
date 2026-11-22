@@ -353,6 +353,8 @@ class ClaimPayloadTests(VideoHandoffBase):
         self.assertIn("n1", text)
         self.assertIn("n2", text)
         self.assertNotIn("这次不交", text, "未选中的批注不进 wait 输出")
+        self.assertIn("notes.py video-receipt", text)
+        self.assertNotIn("notes.py resolve", text)
         self.assertIn(str(self.root / "project"), text)
         self.assertIn("Main", text)
 
