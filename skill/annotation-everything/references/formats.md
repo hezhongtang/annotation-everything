@@ -85,7 +85,7 @@ python3 $S/build_viewer.py --report 合同.docx --out 合同-review --name "采�
 
 `review.json` 里 `format` 为 `{"report": "docx", "version": 1}`。版本高于当前安装能处理的版本时，`--rebuild`、`serve.py` 和 `notes.py` 都会明确报错，不按普通文本读取。旧审阅没有 `format` 字段，仍按逐页 HTML 处理。
 
-## 视频 MP4（首版只批成片）
+## 视频 MP4 与成片版本
 
 `--report` 直接接受本地 `.mp4`（不接受讲稿输入）：
 
@@ -98,22 +98,24 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 - `review.json` 写 `format: {"report": "video", "version": 1}` 与 `video.currentVersionId` / `versions[]`。版本高于当前安装能处理的版本时，各入口明确报错。
 - 视频批注的兼容 `page` 固定为 1；真实位置在 `notes.json` 的 `video` 字段（见下文）。尚未关联源工程时，对照页说明先批成片，改源提交要等后续关联 Remotion / HyperFrames 工程。
 - 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
-- 源工程关联是改源提交的前提：审阅人在对照页「关联源工程」，提供引擎（`remotion` / `hyperframes`）、本机工程根与 composition / scene 入口，可选提供工程侧成片特征（帧数、时长、fps、宽、高）。特征与登记版本完全一致时直接绑定（`match: verified`）；有差异、只有文件名或列出多个候选时停在待确认（`status: pending`），页面给出差异对照（原片 ↔ 工程）与候选清单，审阅人确认后才绑定（`match: confirmed`）。仅文件名相同不构成匹配依据。关联记录在 `review.json` 的 `video.sourceProject`，原批注始终指向原成片版本，关联与确认都不改 `notes.json`。服务端点：`GET/POST /api/video/source-project`、`POST /api/video/source-project/confirm`（写要求同源 Origin 与 JSON Content-Type）。此处记录手工填写的关联依据。从工程目录开始审阅时，使用下文的引擎探测流程。
-- 选择性提交：视频审阅的「交给 Agent」弹窗默认全选、可取消部分；提交带 `noteIds`（所选批注 id，按勾选顺序）与 `submitId`（这一次提交操作的幂等键）。批次快照只固定所选批注并记 `selected: true`；未选中的保持未处理，留待以后提交。等待接收期间重试同一 `submitId` 合并进原批次并刷新快照、附言与选项；批次已被领取或收尾后重试同一 `submitId` 原样返回该批次，不新增批次、不改写范围。文档审阅不带 `noteIds`，沿用整批提交。视频审阅未绑定源工程时服务拒绝提交（`video-source-required`），批注与勾选保留。服务声明 `selective-handoff` 与 `video-source` 特性；旧服务不支持时页面保留勾选并提示所缺能力。
+- 先批 MP4 时，在「关联源工程」填写引擎、本机工程根目录和入口。服务静态读取源文件和已有成片。HyperFrames 的静态入口和工程内的候选成片都唯一、成片与登记版本 SHA-256 相同、媒体参数相符，而且成片至少与工程源码和素材一样新时，可直接关联（`match=verified`）。
+- 有多个入口或证据不足时，页面列出找到的候选及可比对的差异。审阅人选择并确认后记为 `match=confirmed`。Remotion 后绑时由审阅人确认入口。动态生成的合成可先在工程环境运行 `video_engines.py inspect PROJECT` 核对。关联保存在 `review.json` 的 `video.sourceProject`，原批注可继续回看原版。接口为 `GET/POST /api/video/source-project` 与 `POST /api/video/source-project/confirm`。
+- 视频首次提交时，弹窗默认勾选可提交的批注。每次提交都带显式的 `noteIds` 和唯一的操作标识 `submitId`。服务需要已确认的源工程和有效的接收会话绑定。页面会说明缺少的条件，并保留勾选。
+- 提交时固定所选批注的原话、位置、版本证据、既有复核记录、工程入口和批次附言。同一 `submitId` 重试会返回原批次。另一次显式提交可交付其他批注，仍在途的条目须先完成当前批次。服务通过 `video-handoff-snapshot` 声明支持这份快照。旧服务仍可按原约定办理文档批次。
 - 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕，及已有的 `videoReview` 历史）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本），并带 `video` 公开版本清单。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。
 - 多版本成片、原批注回执与人工验收门禁（#195）：
   - `notes.py video-receipt 审阅目录 [--seq N] [--review-id ID] [--receipt 文件|-] [--movie 新成片.mp4] [--receipt-id ID] [--render-error 原因] [--summary 说明] [--no-finish] [--by 角色] [--json]` 在原批注下写回本轮回执。新成片在台账元数据锁内先经 0600 临时文件落盘并校验（恒定帧率、单视频轨、有效宽高与时长）再原子移入 `media/v{N}.mp4`，追加进 `review.json` 的 `video.versions[]` 并更新 `currentVersionId` 与清除 `lastFailure`（绝不覆盖已有 `V1` 或泄露本机路径）；渲染失败或新成片不可播放时在 `video.lastFailure` / `video.failures[]` 记账并保留上一有效版本。同批次同一 `(seq, receiptId)` 幂等重放不重复登记版本或历史。
-  - 原批注的 `video` 定位保持不可变，回执写进 `videoReview`（不进 `EDITABLE`，通用 `PATCH /api/notes/<id>` 与导入不得篡改）：`fixed` / `deleted` 带合法 `target`（`frame` / `range` / `cut`，均按对应成片总帧数严格校界）与 `summary` 时记 `status = "drafted"`、`videoReview.state = "pending_review"`；缺目标证据时保留 `open` 与 `missing_evidence`；`question` / `needs_relocate` / `failed` 保持 `open` 并分别记录 `needs_reply`（含提问）、`needs_relocate`（含原因）或 `failed`（含失败原因）。支持 `--no-finish` 分次交回局部结果，未交回完时批次留待补交或结束；每轮结果追加至 `videoReview.history[]`。
-  - 严禁 Agent 越权通过：`handoff_done`（含 `--final`）绝不把视频初改标为 `resolved`；Agent 调用 `resolve` 或 `review --ok/--revise` 一律拒绝（`video-manual-approval-required`）。页面人工通过（`PATCH /api/notes/<id>` / `POST /api/handoff/finalize` / `finalize-all`）前均校 `review_readiness`（须 `pending_review`、带改动说明、合法版本内 `target` 且对应版本媒体可读），不完备批注在 UI 隐藏通过按钮并在服务端拒绝或于 `finalize-all` 列为 `unready` 跳过。服务声明 `video-receipt` 特性并在 `GET /api/notes` 带公开 `video` 清单供对照页热更新版本切换与失败横幅。
+  - 原定位保存在 `video`，每轮回执追加到 `videoReview.history[]`。`fixed` 和 `deleted` 要进入 `pending_review`，须提供本批成功登记的改后版本、改动说明，以及该版本范围内的目标位置。删除镜头需要带前后文的 `cut`。分次交回时可用 `--no-finish` 留下已登记版本，随后用同一批次补交其余结果。缺目标、提问、待定位和渲染失败分别显示为 `missing_evidence`、`needs_reply`、`needs_relocate` 和 `failed`。
+  - 接收会话通过 `video-receipt` 交回证据。视频通过由页面的复核操作写入。服务核对批次、改动说明、新位置及登记媒体，并对照审阅人打开时的证据修订。单条或成组通过前，浏览器还要成功解码原片和新版。重复请求可重试，失效证据须重新打开后确认。旧服务缺少必要能力时页面保留输入。
 - 前后对照、删镜剪口与人工重定位（#196）：
   - 对照页提供并排的原版 / 改后独立 `<video>` 对照舞台（`video-compare` 特性）：按各自登记版本的 `timebase`（`num/den`）与 `fps` 换算帧与半开区间，画面意见各自停到对应帧并叠加对应 `mark`，时序/声音意见可分别点击播放各自不静音（`muted = false`）的区间且互不抢音轨，删除镜头（`outcome: "deleted"`，`target.kind: "cut"`）展示删除说明与剪口并按显式或有界上下文窗口播放新版上下文，同时保留原片可回看。
   - 审阅人可在未定稿条目的对照舞台或卡片打开人工重定位（`POST /api/notes/<id>/video-relocate`，声明 `video-relocate` 特性；沿用 Host、同源 `Origin`、JSON `Content-Type`、`X-AE-Review` 与停审门禁）：从 `needs_relocate`、`missing_evidence`、`pending_review` 或已有未补全位置的新版条目补齐或校正 `versionId`、`target`（严格校界，越界/未登记版本拒绝）与可选 `summary`/`reason`，将此前位置/原因归档进 `videoReview.relocatedFrom` 并追加 `videoReview.history[]` 与 `trail`（不改原 `video` 与正文，后续 `video-receipt` 也不抹除重定位追溯）；缺改动说明时仍保持 `missing_evidence`，不能进入可验收。
 - 人工逐条 / 选择性批量通过、退回与原 ID 下再交（#197）：
-  - 服务声明 `video-decisions` 特性并提供 `POST /api/notes/<id>/video-decision`（沿用 Host、同源 `Origin`、JSON `Content-Type`、`X-AE-Review` 与停审门禁），接受白名单字段 `{action: "approve"|"return"|"reply", reason?, reply?, expectedBatch?, expectedVersion?}`：
-    - `approve`：仅对审阅人（`by == "page"`）且通过 `review_readiness` 的条目开放；写入 `status = "resolved"`、`videoReview.state = "approved"`、`decision = "approved"`、`decisionBatch`、`decidedAt`、`decidedBy`，追加 `decision` 历史与 `accepted` 痕迹并同步归属批次统计。
+  - 服务声明 `video-decisions`，页面使用 `POST /api/notes/<id>/video-decision` 发出 `approve`、`return` 或 `reply`。请求可以带 `expectedBatch`、`expectedVersion`。单条通过还要带与页面所见 `videoReview.evidenceRevision` 对应的 `expectedEvidence`。没有修订标识的旧回执使用 `legacy`。新回执或位置校正会更新修订标识。
+    - `approve` 将符合条件的条目标为 `approved`，记录决定者、时间、批次和历史，同时更新批次统计。
     - `return`（必填非空 `reason`）：仅保存在原批注与 `notes.json`（设 `status = "open"`、`videoReview.state = "returned"`、`decision = "returned"`、`returnReason`、`decisionBatch`、`decidedAt`、`decidedBy`，清 `draft*`/`resolved*` 与在途占用并写入历史与 `returned` 痕迹），**绝不自动创建待处理批次**。
     - `reply`（必填非空 `reply`，且非 `drafted`/`pending_review`）：在原批注保存 `reply`、`repliedAt`、`repliedBy`、`decision = "replied"`、`decisionBatch` 与 `replied` 痕迹，同样不自动提交。
-  - 页面选择性批量通过：仅勾选显式纳入且仍满足 `review_readiness` 的 `pending_review` 条目送往 `POST /api/handoff/finalize-all`；同批其余未勾选 `pending_review` 保持 `drafted`，非完备条目（`needs_reply` / `needs_relocate` / `returned` / `failed` / `missing_evidence`）严禁通过并展示排除原因；若在选定与确认之间状态变化，只定稿仍就绪项并如实返回 `skipped`。非视频审阅保持整批不可分割语义不变。
+  - `POST /api/handoff/finalize-all` 接收明确勾选的批次、批注 ID 和 `evidence` 映射（每个 ID 对应所见修订）。服务只通过仍就绪且修订匹配的条目。返回的 `skipped` 列出已变更或缺证据的项，供审阅人重新打开。文档审阅沿用整批定稿。
   - 选择性重交与防陈旧 / 防改写：返工交接弹窗若已有往轮回执则默认空选、提供「只选退回项」与状态标签，使只选退回条目的新批次仅在 `claim` / `wait` / `show --batch` 交付所选批注及上轮 `videoReview` 上下文（不混入已通过或未提交的答复条目）。重复确认、`approve` 后重放、`set_status("open")` 或陈旧回执（已 `approved` 一律拒绝 `note-already-decided`，已 `returned`/`replied` 于第 `k` 批则拒绝同批或更早批次 `<= k` 的陈旧回执 `stale-receipt`）均不能覆盖已记录的人工决定；新提交的第 `m > k` 返工批次在同一批注 ID 下交回 V3 回执时，保留完整 V1→V2→V3 历史。
 
 ## 从源工程直接开始（Remotion / HyperFrames）
@@ -126,8 +128,8 @@ python3 $S/video_engines.py inspect 源工程目录        # 只读巡检：引�
 ```
 
 - **AE 根据工程文件识别引擎。列出 Remotion 合成时会运行工程本地 CLI 并加载入口。**Remotion：`package.json` 依赖含 `remotion`（或工程内有 `node_modules/.bin/remotion`），入口取 `remotion.config.ts` 的 `setEntryPoint`，否则按 `src/index.tsx/.ts/.jsx/.js` 顺序；合成清单由工程内 `node_modules/.bin/remotion compositions <入口>` 列出，支持带表头的列表和 Remotion 4 的 `ID FPS 宽x高 帧数 (秒数)` 格式。HyperFrames：依赖含 `hyperframes`（或有对应 bin），候选为工程根与一层子目录的 HTML（排除 `node_modules` 与隐藏目录），帧率优先取 `<html data-fps>`，其次取带 `data-composition-id` 的元素，均未声明时按 30 fps 处理，宽高与时长以实际渲染结果为准。两种引擎标志同时出现时明确报错。入口或 composition 路径解析后越出工程一律拒绝。
-- **复用只认可证明匹配的成片，不认文件名**：Remotion 要求探测出的宽高、fps、帧数与合成声明一致；HyperFrames 静态只能核对 fps。成片比 `package.json`、入口 / 配置、所选 composition HTML 的新鲜度基准旧视为陈旧。恰好一个新匹配时自动复用（构建警告注明出处）；多个匹配、陈旧或 HyperFrames 只到 fps 证据时需要人工确认：`--reuse-movie <路径>` 确认复用，`--no-reuse` 跳过复用直接渲染。复用的成片同样按上文规则登记 V1。
-- **直接入口写入源工程关联（#193 契约）**：从工程构建成功即把引擎证据写进 `review.json` 的 `video.sourceProject`（经 `video_source.link`，`by=build`）：合成声明特征（Remotion 为宽高、fps、帧数；HyperFrames 为声明的 fps）与登记 V1 完全一致时自动 `linked` / `match=verified`，可立即交改；渲染结果与声明有差异时写入 `pending` 并保留 `differences` 逐字段证据，审阅人在页面按 `/api/video/source-project/confirm` 确认后才满足交改所需的 `video-source-required`。`--rebuild` 保留关联。多候选合成仍须先用 `--video-composition` 选定才能构建（没有成片无法登记 V1），`video_engines.py inspect` 输出候选证据供选择。MP4 先批后绑不写关联，继续走上文的页面关联与确认流程。
+- Remotion 自动复用要求已有成片与所选合成的宽、高、帧率和总帧数一致，工程内只有一个合成符合这些条件，且候选成片唯一、至少与工程源码和静态素材一样新。多个合成规格相同、成片陈旧、候选重复，或 HyperFrames 只有帧率可比对时，先查看 `video_engines.py inspect` 给出的候选及差异。`--reuse-movie PATH` 确认所看的成片，`--no-reuse` 要求重新渲染。
+- 工程入口构建成功后，清单的 `video.sourceProject` 记录引擎、所选入口与 V1 的对应关系。工程渲染或自动复用的成片与入口声明相符时记为 `match=verified`。显式使用 `--reuse-movie` 确认的成片记为 `match=confirmed`。声明与实际成片有差异时先保留 `pending`，在页面查看差异后确认。可用 `--video-composition` 指定巡检发现的合成。
 - **渲染在工程环境调用其引擎**：cwd 为工程根，`shell=False` 固定 argv——Remotion `render <入口> <合成ID> <输出> --codec=h264 --overwrite=false`，HyperFrames `render . --format mp4 -o <输出> -c <composition HTML>`；只用工程内 `node_modules/.bin`，缺失时明确报错并提示先在工程内安装依赖，AE 不安装依赖、不联网、不隐式 `npx`。输出写入审阅目录 `.render/` 暂存（新路径预先检查不存在），登记 V1 后删除。超时由 `--render-timeout` 控制（默认 1800 秒，也可用环境变量 `AE_VIDEO_RENDER_TIMEOUT`），超时终止整个进程组。渲染产物仍须通过 MP4 探测（恒定帧率、单视频轨），否则明确拒绝。
 - **失败给可执行的恢复信息**：引擎退出码与 stderr 摘录、缺依赖时的安装提示、超时的重试建议都在错误里；修复后重新运行同一命令即可继续同一审阅（失败尝试不写 `review.json`）。已登记 V1 的审阅再用工程目录进入会明确拒绝，重建用 `--rebuild`。
 - 单元测试用 `tests/fixtures/video/` 的合成工程骨架与假引擎命令验证 argv、路径边界、超时与失败恢复。真实渲染所用的两个工程由仓库里的 `fixtures/video/make_demos.py` 生成。

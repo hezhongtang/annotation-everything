@@ -46,3 +46,9 @@ The two projects ran from the installed skill on macOS 26.7.3 (arm64). Each had 
 | HyperFrames | `04fe7099aabe` | `e74c3d1f6011` | `d6ded61de09d` |
 
 Local evidence for this run is under `skill/annotation-everything-workspace/video-191-20261122/`. The indexes `remotion/measurements/summary.json` and `hyperframes/acceptance-summary.json` identify source snapshots, registered media, decoded frames, two-second WAV excerpts and receipts. Each project's `v2-browser.json` and `v3-browser.json` record the actual browser observations. Regenerate the fixtures for a new run.
+
+### Second run after review fixes
+
+Two fresh projects and review directories repeated the workflow. Remotion rendered V1 with a relative `--out review` from outside the source project and automatically reused the one movie matching `Demo` on the next build. In the HyperFrames review, five annotations were saved against an MP4 outside the project. The reviewer confirmed the entry shown by the page before handoff. In both projects the second batch contained only the original music annotation, `mwrolddh0p04bx` for Remotion and `mwromhlrmrbs9s` for HyperFrames. Both V3 annotations stayed pending review. The frame counts, decoded pictures, and audio levels reproduced the results above.
+
+Local evidence for the second run is under `skill/annotation-everything-workspace/video-191-final-20261122/`. Each engine’s `v2-browser.json` and `v3-browser.json` record playback times, decoded audio byte counts, and the original annotation history. A separate copy of the Remotion review exercised approval on the updated page. Chrome read the original cut and V3, and the service recorded approval against the displayed evidence revision. That result is in `remotion/copy-final-decode-approval.json`.
