@@ -7,8 +7,10 @@ import hashlib
 import json
 import os
 import struct
+import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -156,6 +158,92 @@ class VideoBuildTests(unittest.TestCase):
         (unknown / "media" / "v1.mp4").write_bytes(self.media)
         with self.assertRaises(build_viewer.BuildError):
             build_viewer.build(self.source, None, unknown, no_scan_skills=True)
+
+    def test_registration_retry_removes_abandoned_copy_and_preserves_media(self):
+        worker = textwrap.dedent("""
+            import os, sys
+            from pathlib import Path
+            sys.path.insert(0, sys.argv[1])
+            import video_review
+
+            review, source, stage = Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
+            if stage == "copy":
+                os.fsync = lambda fd: os._exit(73)
+            else:
+                publish = os.link
+                def stop_after_publish(source, destination):
+                    publish(source, destination)
+                    os._exit(73)
+                os.link = stop_after_publish
+            video_review.register_version(review, source, batch=1, by="agent", receipt_id="retry",
+                                          await_receipt=stage == "receipt")
+        """)
+        for interruption in ("copy", "publish", "receipt"):
+            with self.subTest(interruption=interruption):
+                review = self.root / interruption
+                build_viewer.build(self.source, None, review, no_scan_skills=True)
+                media = review / "media"
+                v1 = media / "v1.mp4"
+                v1_inode = v1.stat().st_ino
+                revision = media / ".v2-original.tmp"
+                revision.write_bytes(synthetic_mp4(frames=192))
+                revision.chmod(0o600)
+                other = media / "personal.tmp"
+                other.write_text("synthetic local file")
+                result = subprocess.run(
+                    [sys.executable, "-c", worker, str(SCRIPTS), str(review), str(revision), interruption],
+                    capture_output=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 73, result.stderr)
+                abandoned = set(media.glob("*.tmp")) - {revision, other}
+                self.assertEqual(len(abandoned), 1)
+
+                if interruption == "receipt":
+                    pending = json.loads((review / ".video-registration.json").read_text())
+                    video_review.finish_receipt_version(review, pending, accepted=True)
+                    version = json.loads((review / "review.json").read_text())["video"]["versions"][-1]
+                else:
+                    version = video_review.register_version(review, revision, batch=1, by="agent", receipt_id="retry")
+                self.assertEqual(version["versionId"], "V2")
+                self.assertEqual([file for file in abandoned if file.exists()], [])
+                self.assertEqual((v1.stat().st_ino, v1.read_bytes()), (v1_inode, self.media))
+                self.assertEqual((media / "v2.mp4").read_bytes(), revision.read_bytes())
+                self.assertEqual(revision.read_bytes(), synthetic_mp4(frames=192))
+                self.assertEqual(other.read_text(), "synthetic local file")
+
+    def test_concurrent_registration_preserves_the_active_copy(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        import ledger
+
+        self.build()
+        staged, contender = threading.Event(), threading.Event()
+        link, open_file = os.link, os.open
+
+        def wait_at_publication(source, target):
+            if Path(target).name == "v2.mp4":
+                staged.set()
+                self.assertTrue(contender.wait(5), "第二次登记未到达元数据锁")
+            return link(source, target)
+
+        def observe_lock(path, *args, **kwargs):
+            if staged.is_set() and Path(path).name == ledger.METADATA_LOCK_FILE:
+                contender.set()
+            return open_file(path, *args, **kwargs)
+
+        movies = [self.root / f"revision-{frames}.mp4" for frames in (192, 204)]
+        for path, frames in zip(movies, (192, 204)):
+            path.write_bytes(synthetic_mp4(frames=frames))
+        with patch.object(os, "link", wait_at_publication), patch.object(os, "open", observe_lock):
+            with ThreadPoolExecutor(max_workers=2) as workers:
+                first = workers.submit(video_review.register_version, self.out, movies[0], batch=1, by="agent")
+                self.assertTrue(staged.wait(5))
+                second = workers.submit(video_review.register_version, self.out, movies[1], batch=2, by="agent")
+                self.assertEqual([first.result()["versionId"], second.result()["versionId"]], ["V2", "V3"])
+        for version, source in zip(("v2", "v3"), movies):
+            self.assertEqual((self.out / "media" / f"{version}.mp4").read_bytes(), source.read_bytes())
 
     def test_rebuild_uses_registered_copy_and_does_not_remap_notes(self):
         self.build()

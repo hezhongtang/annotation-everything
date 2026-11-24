@@ -28,6 +28,7 @@ import ledger  # noqa: E402
 
 FORMAT_VERSION = 1
 VERSION_ID = re.compile(r"^V[1-9][0-9]*$")
+STAGED_MP4 = re.compile(r"\.v([1-9][0-9]*)-[a-z0-9_]{8}\.tmp")
 CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts"}
 MAX_BOX_DEPTH = 32
 RECEIPT_TARGET_KINDS = ("frame", "range", "cut")
@@ -400,6 +401,38 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _remove_abandoned_staging(review_dir: Path, video: dict, source: Path | None = None) -> None:
+    """只在登记方持有元数据写锁时调用。识别 mkstemp 的私有副本，保留源文件和已登记路径。"""
+    media = review_dir / "media"
+    try:
+        directory = media.lstat()
+    except FileNotFoundError:
+        return
+    if fsutil._is_reparse_or_symlink(directory):
+        raise MediaError("directorySymlink")
+    registered = {
+        v["path"] for v in video.get("versions", []) if isinstance(v, dict) and isinstance(v.get("path"), str)
+    }
+    original = Path(source).resolve() if source is not None else None
+    copying = str(_next_version_number(video)) if original is not None else None
+    for path in media.glob(".v*-*.tmp"):
+        match = STAGED_MP4.fullmatch(path.name)
+        if not match or f"media/{path.name}" in registered:
+            continue
+        try:
+            fsutil.check_private_regular_file(path, max_bytes=None)
+        except (FileNotFoundError, ValueError):
+            continue
+        if path.resolve() == original:
+            continue
+        if match[1] != copying:
+            # 恢复回执或处理旧版时，仅移除与发布副本同一 inode 的临时链接。
+            published = media / f"v{match[1]}.mp4"
+            if not published.is_file() or not path.samefile(published):
+                continue
+        path.unlink(missing_ok=True)
+
+
 def _stage_and_probe_mp4(
     source: Path, review_dir: Path, version_num: int, before_publish: Callable | None = None
 ) -> dict[str, Any]:
@@ -503,6 +536,7 @@ def prepare(
     journal = review_dir / ".video-first-build.json"
     identity = origin or {"source": str(source.resolve())}
     with ledger.metadata_lock(review_dir, exclusive=True):
+        _remove_abandoned_staging(review_dir, {}, source)
         if journal.is_file() and (review_dir / "media" / "v1.mp4").exists():
             try:
                 saved = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
@@ -553,6 +587,7 @@ def register_version(
     with ledger.metadata_lock(review_dir, exclusive=True):
         manifest_path, manifest = _read_video_manifest(review_dir, review_id=review_id)
         video = manifest["video"]
+        _remove_abandoned_staging(review_dir, video, source_mp4)
         if rid_key:
             for item in video["versions"]:
                 if isinstance(item, dict) and item.get("batch") == batch and item.get("receiptId") == rid_key:
@@ -618,6 +653,7 @@ def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool | 
             raise VideoError("暂存的视频版本已改变")
         manifest_path, manifest = _read_video_manifest(review_dir, review_id=pending["reviewId"])
         video = manifest["video"]
+        _remove_abandoned_staging(review_dir, video)
         if failure := pending.get("failure"):
             if accepted and failure not in video.get("failures", []):
                 _append_failure(video, failure)

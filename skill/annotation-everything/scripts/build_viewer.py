@@ -932,17 +932,6 @@ def _reject_unc_path(path: Path | None) -> None:
         raise BuildError(f"Unsupported UNC or device path: {path}")
 
 
-def _remove_render_staging(path: Path) -> None:
-    """V1 已登记（或登记失败）后清掉引擎渲染暂存；清不掉只警告，不阻塞审阅。"""
-    try:
-        path.unlink()
-        path.parent.rmdir()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        print(f"warning: cannot remove render staging {path}: {exc}", file=sys.stderr)
-
-
 def build(
     report: Path,
     script: Path | None,
@@ -1035,14 +1024,14 @@ def build(
         engine_result = resolved
         movie_for_v1 = resolved["source"]
         engine_cleanup = resolved.get("cleanup")
-        video_default_title = str(resolved["composition"]["id"])
-        for warning in resolved.get("warnings", []):
-            assets.warn(warning)
     if movie_for_v1 is not None:
         try:
             try:
                 origin = None
                 if engine_result:
+                    video_default_title = str(engine_result["composition"]["id"])
+                    for warning in engine_result.get("warnings", []):
+                        assets.warn(warning)
                     origin = {
                         "root": engine_result["root"],
                         "entry": engine_result["entry"],
@@ -1059,7 +1048,7 @@ def build(
                 )
             finally:
                 if engine_cleanup is not None:
-                    _remove_render_staging(engine_cleanup)
+                    video_engines.remove_render_staging(engine_cleanup)
         except video_review.MediaError as exc:
             raise BuildError(
                 diag(locale_choice, "build.video.error", path=report, reason=exc.localized(locale_choice))

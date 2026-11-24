@@ -1,6 +1,7 @@
 """通过生成器 CLI 与工程探测、PCM 文件验证可重复使用的双引擎验收材料。"""
 
 import math
+import os
 from pathlib import Path
 import re
 import struct
@@ -14,7 +15,8 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / "fixtures" / "video" / "make_demos.py"
 sys.path.insert(0, str(ROOT / "skill" / "annotation-everything" / "scripts"))
-import video_engines
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-video-demo-home-")
+import video_engines  # noqa: E402
 
 
 class VideoDemoTests(unittest.TestCase):

@@ -19,7 +19,7 @@ from pathlib import Path
 TESTS = Path(__file__).resolve().parent
 
 # 这些模块在导入或调用时会写审阅台账（build_viewer.register_review、ledger.register 等）
-LEDGER_MODULES = {"build_viewer", "serve", "ledger", "review_overview", "review_stop"}
+LEDGER_MODULES = {"build_viewer", "serve", "ledger", "review_overview", "review_stop", "video_engines"}
 
 
 def _imports_ledger(node: ast.AST) -> bool:
@@ -58,7 +58,12 @@ def _missing_ae_home(tree: ast.Module) -> bool:
 
 class LedgerIsolationContractTests(unittest.TestCase):
     def test_function_local_import_requires_unconditional_module_assignment(self):
-        for statement in ("import build_viewer", "from build_viewer import main"):
+        for statement in (
+            "import build_viewer",
+            "from build_viewer import main",
+            "import video_engines",
+            "from video_engines import resolve_source",
+        ):
             with self.subTest(statement=statement):
                 source = f"def build_page():\n    {statement}\n"
                 setdefault = 'os.environ.setdefault("AE_HOME", "temporary")\n'

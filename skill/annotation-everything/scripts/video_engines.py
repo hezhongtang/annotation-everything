@@ -31,6 +31,7 @@ ENGINE_REMOTION = "remotion"
 ENGINE_HYPERFRAMES = "hyperframes"
 ENGINE_NAMES = {ENGINE_REMOTION: "Remotion", ENGINE_HYPERFRAMES: "HyperFrames"}
 DEFAULT_RENDER_TIMEOUT = 1800.0
+MAX_RENDER_TIMEOUT = 2_147_483  # poll 的有符号 32 位毫秒值能表示的最大整秒数。
 LISTING_TIMEOUT_CAP = 180.0
 RENDER_TIMEOUT_ENV = "AE_VIDEO_RENDER_TIMEOUT"
 FPS_TOLERANCE = 0.01
@@ -598,27 +599,35 @@ def _private_evidence_directory(directory, *, create):
     import fsutil
     import ledger
 
-    if create:
-        ledger._ensure_home()
-        directory.mkdir(mode=0o700, exist_ok=True)
-    info = directory.lstat()
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or fsutil._is_reparse_or_symlink(info)
-        or not fsutil.is_windows()
-        and (info.st_uid != os.getuid() or info.st_mode & 0o077)
-    ):
-        raise EngineError("stagingExists", str(directory))
+    try:
+        if create:
+            ledger._ensure_home()
+            directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.lstat()
+    except OSError as exc:
+        if not create and isinstance(exc, FileNotFoundError):
+            return False
+        raise EngineError("renderEvidenceDirectory", f"{directory}: {exc}") from exc
+    if not stat.S_ISDIR(info.st_mode) or fsutil._is_reparse_or_symlink(info):
+        raise EngineError("renderEvidenceDirectory", str(directory))
+    if fsutil.is_windows():
+        private = fsutil._win_same_owner(directory)
+    else:
+        private = info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700
+    if not private:
+        raise EngineError("renderEvidenceDirectory", str(directory))
+    return True
 
 
 def known_render(info, chosen, source_hash: str | None, movie_sha256: str) -> bool:
     if source_hash is None:
         return False
     path, evidence = _render_evidence(info, chosen, source_hash, movie_sha256)
+    if not _private_evidence_directory(path.parent, create=False):
+        return False
     try:
         import fsutil
 
-        _private_evidence_directory(path.parent, create=False)
         return json.loads(fsutil.read_private_text(path, max_bytes=32 * 1024)) == evidence
     except (OSError, ValueError):
         return False
@@ -678,7 +687,7 @@ def _kill_tree(proc: subprocess.Popen) -> None:
                 timeout=10,
                 check=False,
             )
-        except OSError:
+        except (OSError, subprocess.TimeoutExpired):
             pass
         try:
             proc.kill()
@@ -693,7 +702,7 @@ def _run(argv: list[str], cwd: Path, timeout: float, timeout_code: str) -> tuple
         kwargs["start_new_session"] = True
     elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         args,
         cwd=str(cwd),
         shell=False,
@@ -701,31 +710,34 @@ def _run(argv: list[str], cwd: Path, timeout: float, timeout_code: str) -> tuple
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         **kwargs,
-    )
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _kill_tree(proc)
+    ) as proc:
         try:
-            out, err = proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            out, err = b"", b""
-        raise EngineError(timeout_code, f"timeout={timeout}s argv={' '.join(args)}") from None
-    return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+            out, err = proc.communicate(timeout=timeout)
+        except BaseException as exc:
+            _kill_tree(proc)
+            proc.wait()
+            if isinstance(exc, subprocess.TimeoutExpired):
+                raise EngineError(timeout_code, f"timeout={timeout}s argv={' '.join(args)}") from None
+            raise
+        if proc.returncode:
+            # 引擎可能先报错退出，后台辅助进程仍在本次进程组内。
+            _kill_tree(proc)
+        return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
 def _resolve_timeout(render_timeout: float | None) -> float:
+    bounds = f"0 < seconds <= {MAX_RENDER_TIMEOUT}"
     if render_timeout is None:
         raw = os.environ.get(RENDER_TIMEOUT_ENV, "").strip()
         if raw:
             try:
                 render_timeout = float(raw)
             except ValueError as exc:
-                raise EngineError("badTimeout", f"{RENDER_TIMEOUT_ENV}={raw}") from exc
+                raise EngineError("badTimeout", f"{RENDER_TIMEOUT_ENV}={raw} ({bounds})") from exc
     if render_timeout is None:
         render_timeout = DEFAULT_RENDER_TIMEOUT
-    if render_timeout <= 0:
-        raise EngineError("badTimeout", str(render_timeout))
+    if not 0 < render_timeout <= MAX_RENDER_TIMEOUT:
+        raise EngineError("badTimeout", f"{render_timeout} ({bounds})")
     return render_timeout
 
 
@@ -832,19 +844,32 @@ def resolve_source(
             "\n".join(f"{m['path']} {_describe(m, locale)}" for m in matching),
         )
 
-    result = _render(info, chosen, review_dir, timeout, locale, warnings)
-    if source_hash is not None and source_hash == source_fingerprint(info, staging_dir=staging_dir):
-        import fsutil
+    if not info["bin"].is_file():
+        raise EngineError("depsMissing", str(info["bin"]))
+    if staging_dir.is_symlink():
+        raise EngineError("stagingExists", str(staging_dir))
+    staging_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(dir=staging_dir)) / "v1.mp4"
+    try:
+        result = _render(info, chosen, staging, timeout, locale, warnings)
+        if source_hash is not None and source_hash == source_fingerprint(info, staging_dir=staging_dir):
+            import fsutil
 
-        record, evidence = _render_evidence(info, chosen, source_hash, result["movieSha256"])
-        _private_evidence_directory(record.parent, create=True)
-        if record.exists() or record.is_symlink():
-            fsutil.check_private_regular_file(record, max_bytes=32 * 1024)
-        fsutil.atomic_write(record, json.dumps(evidence) + "\n", prefix=".render-")
-        result["sourceFingerprint"] = source_hash
-    else:
-        result["sourceChanged"] = True
-    return result
+            record, evidence = _render_evidence(info, chosen, source_hash, result["movieSha256"])
+            _private_evidence_directory(record.parent, create=True)
+            try:
+                if record.exists() or record.is_symlink():
+                    fsutil.check_private_regular_file(record, max_bytes=32 * 1024)
+                fsutil.atomic_write(record, json.dumps(evidence) + "\n", prefix=".render-")
+            except (OSError, ValueError) as exc:
+                raise EngineError("renderEvidenceWrite", f"{record}: {exc}") from exc
+            result["sourceFingerprint"] = source_hash
+        else:
+            result["sourceChanged"] = True
+        return result
+    except BaseException:
+        remove_render_staging(staging)
+        raise
 
 
 def _describe(movie: dict[str, Any], locale: str | None) -> str:
@@ -854,7 +879,7 @@ def _describe(movie: dict[str, Any], locale: str | None) -> str:
 def _render(
     info: dict[str, Any],
     chosen: dict[str, Any],
-    review_dir: Path,
+    staging: Path,
     timeout: float,
     locale: str | None,
     warnings: list[str],
@@ -863,31 +888,16 @@ def _render(
 
     engine: str = info["engine"]
     bin_path: Path = info["bin"]
-    if not bin_path.is_file():
-        raise EngineError("depsMissing", str(bin_path))
-    staging_dir = Path(review_dir).resolve() / ".render"
-    if staging_dir.is_symlink():
-        raise EngineError("stagingExists", str(staging_dir))
-    staging_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(dir=staging_dir)) / "v1.mp4"
+    argv = render_argv(engine, bin_path, info.get("entry") or info["root"], chosen["id"], staging)
+    code, _out, err = _run(argv, cwd=info["root"], timeout=timeout, timeout_code="renderTimeout")
+    if code != 0:
+        raise EngineError("renderFailed", f"exit={code} {_tail(err)}")
+    if staging.is_symlink() or not staging.is_file():
+        raise EngineError("renderNoOutput", str(staging))
     try:
-        argv = render_argv(engine, bin_path, info.get("entry") or info["root"], chosen["id"], staging)
-        code, _out, err = _run(argv, cwd=info["root"], timeout=timeout, timeout_code="renderTimeout")
-        if code != 0:
-            raise EngineError("renderFailed", f"exit={code} {_tail(err)}")
-        if staging.is_symlink() or not staging.is_file():
-            raise EngineError("renderNoOutput", str(staging))
-        try:
-            meta = video_review.probe(staging, with_digest=True)
-        except video_review.MediaError as exc:
-            raise EngineError("renderInvalid", exc.localized(locale)) from exc
-    except BaseException:
-        _unlink(staging)
-        try:
-            staging.parent.rmdir()
-        except OSError:
-            pass
-        raise
+        meta = video_review.probe(staging, with_digest=True)
+    except video_review.MediaError as exc:
+        raise EngineError("renderInvalid", exc.localized(locale)) from exc
     if engine == ENGINE_REMOTION and not _matches(meta, chosen):
         warnings.append(
             _text(
@@ -917,13 +927,14 @@ def _render(
     }
 
 
-def _unlink(path: Path) -> None:
+def remove_render_staging(path: Path) -> None:
+    """清理本次渲染独占的临时目录，其他并发渲染各有自己的目录。"""
     try:
-        path.unlink()
+        shutil.rmtree(path.parent)
     except FileNotFoundError:
         pass
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"warning: cannot remove render staging {path}: {exc}", file=sys.stderr)
 
 
 # ── 只读巡检与 CLI ──────────────────────────────────────────────────────────

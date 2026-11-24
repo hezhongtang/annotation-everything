@@ -18,6 +18,11 @@ MUST_IGNORE = (
     "material/table.tsv",
     "material/report.wps",
     "material/report.ofd",
+    "material/cut.mp4",
+    "material/cut.mov",
+    "material/cut.webm",
+    "material/cut.mkv",
+    "project/node_modules/example/index.js",
     "work/review/notes.json",
     "work/review/analysis/a1/events.jsonl",
     "work/review/analysis/counter.json",
@@ -52,11 +57,13 @@ MUST_KEEP = (
 
 def ignored(path: str) -> bool:
     result = subprocess.run(
-        ["git", "-C", str(ROOT), "check-ignore", "-q", "--no-index", path], capture_output=True, text=True
+        ["git", "-C", str(ROOT), "check-ignore", "-v", "--no-index", path], capture_output=True, text=True
     )
     if result.returncode not in (0, 1):
         raise AssertionError(result.stderr)
-    return result.returncode == 0
+    # 个人全局忽略规则也可能匹配视频和 node_modules，契约只接受仓库自己的规则。
+    rule = result.stdout.partition("\t")[0]
+    return rule.startswith(".gitignore:") and not rule.split(":", 2)[2].startswith("!")
 
 
 class GitignoreTests(unittest.TestCase):
