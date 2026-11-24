@@ -1484,7 +1484,7 @@ class Handler(BaseHTTPRequestHandler):
                     "handoff": self._handoff_state(full=False),
                     "merged": merged,
                     "seq": item["seq"],
-                    "status": item["status"],
+                    **({"status": item["status"]} if submit_id is not None else {}),
                     "acceptedFullCheck": item["fullCheck"],
                 },
             )
