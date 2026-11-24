@@ -3076,15 +3076,19 @@ def _saved_video_evidence(notes: list[dict], video: dict) -> Iterator[dict]:
 
 def _find_receipt_batch(items: list[dict], notes: list[dict], video: dict, seq: int | None, receipt_id: str) -> dict:
     """先从批次回执、旧版逐条记录和成片登记辨认原操作，再为新操作选择领取中的批次。"""
-    recorded = [item.get("seq") for item in items if _find_receipt_replay(item, receipt_id)]
+    recorded = [
+        (item.get("seq"), receipt.get("versionId"))
+        for item in items
+        if (receipt := _find_receipt_replay(item, receipt_id))
+    ]
     recorded.extend(
-        entry.get("batch")
+        (entry.get("batch"), entry.get("versionId"))
         for entry in _saved_video_evidence(notes, video)
         if isinstance(entry, dict) and entry.get("receiptId") == receipt_id
     )
     owners = set()
     unattributed = False
-    for batch in recorded:
+    for batch, _ in recorded:
         if isinstance(batch, int) and not isinstance(batch, bool) and batch > 0:
             owners.add(batch)
         else:
@@ -3103,7 +3107,16 @@ def _find_receipt_batch(items: list[dict], notes: list[dict], video: dict, seq: 
             code="receipt-batch-mismatch",
             batches=batches,
         )
-    return _find_claimed_batch(items, seq)
+    item = _find_claimed_batch(items, seq)
+    versions = {version for batch, version in recorded if batch == item["seq"] and isinstance(version, str)}
+    for version in video["versions"]:
+        if version.get("playbackFailure") and version["versionId"] in versions:
+            raise HandoffError(
+                f"本回执对应的成片 {version['versionId']} 解码失败，请换用新的 --receipt-id 补交修好的成片。",
+                code="receipt-decode-failed",
+                version=version["versionId"],
+            )
+    return item
 
 
 def _validate_receipt_note(note: dict[str, Any], nid: str, item: dict[str, Any], n_seq: int) -> None:
@@ -3446,14 +3459,14 @@ def _sync_decode_failures(review_dir: Path, pending: list[dict], doc: dict, ndoc
             item["videoFailure"] = failure
             stage = _stage_entry(item, "draft")
             drafted = [n["id"] for n in ndoc["notes"] if n.get("status") == "drafted" and n.get("draftBatch") == seq]
-            if _can_resume_video_repair(review_dir, item):
+            if not item.get("videoRepairRelease") and _can_resume_video_repair(review_dir, item):
                 item["status"] = "claimed"
                 for k in ("doneAt", "doneBy"):
                     stage.pop(k, None)
             elif drafted:
                 item["status"] = "drafted"
             else:
-                # 旧批次无法证明原接收方时，失败项留在原处供审阅人明确勾选重交。
+                # 已放弃本批补交或无法确认旧领取人时，审阅人可另选失败项提交。
                 _finish(item, ndoc["notes"], doc["items"], "page", "")
             stage["draftedIds"] = drafted
             item.update(
@@ -3465,6 +3478,42 @@ def _sync_decode_failures(review_dir: Path, pending: list[dict], doc: dict, ndoc
             )
             event = {"op": "video-decode-failed", "by": "page", "seq": seq, "versionId": version_id, "ids": affected}
             _commit_video_pair(review_dir, ndoc, doc, event, {**event, "op": "handoff-video-decode-failed"})
+
+
+def release_video_repair(review_dir: Path, *, seq: int, version_id: str, review_id: str) -> None:
+    """审阅人结束指定失败成片的同批补交。原批注和决定保留，重新提交由页面另行发起。"""
+    with locked(review_dir):
+        manifest = ledger.read_manifest(review_dir)
+        if manifest.get("reviewId") != review_id:
+            raise HandoffError("审阅标识不匹配", code="review-mismatch")
+        if not _is_video_review(manifest):
+            raise HandoffError("只有视频审阅支持放弃成片补交", code="no-video")
+        doc = handoff_load(review_dir)
+        item = _find_batch(doc["items"], seq)
+        if (item.get("videoRepairRelease") or {}).get("versionId") == version_id:
+            return
+        failure = item.get("videoFailure") or {}
+        if item["status"] != "claimed" or failure.get("stage") != "decode" or failure.get("versionId") != version_id:
+            raise HandoffError("这批成片的补交状态已变化，请刷新处理记录。", code="video-repair-changed")
+        notes = load(review_dir)["notes"]
+        failed = [
+            n["id"]
+            for n in notes
+            if (vr := n.get("videoReview"))
+            and vr.get("state") == "failed"
+            and vr.get("batch") == seq
+            and vr.get("failedEvidence")
+        ]
+        now = now_iso()
+        item["videoRepairRelease"] = {"versionId": version_id, "ids": failed, "at": now, "by": "page"}
+        _stage_entry(item, "draft").update(doneAt=now, doneBy="page")
+        if any(n.get("status") == "drafted" and n.get("draftBatch") == seq for n in notes):
+            item["status"] = "drafted"
+        else:
+            _finish(item, notes, doc["items"], "page", "")
+        _handoff_commit(
+            review_dir, doc, {"op": "handoff-video-release-repair", "seq": seq, **item["videoRepairRelease"]}
+        )
 
 
 def _batch_render(manifest: dict, version_id: str, batch: int) -> dict:

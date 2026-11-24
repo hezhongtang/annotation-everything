@@ -111,6 +111,7 @@ FEATURES = [
     "video-evidence-revision",
     "video-feedback-revision",
     "video-decode-feedback",
+    "video-release-repair",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -1353,6 +1354,19 @@ class Handler(BaseHTTPRequestHandler):
                     "handoff": self._handoff_state(full=False),
                 },
             )
+        elif path == "/api/video/release-repair" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            seq, version = body.get("batch"), body.get("versionId")
+            if (
+                not claimed
+                or type(seq) is not int
+                or seq < 1
+                or not isinstance(version, str)
+                or not video_review.VERSION_ID.fullmatch(version)
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.noApi"))
+            store.release_video_repair(d, seq=seq, version_id=version, review_id=claimed)
+            self._json(200, {"handoff": self._handoff_state(full=False), **self._ident()})
         elif path == "/api/video/source-project" and cmd == "GET":
             video = self.server.manifest().get("video")
             self._json(
@@ -3880,6 +3894,7 @@ def check(locale: str | None = None) -> int:
                 ("/api/video/recover", {}),
                 ("/api/video/source-project", {"engine": "remotion", "root": str(tmp), "entry": {"id": "Main"}}),
                 ("/api/video/source-project/confirm", {"proposalRevision": "0" * 64}),
+                ("/api/video/release-repair", {"batch": 1, "versionId": "V1"}),
                 (
                     "/api/video/playback-failure",
                     {"batch": 1, "versionId": "V1", "noteId": "n1", "expectedEvidence": "x", "mediaError": 3},

@@ -1042,7 +1042,8 @@ ${RCSS}
 #vsrc input,#vsrc select{font:inherit}
 #vsrc input[type="text"]{flex:1;min-width:200px}
 #vsrcMediaRow input{width:90px}
-#vsrcState .vs-line{margin:4px 0}
+#vsrcState .vs-line{margin:4px 0;overflow-wrap:anywhere}
+#vsrcState label.vs-line{display:flex;align-items:baseline;gap:.4em}
 #vsrcState .vs-diff{margin:2px 0;color:#c99}
 #handPick .hp-head{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
 #handPick .hp-head button{font:inherit}
@@ -3678,7 +3679,8 @@ function renderBatches(){
     return `<div class="batch ${escH(h.status)}"><div class="bh"><b>${tMsg("viewer.batch.item",{seq:+h.seq})}</b><span class="bs">${escH(batchStatus(h.status))}${by?tMsg("viewer.batch.itemWho",{who:escH(who(by))}):""}</span>`
       +(current?`<span class="bt">${tMsg("viewer.batch.current")}</span>`:"")
       +("resolvedCount" in h?`<span class="bn">${tMsg("viewer.batch.resolved",{n:+h.resolvedCount,
-          extra:(h.leftOpen?tMsg("viewer.batch.resolvedLeft",{n:+h.leftOpen}):"")+(h.live?tMsg("viewer.batch.resolvedLive"):h.estimated?tMsg("viewer.batch.resolvedEstimated"):"")})}</span>`:"")+`</div><div${current?` id="batchCurrentDetail"${currentTaskOpen?"":" hidden"}`:""}>`
+          extra:(h.leftOpen?tMsg("viewer.batch.resolvedLeft",{n:+h.leftOpen}):"")+(h.live?tMsg("viewer.batch.resolvedLive"):h.estimated?tMsg("viewer.batch.resolvedEstimated"):"")})}</span>`:"")+`</div>`
+      +videoRepairControl(h)+`<div${current?` id="batchCurrentDetail"${currentTaskOpen?"":" hidden"}`:""}>`
       +`<div class="bt">${tMsg("viewer.batch.submitted",{at:escH(fmtIso(h.at)),n:+h.openCount||0,
           extra:(Array.isArray(h.pages)&&h.pages.length?tMsg("viewer.batch.submittedPages",{pages:h.pages.map(Number).join(tMsg("viewer.hand.listSep"))}):"")
             +(h.claimedAt?tMsg("viewer.batch.submittedClaim",{at:escH(fmtIso(h.claimedAt))}):"")
@@ -3708,8 +3710,21 @@ function renderBatches(){
       +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>${tMsg("viewer.batch.resolvedList",{count:ids.length})}</summary>${ids.map(id=>{const x=byId.get(id);
         return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${isDone(x)?(x.resolution?`<span class="br">${tMsg("viewer.batch.resolutionNote",{text:escH(clip(x.resolution,100))})}</span>`:""):tMsg("viewer.batch.reopened")}</div>`
           :`<div class="bi">${tMsg("viewer.batch.deleted")}</div>`}).join("")}</details>`:"")+`</div></div>`}).join(""):`<p class="empty">${tMsg("viewer.batch.empty")}</p>`}
+function videoRepairControl(batch){
+  if(!VIDEO)return "";
+  const record=batch.videoRepairRelease;
+  if(record)return `<div class="bt">${escH(tMsg("viewer.batch.repairReleased",{version:record.versionId,at:fmtIso(record.at)}))}</div>`;
+  const failure=batch.videoFailure;
+  if(batch.status!=="claimed"||failure?.stage!=="decode"||!serverSupports("video-release-repair"))return "";
+  return `<div class="bact"><button type="button" data-release-repair="${+batch.seq}" data-version="${escH(failure.versionId)}">${escH(tMsg("viewer.batch.releaseRepair",{version:failure.versionId}))}</button></div>`}
 function openBatches(){if(FILE){toast(tMsg("viewer.batch.fileMode"));return}batchOpen=null;$("batchList").innerHTML="";renderBatches();$("batches").classList.add("on");loadBatches()}
 $("batchList").addEventListener("click",e=>{
+  const release=e.target.closest("[data-release-repair]");
+  if(release){
+    const seq=+release.dataset.releaseRepair,version=release.dataset.version;
+    if(confirm(tMsg("viewer.batch.confirmReleaseRepair",{seq,version})))
+      batchAction("/api/video/release-repair",{batch:seq,versionId:version},tMsg("viewer.batch.repairReleasedToast",{seq}));
+    return}
   const rv=e.target.closest("[data-breview]"),fn=e.target.closest("[data-bfinal]");
   if(rv){$("batches").classList.remove("on");openHand({seq:+rv.dataset.breview});return}
   if(fn){finalizeBatch(+fn.dataset.bfinal);return}
@@ -3820,20 +3835,48 @@ function openVsrc(){
   if(srvNoVideoSource){toast(tMsg("viewer.video.sourceHint"),7000);return}
   loadVideoSource();renderVsrc();$("vsrcErr").textContent="";
   $("vsrc").classList.add("on");$("vsrcRoot").focus()}
+function sourceMediaText(media){
+  const unknown=tMsg("viewer.video.source.unknown");
+  return tMsg("viewer.video.source.mediaSummary",{
+    width:media?.width??unknown,height:media?.height??unknown,fps:media?.fps??unknown,frames:media?.frames??unknown})}
+function sourceDifferencesHtml(differences){
+  return (differences||[]).map(d=>{
+    const fieldKey={width:"Width",height:"Height",fps:"Fps",frames:"Frames",duration:"Duration"}[d.field];
+    const field=fieldKey?tMsg("viewer.video.source.field"+fieldKey):d.field;
+    return `<div class="vs-diff">${escH(tMsg("viewer.video.source.diffLine",{field,review:d.review,project:d.project}))}</div>`}).join("")}
 function renderVsrc(){
   const sp=videoSourceInfo,state=$("vsrcState");if(!state)return;
-  $("vsrcConfirm").style.display=sp&&sp.status==="pending"?"":"none";
+  const pending=sp?.status==="pending";
+  $("vsrcConfirm").style.display=pending?"":"none";
   let html="";
   if(sp){
     html+=`<div class="vs-line">${escH(tMsg(sp.status==="pending"?"viewer.video.source.statePending":"viewer.video.source.stateLinked",
       {engine:sp.engine||"",entry:sourceEntryLabel(sp.entry),version:sp.versionId||""}))}</div>`;
     if(sp.root)html+=`<div class="vs-line">${escH(sp.root)}</div>`;
-    (sp.differences||[]).forEach(d=>{html+=`<div class="vs-diff">${escH(tMsg("viewer.video.source.diffLine",
-      {field:d.field,review:String(d.review),project:String(d.project)}))}</div>`});
-    if((sp.candidates||[]).length>1){
+    const line=text=>`<div class="vs-line">${escH(text)}</div>`;
+    if(pending){
+      const comparison=sp.cutComparison;
+      if(comparison){
+        html+=line(tMsg("viewer.video.source.reviewCut",{version:sp.versionId,media:sourceMediaText(comparison.review),
+          duration:comparison.review?.duration??tMsg("viewer.video.source.unknown")}));
+        for(const movie of comparison.movies||[]){
+          html+=line(tMsg("viewer.video.source.projectCut",{name:movie.name,media:sourceMediaText(movie.media),
+            duration:movie.media?.duration??tMsg("viewer.video.source.unknown")}));
+          html+=sourceDifferencesHtml(movie.differences)}}
+      for(const reason of sp.reasons||[]){
+        html+=line(tMsg("viewer.video.source.reason."+reason,{entry:sp.entry?.id||"",fps:comparison?.defaultFps}))}
+      if(!comparison&&!sp.differences?.length&&!sp.candidates?.length)
+        html+=line(tMsg("viewer.video.source.reason.unrecorded"))}
+    if(sp.differences?.length){
+      html+=line(tMsg("viewer.video.source.entryDifferences"))+sourceDifferencesHtml(sp.differences)}
+    if(pending&&(sp.candidates||[]).length>1){
       html+=`<div class="vs-line">${tMsg("viewer.video.source.needChoice")}</div>`;
-      sp.candidates.forEach(c=>{html+=`<label class="vs-line"><input type="radio" name="vsrcChoice" value="${escH(c.id)}">`
-        +`<span>${escH(tMsg("viewer.video.source.candidateLine",{engine:c.engine||"",entry:sourceEntryLabel(c.entry),root:c.root||""}))}</span></label>`})}}
+      sp.candidates.forEach(c=>{
+        let entry=sourceEntryLabel(c.entry);
+        if(sp.reasons?.includes("entryNotListed")&&c.entry?.id===sp.entry?.id)
+          entry=tMsg("viewer.video.source.manualEntry",{entry});
+        html+=`<label class="vs-line"><input type="radio" name="vsrcChoice" value="${escH(c.id)}"> `
+          +`<span>${escH(tMsg("viewer.video.source.candidateLine",{engine:c.engine||"",entry,root:c.root||"",media:sourceMediaText(c.media)}))}</span></label>`})}}
   state.innerHTML=html;
   if(sp&&sp.root&&!$("vsrcRoot").value)$("vsrcRoot").value=sp.root;
   if(sp&&sp.engine)$("vsrcEngine").value=sp.engine==="hyperframes"?"hyperframes":"remotion";

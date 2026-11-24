@@ -127,7 +127,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 - **报告**：一份 HTML 文件，每一页是一个 `<section class="page" data-page="N" data-key="唯一键">` 元素。
 - **讲稿（可选）**：一份 Markdown 文件，中文用 `### 第 N 页｜标题` 分页，每页写明时长、讲法、过渡和可能被问到的问题；英文讲稿写 `### Page N｜Title` 加 `**Duration**` / `**Talking points**` / `**Transition**` / `**Likely questions**`。两种写法可以在同一份讲稿里混用，认哪种写法与界面语言无关：中文界面能审阅英文讲稿，英文界面能审阅中文讲稿，标题和正文按原文保留、不翻译。页头认不出来、页码重复或字段重复时，生成器按当前语言给出行号与期望写法，不把错输入当成空讲稿。
 
-- **视频**。把本地 MP4 交给 Agent，指出要审阅的画面或声音。需要改源时，在对照页关联工程和合成入口。已有源工程时，把工程目录传给 `--report`，用 `--out` 指定独立的审阅目录。[试用两个合成工程](fixtures/video/README.md)。
+- **视频**。把本地 MP4 交给 Agent，指出要审阅的画面或声音。需要改源时，在对照页比较原片与工程成片，核对候选入口后确认关联。`notes.py show` 和 `wait` 会指明改稿的源工程和入口。已有源工程时，把工程目录传给 `--report`，用 `--out` 指定独立的审阅目录。[试用两个合成工程](fixtures/video/README.md)。
 
 视频审阅写入中断后，在对照页底部状态栏选择**恢复视频审阅**。已停止的审阅需先重新启动。恢复操作会发布已提交的改动，并将解码失败同步到批注与批次。成对提交记录损坏或来自其他审阅时，页面会说明原因，供审阅人确认保留原始记录并以已保存的批注继续。原件留在审阅目录中。复制带待恢复记录的目录前，请先恢复原审阅。旧版对照页可用 `build_viewer.py --rebuild REVIEW --no-scan-skills` 重建后刷新。
 
@@ -143,7 +143,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 | `verify.py plan` / `run` / `report` | 仓库根目录的统一验证入口：`plan` 解释将执行哪些组与命令，不启动测试（`plan --phase development` 还给出当前改动选测建议与回退原因）；`run` 执行并把结构化记录和原始日志写进 `.verify/`（已忽略），默认影子模式记录选测建议与完整检查的对照，并把当前仍有效的通过证据跨阶段引用给后续阶段（`--no-reuse` 强制全部重跑）；`report` 只读记录并展示证据链。组有 `unit`（完整单元）、`unit-related`（显式指定的相关单元，自动附带 `tests/test_i18n_catalog_contract.py` 的全局词典一致性契约）、`browser`（完整浏览器）、`serve-check`（服务安全自检）、`lint`（锁定 `ruff==0.17.5` 的全仓只读静态与格式检查；复现命令 `python3 verify.py _lint-runner` 依次执行 `ruff check .` 和 `ruff format --check .`，任一项失败返回 `1`）、`all`（按 `unit` → `serve-check` → `browser` 顺序执行）。字段契约见 [docs/verify/record-contract.md](docs/verify/record-contract.md)，选测策略见 [docs/verify/selection-strategy.md](docs/verify/selection-strategy.md) |
 | `build_viewer.py --report … [--script …] --out 审阅目录` | 从 HTML、DOCX、PPTX、本地 MP4 或单引擎视频工程生成对照页，文档可附讲稿。`--rebuild 审阅目录` 按上次记录的参数重新生成；`--locale auto`、`zh-CN` 或 `en` 设定界面语言，省略时新审阅保持中文，重建沿用已保存的选择 |
 | `video_engines.py inspect PROJECT` / `build_viewer.py --report PROJECT --video-composition ENTRY --out REVIEW` | 列出可用合成，从选定入口开始审阅。`--reuse-movie PATH` 确认已有成片，`--no-reuse` 要求重新渲染 |
-| `notes.py video-receipt REVIEW --seq N --review-id ID --receipt-id KEY --receipt FILE --movie CUT.mp4` | 登记新成片，按原批注交回处理结果。渲染失败时用 `--render-error REASON` 记录原因 |
+| `notes.py video-receipt REVIEW --seq N --review-id ID --receipt-id KEY --receipt FILE --movie CUT.mp4` | 登记新成片，按原批注交回处理结果。未收到回执响应时，用原标识重试。补交修好的成片时换用新标识。渲染失败时用 `--render-error REASON` 记录原因 |
 | `docx_edit.py apply 审阅目录 --batch N` / `replace 审阅目录 --paragraph N --from 原文 --to 新文` | 回写 DOCX 快捷修改／自由批注的单条替换；`--id ID` 可重复选择批注，`--dry-run` 预演，`--output 新路径` 另存；默认备份后原地写入，不自动处理批注状态 |
 | `pptx_edit.py apply 审阅目录 --batch N` / `ops 审阅目录 --ops 操作文件` | 按幻灯片定位回写 PPTX 文本与备注快捷修改，或用 JSON 操作文件下发白名单内的元素几何与样式修改；`--id ID` 选择批注，`--dry-run` 预演，`--output 新路径` 另存；整组预检、0600 快照、原子替换，只读结构明确拒绝 |
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |

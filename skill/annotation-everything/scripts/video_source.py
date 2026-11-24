@@ -141,23 +141,46 @@ def _source_project(video: dict[str, Any]) -> dict[str, Any]:
     return sp
 
 
-def _verified_project_cut(info: dict[str, Any], entry: dict[str, Any], version: dict[str, Any]) -> bool:
+def _compare_project_cuts(
+    info: dict[str, Any], entry: dict[str, Any], version: dict[str, Any]
+) -> tuple[dict[str, Any], list[str]]:
     movies = video_engines.scan_movies(info["root"])
-    if len(movies) != 1:
-        return False
+    cuts = [
+        {
+            "name": movie["path"].relative_to(info["root"]).as_posix(),
+            "media": _clean_media(movie["meta"]),
+            "differences": _differences(version, movie["meta"]),
+        }
+        for movie in movies
+    ]
+    comparison = {"review": _clean_media(version), "movies": cuts}
+    reasons = []
+    if not movies:
+        return comparison, ["noMovie"]
+    if len(movies) > 1:
+        reasons.append("multipleMovies")
+    if any(not cut["media"] for cut in cuts):
+        reasons.append("unreadableMovie")
+    if any(cut["differences"] for cut in cuts):
+        reasons.append("mediaMismatch")
+    if reasons:
+        return comparison, reasons
     movie = movies[0]
-    if not movie["meta"] or _differences(version, movie["meta"]):
-        return False
     source_time = max((video_engines._mtime(p) for p in video_engines.freshness_sources(info)), default=0.0)
     if movie["mtime"] < source_time:
-        return False
+        return comparison, ["staleMovie"]
     try:
         digest = video_review.file_digest(movie["path"])
-        if digest != version["sha256"]:
-            return False
-        return video_engines.known_render(info, entry, video_engines.source_fingerprint(info), digest)
+    except OSError:
+        return comparison, ["unreadableMovie"]
+    if digest != version["sha256"]:
+        return comparison, ["contentMismatch"]
+    try:
+        if video_engines.known_render(info, entry, video_engines.source_fingerprint(info), digest):
+            return comparison, []
     except (OSError, video_engines.EngineError):
-        return False
+        pass
+    return comparison, ["missingReceipt"]
 
 
 def link(
@@ -248,7 +271,7 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
                     ("height", "height"),
                     ("frames", "durationInFrames"),
                 ):
-                    value = re.search(r"\b" + attr + r"\s*=\s*\{(\d+(?:\.\d+)?)\}", tag[0])
+                    value = re.search(r"\b" + attr + r"\s*=\s*\{\s*(\d+(?:\.\d+)?)\s*\}", tag[0])
                     if value:
                         comp[name] = float(value[1])
                 declarations.append(comp)
@@ -257,11 +280,22 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
             "engine": engine,
             "root": str(root),
             "entry": {"kind": entry["kind"], "id": comp["id"]},
-            "media": {k: comp[k] for k in MEDIA_FIELDS if comp.get(k) is not None},
+            "media": {
+                k: comp[k]
+                for k in MEDIA_FIELDS
+                if comp.get(k) is not None and (k != "fps" or comp.get("fpsDeclared", True))
+            },
         }
         for comp in declarations
     ]
-    if len(discovered) > 1:
+    selected = next((c for c in discovered if c["entry"]["id"] == entry["id"]), None)
+    if discovered and not selected:
+        # 静态清单可能遗漏动态合成。把手填项与可见入口分开，确认时由审阅人明确选择。
+        payload["candidates"] = [
+            *discovered,
+            {"engine": engine, "root": str(root), "entry": entry, "media": payload.get("media")},
+        ]
+    elif len(discovered) > 1:
         payload["candidates"] = discovered
     elif payload.get("candidates"):
         provided = [_clean_candidate(raw, i) for i, raw in enumerate(payload["candidates"])]
@@ -269,21 +303,25 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
             raise SourceError("candidate")
         payload["candidates"] = provided
     version = video_review.registered_version({"video": video}, video["currentVersionId"])
-    selected = next((c for c in discovered if c["entry"]["id"] == entry["id"]), None)
     declared = selected["media"] if selected else {}
     if not payload.get("media") and declared:
         payload["media"] = declared
-    verified = bool(
-        len(discovered) == 1
-        and selected
-        and not _differences(version, declared)
-        and _verified_project_cut(info, entry, version)
-    )
+    comparison, reasons = _compare_project_cuts(info, entry, version)
+    if not selected:
+        reasons.append("entryNotListed")
+    if engine == "hyperframes" and "fps" not in declared:
+        fallback = video_engines.HYPERFRAMES_DEFAULT_FPS
+        if _differences(version, {"fps": fallback}):
+            reasons.append("defaultFpsMismatch")
+            comparison["defaultFps"] = fallback
+    verified = bool(len(discovered) == 1 and selected and not _differences(version, declared) and not reasons)
     updated = link(video, **payload, verified_source=verified)
     sp = updated["sourceProject"]
     if sp.get("match") == "verified":
         sp["basis"].update(kind="sha256", sha256=version["sha256"])
     else:
+        sp["cutComparison"] = comparison
+        sp["reasons"] = reasons
         for diff in _differences(version, declared):
             if diff not in sp["differences"]:
                 sp["differences"].append(diff)
@@ -348,6 +386,8 @@ def public(video: dict[str, Any]) -> dict[str, Any] | None:
         "basis",
         "differences",
         "candidates",
+        "cutComparison",
+        "reasons",
         "linkedAt",
         "proposedAt",
         "confirmedAt",

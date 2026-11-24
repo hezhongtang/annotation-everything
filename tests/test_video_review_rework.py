@@ -699,6 +699,49 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             store.video_decode_failed(self.review, **req)
         self.assertEqual(self._note("n2")["videoReview"]["versionId"], "V3")
 
+    def test_a_later_playback_failure_does_not_reopen_a_released_batch(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        store.handoff_claim(self.review, seq=1)
+        for nid, version, finish in (("n1", "V2", False), ("n3", "V3", True)):
+            store.video_receipt(
+                self.review,
+                seq=1,
+                receipt_id=version,
+                movie=self._movie(self.v2_bytes, version + ".mp4"),
+                finish=finish,
+                receipt=[{"noteId": nid, "outcome": "fixed", "summary": "重做画面", "target": {"frame": 12}}],
+            )
+
+        def report(nid, version):
+            store.video_decode_failed(
+                self.review,
+                note_id=nid,
+                version_id=version,
+                seq=1,
+                review_id=self.rid,
+                expected_evidence=self._note(nid)["videoReview"]["evidenceRevision"],
+                reason="MediaError 3",
+            )
+
+        report("n3", "V3")
+        with self.assertRaises(store.HandoffError):
+            store.release_video_repair(self.review, seq=1, version_id="V2", review_id=self.rid)
+        store.release_video_repair(self.review, seq=1, version_id="V3", review_id=self.rid)
+        self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "drafted")
+        self.assertEqual(self._note("n1")["videoReview"]["state"], "pending_review")
+        store.handoff_submit(self.review, note_ids=["n3"])
+        store.handoff_claim(self.review, seq=2)
+        before = store.handoff_load(self.review)["items"][1]
+        report("n1", "V2")
+        state = store.handoff_state(self.review)
+        self.assertEqual(state["history"][1]["status"], "done")
+        self.assertEqual(state["inFlightIds"], ["n3"])
+        self.assertEqual(self._note("n1")["videoReview"]["state"], "failed")
+        with self.assertRaises(store.HandoffError):
+            store.video_receipt(self.review, seq=1, receipt_id="late", movie=self.v1_path)
+        store.release_video_repair(self.review, seq=1, version_id="V3", review_id=self.rid)
+        self.assertEqual(store.handoff_load(self.review)["items"][1], before)
+
     def test_approval_requires_the_evidence_revision_selected_by_the_reviewer(self):
         self._deliver_v2_mixed_batch()
         stale = "older-location"
@@ -1440,6 +1483,50 @@ class VideoPageReworkUITests(unittest.TestCase):
                 },
             ],
         }
+
+    def test_history_offers_release_only_for_decode_repairs_and_requires_confirmation(self):
+        setup = """
+        let VIDEO=true,supported=true,accepted=false,click,currentTaskSeq=null,currentTaskOpen=false,batchOpen=null;
+        const notes=[],posts=[],prompts=[],serverSupports=feature=>supported&&feature==="video-release-repair";
+        const fmtIso=x=>x||"",batchStatus=x=>x,handUserMessage=()=>"";
+        const hand={history:[]}, batch={seq:2,status:"claimed",videoFailure:{stage:"decode",versionId:"V5"}};
+        const render=h=>{hand.history=[h];renderBatches();return $("batchList").innerHTML};
+        const confirm=message=>{prompts.push(message);return accepted};
+        const batchAction=(path,body)=>posts.push({path,body});
+        $("batchList").querySelector=()=>null;
+        $("batchList").addEventListener=(_,cb)=>{click=cb};
+        """
+        expression = """
+        const visible=render(batch);
+        const target={closest:selector=>selector==="[data-release-repair]"?{dataset:{releaseRepair:"2",version:"V5"}}:null};
+        click({target});const cancelled=posts.length;accepted=true;click({target});
+        const closed=render({...batch,status:"done",videoRepairRelease:{versionId:"V5",ids:["x"],at:"10:00",by:"page"}});
+        const normal=render({...batch,videoFailure:undefined});
+        supported=false;const old=render(batch);supported=true;VIDEO=false;const document=render(batch);
+        return {visible,closed,normal,old,document,cancelled,posts,prompts};
+        """
+        for lang, release, recorded in (
+            ("zh-CN", "放弃本批补交", "已放弃"),
+            ("en", "End repair", "ended"),
+        ):
+            result = interaction_program(
+                [("function renderBatches(){", '$("handMsg").addEventListener("keydown"')],
+                setup,
+                expression,
+                locale=lang,
+            )
+            self.assertIn(release, result["visible"])
+            self.assertIn('data-release-repair="2"', result["visible"])
+            self.assertIn('data-version="V5"', result["visible"])
+            self.assertEqual(result["cancelled"], 0)
+            self.assertEqual(
+                result["posts"], [{"path": "/api/video/release-repair", "body": {"batch": 2, "versionId": "V5"}}]
+            )
+            self.assertTrue(all("V5" in message and "2" in message for message in result["prompts"]))
+            self.assertIn(recorded, result["closed"])
+            self.assertIn("V5", result["closed"])
+            for state in ("closed", "normal", "old", "document"):
+                self.assertNotIn("data-release-repair", result[state])
 
     def test_pure_history_receipt_card_and_note_html_render_decisions_safely(self):
         manifest = self._manifest()

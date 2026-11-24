@@ -80,6 +80,59 @@ def compare_ui(expression):
     )
 
 
+class VideoSourceDialogTests(unittest.TestCase):
+    def test_dialog_displays_the_compared_cuts_reasons_and_candidate_media_before_confirming(self):
+        result = interaction_program(
+            [("function sourceEntryLabel(", "// ---------- 导出 / 导入")],
+            """
+            const VIDEO=true,mode='server',sr={getElementById:$},renderHandSource=()=>{};
+            let srvNoVideoSource=false;
+            for(const name of ['Confirm','Root','Engine','Entry','Frames','Duration','Fps','Width','Height']){
+              const el=$('vsrc'+name);el.style={};el.value='';
+            }
+            const root='/synthetic/project',engine='remotion';
+            const entry=id=>({kind:'composition',id});
+            const review={width:640,height:360,fps:30,frames:180,duration:6};
+            const cut={width:320,height:180,fps:24,frames:72,duration:3};
+            const proposal={status:'pending',engine,root,entry:entry('Typed'),versionId:'V1',proposalRevision:'shown',
+              cutComparison:{review,movies:[{name:'out/demo.mp4',media:cut,differences:[{field:'frames',review:180,project:72}]}]},
+              reasons:['mediaMismatch','entryNotListed'],candidates:[
+                {id:'c1',engine,root,entry:entry('Visible'),media:{width:960,height:540,fps:24,frames:48}},
+                {id:'c2',engine,root,entry:entry('Typed'),media:{height:180}}]};
+            const calls=[],api=async(method,path,body)=>{calls.push({path,body});return {sourceProject:proposal}};
+            const document={querySelector:()=>({value:'c1'})};
+            """,
+            """
+            $('vsrcRoot').value=root;$('vsrcEntry').value='Typed';$('vsrcEngine').value=engine;
+            await $('vsrcLink').onclick();
+            const text=$('vsrcState').innerHTML.replace(/<[^>]*>/g,' ');
+            await $('vsrcConfirm').onclick();
+            return [text,calls.at(-1).body];
+            """,
+        )
+        text, confirm = result
+        for fragment in (
+            "V1",
+            "640 × 360",
+            "180 frames",
+            "out/demo.mp4",
+            "320 × 180",
+            "72 frames",
+            "reviewed 180",
+            "project 72",
+            "960 × 540",
+            "48 frames",
+            "unknown × 180",
+            "unknown fps",
+            "unknown frames",
+            "inspect",
+            "video_engines.py",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+        self.assertEqual(confirm, {"choice": "c1", "proposalRevision": "shown"})
+
+
 class VideoCompareEvidenceTests(unittest.TestCase):
     def test_question_without_a_target_keeps_reply_and_displayed_version_during_other_receipt(self):
         result = compare_ui(
