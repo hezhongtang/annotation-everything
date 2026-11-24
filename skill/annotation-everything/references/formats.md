@@ -101,7 +101,9 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 - 媒体只经本机服务读取：`GET /api/video/versions` 与 `GET /api/video/versions/<versionId>` 返回登记元数据（不含私有路径），`GET/HEAD /api/video/<reviewId>/versions/<versionId>/media` 返回该版本字节并支持单个 `Range: bytes=…`。未登记版本、任意 path 参数、跨审阅路径、`..`、绝对路径或 `media/` 内符号链接一律 404；Host、同源 Origin、无 CORS 与「只暴露 index.html 及 /api/*」边界不变。
 - 页面和接收端使用版本元数据中的 `url` 读取成片。升级前保存的无审阅标识媒体链接会返回 404。可重新打开审阅获取新链接，旧版静态页面可用 `--rebuild` 更新。
 - 先批 MP4 时，在「关联源工程」填写引擎、本机工程根目录和入口。对于 Remotion 和 HyperFrames，服务先静态核对入口和候选成片。只有一个可识别的入口和一份候选成片时，服务检查成片的媒体参数、SHA-256 和修改时间，再从本机台账核对该工程、入口、当前源输入和成片的渲染凭据。全部相符后，页面直接关联工程（`match=verified`）。
-- 有多个候选、只有成片副本或缺少渲染凭据时，页面列出找到的入口及可比对的差异。审阅人选择并确认后记为 `match=confirmed`。动态生成的 Remotion 合成可先在工程环境运行 `video_engines.py inspect PROJECT` 核对。关联保存在 `review.json` 的 `video.sourceProject`，原批注可继续回看原版。接口为 `GET/POST /api/video/source-project` 与 `POST /api/video/source-project/confirm`。确认请求须携带所见提议的 `proposalRevision`，服务在提议已更改时返回 409。
+- 待确认时，页面列出原片和工程现存成片的尺寸、帧率、帧数、时长及差异。参数一致时，文件内容不同、成片早于源文件修改、缺少渲染凭据也会要求核对。每个候选入口展示能从声明读到的参数，其余标为「未知」。
+- 填写的 Remotion 入口与静态声明不符时，页面同时列出可见入口和手填项。动态入口可先在工程环境运行 `video_engines.py inspect PROJECT` 核对，再在页面确认。页面按所选入口记为 `match=confirmed`，将关联保存在 `review.json` 的 `video.sourceProject`。原批注可继续回看原版。接口为 `GET/POST /api/video/source-project` 与 `POST /api/video/source-project/confirm`。确认请求携带所见提议的 `proposalRevision`。提议被替换时服务返回 409，审阅人需查看新提议后确认。
+- `notes.py show` 和 `notes.py wait` 的人读输出列出改稿的源工程根目录、引擎和入口，审阅目录内的成片标为复核材料。未绑定工程时，输出提示先关联并确认入口。
 - 视频首次提交时，弹窗默认勾选可提交的批注。每次提交都带显式的 `noteIds` 和唯一的操作标识 `submitId`。服务需要已确认的源工程和有效的接收会话绑定。页面会说明缺少的条件，并保留勾选。
 - 提交时固定所选批注的原话、位置、版本证据、既有复核记录、工程入口和批次附言。同一 `submitId` 重试会返回原批次的 `seq` 和 `status`。页面提示这批是否仍在等待接收、已被领取或已经收尾，即使已有更新的批次也能核对原提交。另一次显式提交可交付其他批注，仍在途的条目须先完成当前批次。服务通过 `video-handoff-snapshot` 声明支持这份快照。旧服务仍可按原约定办理文档批次。
 - 领取负载自含范围：绑定会话 `notes.py claim` 的 JSON 带 `reviewId`、`seq`、`noteIds`、`userMessage`，以及每条批注的 `materials[]`（`noteId`、`text`、可选 `quote`、`video` 定位〔版本、帧或半开区间、时间基准、可选点/框〕、`media`〔相对 URL、审阅内私有路径、SHA-256；本机服务在线时另有绝对 URL〕，及已有的 `videoReview` 历史）；已绑定源工程时另有 `sourceProject`（引擎、工程根、入口、对准的成片版本），并带 `video` 公开版本清单。`notes.py wait` 的人读输出带同样的源工程行，未选中的批注不出现，不需要再读 `show --batch` 才拿到范围。

@@ -933,6 +933,30 @@ class SourceProjectLinkTests(EngineEnvMixin):
     def build_from_project(self, project, out, **kwargs):
         return build_viewer.build(project, None, out, no_scan_skills=True, locale="zh-CN", **kwargs)
 
+    def test_mp4_link_keeps_the_hyperframes_default_rate_check_when_no_fps_is_declared(self):
+        import video_source
+
+        project = self.copy_fixture("hyperframes")
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "index.html").write_text("<html></html>")
+        cut = project / "out" / "cut.mp4"
+        for fps in (30, 24):
+            with self.subTest(fps=fps):
+                self.arm_render(project, "hyperframes", synthetic_mp4(fps=fps))
+                self.build_from_project(project, self.root / f"render-{fps}", no_reuse=True)
+                self.make_movie(cut, fps=fps)
+                review = self.root / f"mp4-{fps}"
+                build_viewer.build(cut, None, review, no_scan_skills=True, locale="en")
+                video = json.loads((review / "review.json").read_text())["video"]
+                proposed = video_source.local_project_link(
+                    video, engine="hyperframes", root=str(project), entry={"id": "index.html"}
+                )["sourceProject"]
+                if fps == 30:
+                    self.assertEqual(proposed["match"], "verified")
+                else:
+                    self.assertEqual(proposed["status"], "pending")
+                    self.assertIn("defaultFpsMismatch", proposed["reasons"])
+
     def test_reused_v1_links_verified_source_project(self):
         project = self.copy_fixture("remotion")
         media = self.make_movie(project / "out" / "Main.mp4")

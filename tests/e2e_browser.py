@@ -10469,6 +10469,16 @@ def video_mp4_rework(page, review, identity, movies):
     page.fill("#vsrcEntry", "index.html")
     linked = video_click_post(page, "#vsrcLink", "/api/video/source-project")
     ok(linked["sourceProject"]["status"] == "pending", "先批 MP4 可保留五条批注，补关联时展示待确认状态")
+    state = page.locator("#vsrcState")
+    state.get_by_text("Reviewed cut V1", exact=False).wait_for()
+    main_label = state.locator("label").filter(has_text="index.html").inner_text()
+    alternate_label = state.locator("label").filter(has_text="compositions/alternate.html").inner_text()
+    ok(
+        "Project cut out/V1.mp4" in state.inner_text()
+        and "640 × 360 px · 30 fps · 180 frames" in main_label
+        and "320 × 180 px · 30 fps · 30 frames" in alternate_label,
+        "确认前可在弹窗核对原片、工程现存成片和每个候选的媒体参数",
+    )
     entries = linked["sourceProject"]["candidates"]
     selected = next(c for c in entries if c["entry"]["id"] == "index.html")
     page.check(f'#vsrc input[name="vsrcChoice"][value="{selected["id"]}"]')

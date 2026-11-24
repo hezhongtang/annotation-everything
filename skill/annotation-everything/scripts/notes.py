@@ -1021,6 +1021,43 @@ def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     return out
 
 
+def _video_source_lines(video: dict[str, Any], t: Any) -> list[str]:
+    source = video_source.agent_brief(video)
+    if source:
+        entry = source.get("entry") or {}
+        guidance = t(
+            "cli.hand.videoSource",
+            engine=source.get("engine"),
+            entry=t("cli.hand.videoSourceEntry", kind=entry.get("kind"), id=entry.get("id")),
+            root=source.get("root"),
+            version=source.get("versionId"),
+        )
+    else:
+        guidance = t("cli.show.video.linkFirst")
+    lines = [guidance]
+    cuts = [
+        cut
+        for cut in video.get("versions") or []
+        if isinstance(cut, dict) and isinstance(cut.get("versionId"), str) and cut["versionId"]
+    ]
+    if cuts:
+        labels = [
+            t("cli.show.video.cutPath", version=cut["versionId"], path=cut["path"])
+            if cut.get("path")
+            else cut["versionId"]
+            for cut in cuts
+        ]
+        lines.append(
+            t(
+                "cli.show.video.versions",
+                current=video.get("currentVersionId") or cuts[-1]["versionId"],
+                count=len(cuts),
+                list=t("cli.hand.itemSep").join(labels),
+            )
+        )
+    return lines
+
+
 def to_markdown(
     doc: dict[str, Any],
     manifest: dict[str, Any],
@@ -1076,11 +1113,16 @@ def to_markdown(
         + t("cli.show.listingAll" if include_resolved else "cli.show.listing", count=len(notes))
         + (t("cli.show.rev", rev=doc["rev"]) if doc.get("rev") is not None else ""),
     ]
-    if not isinstance(manifest.get("video"), dict):
+    video = manifest.get("video")
+    if isinstance(video, dict):
+        head.extend(_video_source_lines(video, t))
+        lf = video_review.public_manifest(manifest).get("lastFailure")
+        if isinstance(lf, dict) and lf.get("reason"):
+            head.append(t("cli.show.video.lastFailure", batch=lf.get("batch") or "—", reason=lf["reason"]))
+    else:
         head.append(_mark_hint(t, lang))
-    if sources:  # 已按 review.json 解析成实际路径（相对审阅目录优先），改稿就改这里列出的文件
         parts = []
-        for kind, path in sources.items():
+        for kind, path in (sources or {}).items():
             if not path:
                 continue
             label = t("cli.show.source.report" if kind == "report" else "cli.show.source.script")
@@ -1089,21 +1131,6 @@ def to_markdown(
             head.append(t("cli.show.sources", list=t("cli.show.sourceSep").join(parts)))
     if always:
         head.append(_always_head(t, lang, always, scope_label))
-    if isinstance(manifest.get("video"), dict):
-        vpub = video_review.public_manifest(manifest)
-        vids = [v["versionId"] for v in vpub.get("versions") or [] if isinstance(v, dict) and v.get("versionId")]
-        if vids:
-            head.append(
-                t(
-                    "cli.show.video.versions",
-                    current=vpub.get("currentVersionId") or vids[-1],
-                    count=len(vids),
-                    list=t("cli.hand.itemSep").join(vids),
-                )
-            )
-        lf = vpub.get("lastFailure")
-        if isinstance(lf, dict) and lf.get("reason"):
-            head.append(t("cli.show.video.lastFailure", batch=lf.get("batch") or "—", reason=lf["reason"]))
     head += handoff_lines(handoff, lang)
     out = ["\n".join(head)]
     last = None
@@ -2860,6 +2887,10 @@ def wait(
                     break
             if deadline is not None and time.monotonic() >= deadline:
                 print(t("cli.hand.timeout", seconds=f"{timeout:g}"))
+                if isinstance((manifest or {}).get("video"), dict):
+                    current = load_manifest(d).get("video")
+                    if isinstance(current, dict):
+                        print("\n".join(_video_source_lines(current, t)))
                 return 3
             time.sleep(max(0.2, interval))
     except KeyboardInterrupt:
@@ -2912,21 +2943,6 @@ def wait(
     submitted = item.get("videoSubmission") or {}
     if submitted:
         manifest = {**manifest, "video": submitted["video"]}
-    source = video_source.agent_brief(manifest.get("video") or {})
-    if source:  # 视频审阅已绑定源工程：改稿对准的引擎、入口与原成片版本一次说清
-        print(
-            t(
-                "cli.hand.videoSource",
-                engine=source.get("engine"),
-                entry=t(
-                    "cli.hand.videoSourceEntry",
-                    kind=(source.get("entry") or {}).get("kind"),
-                    id=(source.get("entry") or {}).get("id"),
-                ),
-                root=source.get("root"),
-                version=source.get("versionId"),
-            )
-        )
     if message := store.handoff_user_message(item):
         print(t("cli.hand.userMessage", message=message))
     video = manifest.get("format", {}).get("report") == "video"

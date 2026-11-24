@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -33,6 +34,7 @@ DEFAULT_RENDER_TIMEOUT = 1800.0
 LISTING_TIMEOUT_CAP = 180.0
 RENDER_TIMEOUT_ENV = "AE_VIDEO_RENDER_TIMEOUT"
 FPS_TOLERANCE = 0.01
+HYPERFRAMES_DEFAULT_FPS = 30.0
 MOVIE_PATTERNS = ("*.mp4", "out/*.mp4")
 MOVIE_CAP = 64
 HTML_CAP = 32
@@ -130,7 +132,7 @@ def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
 
 
 class _RootTagParser(HTMLParser):
-    """记录文档根与第一个合成元素的帧率声明。"""
+    """记录文档根与第一个合成元素的媒体声明。"""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -144,6 +146,21 @@ class _RootTagParser(HTMLParser):
             self.attrs = dict(attrs)
         if self.composition_attrs is None and any(key == "data-composition-id" for key, _ in attrs):
             self.composition_attrs = dict(attrs)
+
+    def media_number(self, name: str) -> float | int | None:
+        key = "data-" + name
+        raw = self.attrs.get(key, (self.composition_attrs or {}).get(key))
+        if not raw:
+            return None
+        try:
+            value = float(raw)
+        except ValueError:
+            return None
+        if not math.isfinite(value) or value <= 0:
+            return None
+        if name in ("width", "height"):
+            return int(value) if value.is_integer() else None
+        return value
 
 
 def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
@@ -174,20 +191,21 @@ def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
             continue
         if parser.tag != "html":
             continue
-        raw_fps = parser.attrs.get("data-fps", (parser.composition_attrs or {}).get("data-fps"))
-        try:
-            fps = float(raw_fps) if raw_fps is not None else None
-        except ValueError:
-            fps = None
-        declared = fps is not None and fps > 0
+        fps = parser.media_number("fps")
+        duration = parser.media_number("duration")
+        frames = fps * duration if fps and duration else None
+        frame_count = round(frames) if frames and math.isfinite(frames) else 0
         compositions.append(
             {
                 "id": path.relative_to(root).as_posix(),
-                "fps": fps if declared else 30.0,
-                "fpsDeclared": declared,
-                "width": None,
-                "height": None,
-                "frames": None,
+                "fps": fps or HYPERFRAMES_DEFAULT_FPS,
+                "fpsDeclared": fps is not None,
+                "duration": duration,
+                "width": parser.media_number("width"),
+                "height": parser.media_number("height"),
+                "frames": frame_count
+                if frame_count and math.isclose(frames, frame_count, rel_tol=0, abs_tol=1e-6)
+                else None,
             }
         )
     return compositions
@@ -381,11 +399,14 @@ def choose_composition(
 
 
 def _composition_line(comp: dict[str, Any]) -> str:
-    if comp.get("width") and comp.get("height"):
+    if "fpsDeclared" not in comp and comp.get("width") and comp.get("height"):
         source = "remotion compositions"
         return f"{comp['id']}  {comp['width']}x{comp['height']}  fps={comp['fps']}  frames={comp['frames']}  ({source})"
     declared = "data-fps" if comp.get("fpsDeclared") else "fallback"
-    return f"{comp['id']}  fps={comp['fps']} ({declared})  width/height/frames: render result"
+    return (
+        f"{comp['id']}  fps={comp['fps']} ({declared})  "
+        f"{comp.get('width') or '?'}x{comp.get('height') or '?'}  frames={comp.get('frames') or '?'}"
+    )
 
 
 # ── 成片扫描、匹配与新鲜度 ──────────────────────────────────────────────────
@@ -589,7 +610,7 @@ def _matches(meta: dict[str, Any], comp: dict[str, Any]) -> bool:
     """复用证据：引擎声明的 fps 必须与探测一致；Remotion 还核对宽高与帧数。"""
     if abs(float(meta["fps"]) - float(comp["fps"])) >= FPS_TOLERANCE:
         return False
-    if comp.get("width") and comp.get("height") and comp.get("frames"):
+    if "fpsDeclared" not in comp and comp.get("width") and comp.get("height") and comp.get("frames"):
         return meta["width"] == comp["width"] and meta["height"] == comp["height"] and meta["frames"] == comp["frames"]
     return True
 

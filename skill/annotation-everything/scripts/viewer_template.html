@@ -1040,7 +1040,8 @@ ${RCSS}
 #vsrc input,#vsrc select{font:inherit}
 #vsrc input[type="text"]{flex:1;min-width:200px}
 #vsrcMediaRow input{width:90px}
-#vsrcState .vs-line{margin:4px 0}
+#vsrcState .vs-line{margin:4px 0;overflow-wrap:anywhere}
+#vsrcState label.vs-line{display:flex;align-items:baseline;gap:.4em}
 #vsrcState .vs-diff{margin:2px 0;color:#c99}
 #handPick .hp-head{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
 #handPick .hp-head button{font:inherit}
@@ -3798,20 +3799,48 @@ function openVsrc(){
   if(srvNoVideoSource){toast(tMsg("viewer.video.sourceHint"),7000);return}
   loadVideoSource();renderVsrc();$("vsrcErr").textContent="";
   $("vsrc").classList.add("on");$("vsrcRoot").focus()}
+function sourceMediaText(media){
+  const unknown=tMsg("viewer.video.source.unknown");
+  return tMsg("viewer.video.source.mediaSummary",{
+    width:media?.width??unknown,height:media?.height??unknown,fps:media?.fps??unknown,frames:media?.frames??unknown})}
+function sourceDifferencesHtml(differences){
+  return (differences||[]).map(d=>{
+    const fieldKey={width:"Width",height:"Height",fps:"Fps",frames:"Frames",duration:"Duration"}[d.field];
+    const field=fieldKey?tMsg("viewer.video.source.field"+fieldKey):d.field;
+    return `<div class="vs-diff">${escH(tMsg("viewer.video.source.diffLine",{field,review:d.review,project:d.project}))}</div>`}).join("")}
 function renderVsrc(){
   const sp=videoSourceInfo,state=$("vsrcState");if(!state)return;
-  $("vsrcConfirm").style.display=sp&&sp.status==="pending"?"":"none";
+  const pending=sp?.status==="pending";
+  $("vsrcConfirm").style.display=pending?"":"none";
   let html="";
   if(sp){
     html+=`<div class="vs-line">${escH(tMsg(sp.status==="pending"?"viewer.video.source.statePending":"viewer.video.source.stateLinked",
       {engine:sp.engine||"",entry:sourceEntryLabel(sp.entry),version:sp.versionId||""}))}</div>`;
     if(sp.root)html+=`<div class="vs-line">${escH(sp.root)}</div>`;
-    (sp.differences||[]).forEach(d=>{html+=`<div class="vs-diff">${escH(tMsg("viewer.video.source.diffLine",
-      {field:d.field,review:String(d.review),project:String(d.project)}))}</div>`});
-    if((sp.candidates||[]).length>1){
+    const line=text=>`<div class="vs-line">${escH(text)}</div>`;
+    if(pending){
+      const comparison=sp.cutComparison;
+      if(comparison){
+        html+=line(tMsg("viewer.video.source.reviewCut",{version:sp.versionId,media:sourceMediaText(comparison.review),
+          duration:comparison.review?.duration??tMsg("viewer.video.source.unknown")}));
+        for(const movie of comparison.movies||[]){
+          html+=line(tMsg("viewer.video.source.projectCut",{name:movie.name,media:sourceMediaText(movie.media),
+            duration:movie.media?.duration??tMsg("viewer.video.source.unknown")}));
+          html+=sourceDifferencesHtml(movie.differences)}}
+      for(const reason of sp.reasons||[]){
+        html+=line(tMsg("viewer.video.source.reason."+reason,{entry:sp.entry?.id||"",fps:comparison?.defaultFps}))}
+      if(!comparison&&!sp.differences?.length&&!sp.candidates?.length)
+        html+=line(tMsg("viewer.video.source.reason.unrecorded"))}
+    if(sp.differences?.length){
+      html+=line(tMsg("viewer.video.source.entryDifferences"))+sourceDifferencesHtml(sp.differences)}
+    if(pending&&(sp.candidates||[]).length>1){
       html+=`<div class="vs-line">${tMsg("viewer.video.source.needChoice")}</div>`;
-      sp.candidates.forEach(c=>{html+=`<label class="vs-line"><input type="radio" name="vsrcChoice" value="${escH(c.id)}">`
-        +`<span>${escH(tMsg("viewer.video.source.candidateLine",{engine:c.engine||"",entry:sourceEntryLabel(c.entry),root:c.root||""}))}</span></label>`})}}
+      sp.candidates.forEach(c=>{
+        let entry=sourceEntryLabel(c.entry);
+        if(sp.reasons?.includes("entryNotListed")&&c.entry?.id===sp.entry?.id)
+          entry=tMsg("viewer.video.source.manualEntry",{entry});
+        html+=`<label class="vs-line"><input type="radio" name="vsrcChoice" value="${escH(c.id)}"> `
+          +`<span>${escH(tMsg("viewer.video.source.candidateLine",{engine:c.engine||"",entry,root:c.root||"",media:sourceMediaText(c.media)}))}</span></label>`})}}
   state.innerHTML=html;
   if(sp&&sp.root&&!$("vsrcRoot").value)$("vsrcRoot").value=sp.root;
   if(sp&&sp.engine)$("vsrcEngine").value=sp.engine==="hyperframes"?"hyperframes":"remotion";
