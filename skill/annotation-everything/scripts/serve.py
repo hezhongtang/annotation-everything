@@ -196,6 +196,7 @@ STATUS_FILE = ledger.STATUS_FILE  # 运行状态文件名只在台账模块定�
 LOG_FILE = "server.log"
 MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
+MAX_RANGE_DIGITS = 20  # 足以表示 64 位文件偏移量
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 NOTE_VIDEO_RELOCATE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-relocate$")
@@ -1171,6 +1172,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._range_reject(size)
                     return
                 first, last = matched.groups()
+                if max(len(first), len(last)) > MAX_RANGE_DIGITS:
+                    self._range_reject(size)
+                    return
                 if not first:
                     suffix = int(last)
                     if suffix <= 0:
@@ -1240,7 +1244,7 @@ class Handler(BaseHTTPRequestHandler):
     def _public_video_extra(self, manifest: dict[str, Any]) -> dict[str, Any]:
         if isinstance(manifest.get("video"), dict):
             try:
-                return {"video": video_review.public_manifest(manifest)}
+                return {"video": video_review.public_manifest(manifest, locale=self.server.locale)}
             except video_review.VideoError:
                 pass
         return {}
@@ -1306,13 +1310,13 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif path == "/api/video/versions" and cmd == "GET":
             try:
-                video = video_review.public_manifest(self.server.manifest())
+                video = video_review.public_manifest(self.server.manifest(), locale=self.server.locale)
             except video_review.VideoError:
                 raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
             self._json(200, {"video": video, **self._ident()})
         elif video_version is not None and cmd == "GET":
             try:
-                video = video_review.public_manifest(self.server.manifest())
+                video = video_review.public_manifest(self.server.manifest(), locale=self.server.locale)
                 version = next(item for item in video["versions"] if item["versionId"] == video_version.group(1))
             except (StopIteration, video_review.VideoError):
                 raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
@@ -1349,7 +1353,7 @@ class Handler(BaseHTTPRequestHandler):
                     "doc": {
                         **self._notes_doc(),
                         **self._ident(),
-                        "video": video_review.public_manifest(self.server.manifest()),
+                        "video": video_review.public_manifest(self.server.manifest(), locale=self.server.locale),
                     },
                     "handoff": self._handoff_state(full=False),
                 },

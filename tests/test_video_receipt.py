@@ -37,7 +37,7 @@ import video_review  # noqa: E402
 import video_source  # noqa: E402
 import wakeup  # noqa: E402
 from tests.test_video_handoff import V1_MEDIA, video_note  # noqa: E402
-from tests.test_video_review import synthetic_mp4  # noqa: E402
+from tests.test_video_review import run_video_cli, synthetic_mp4  # noqa: E402
 
 
 class VideoVersionRegistryTests(unittest.TestCase):
@@ -190,7 +190,7 @@ class VideoVersionRegistryTests(unittest.TestCase):
         self.assertEqual(len(failed_manifest["video"]["failures"]), 1)
         pub = video_review.public_manifest(failed_manifest)
         self.assertEqual(pub["currentVersionId"], "V1")
-        self.assertEqual(pub["lastFailure"]["reason"], "render exited 1")
+        self.assertEqual(pub["lastFailure"]["reason"], "引擎渲染失败")
 
         # 恢复后登记 V2，清除 lastFailure 并保留 failures[] 历史
         v2_file = self.root / "recovered.mp4"
@@ -1125,7 +1125,7 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         try:
             with redirect_stdout(out), redirect_stderr(err):
-                code = notes_cli.main(argv)
+                code = run_video_cli(notes_cli.main, argv)
         finally:
             sys.stdin = old_stdin
             os.environ.clear()
@@ -1702,12 +1702,14 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         store.handoff_claim(self.review, by="shared display name")
         store.video_decode_failed(self.review, **failure)
         other = {"AE_SESSION_ID": "session-b"}
+        previous = notes_cli.i18n.current_locale()
         code, _, error = self.run_cli(
             ["video-receipt", str(self.review), "--seq", "1", "--render-error", "failed", "--locale", "en"],
             env_extra=other,
         )
         self.assertNotEqual(code, 0)
         self.assertIn("original receiver", error)
+        self.assertEqual(notes_cli.i18n.current_locale(), previous)
         code, _, error = self.run_cli(["done", str(self.review), "--seq", "1", "--locale", "en"], env_extra=other)
         self.assertNotEqual(code, 0)
         self.assertIn("original receiver", error)
@@ -1834,6 +1836,7 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         self.assertEqual(code_cross, 1)
 
         # 1) 先报一次渲染失败
+        reason = "renderer could not read /synthetic/private/overlay.png"
         code_fail, fail_out, fail_err = self.run_cli(
             [
                 "video-receipt",
@@ -1843,7 +1846,7 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
                 "--review-id",
                 self.rid,
                 "--render-error",
-                "render exit 1",
+                reason,
                 "--receipt-id",
                 "rcpt-cli-fail",
                 "--by",
@@ -1852,7 +1855,13 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             ]
         )
         self.assertEqual(code_fail, 0, fail_err)
-        self.assertEqual(json.loads(fail_out)["failure"]["reason"], "render exit 1")
+        self.assertEqual(json.loads(fail_out)["failure"]["reason"], reason)
+        code_show, text, err = self.run_cli(["show", str(self.review), "--locale", "en"])
+        self.assertEqual(code_show, 0, err)
+        self.assertIn(reason, text)
+        code_json, report, err = self.run_cli(["show", str(self.review), "--json", "--locale", "en"])
+        self.assertEqual(code_json, 0, err)
+        self.assertEqual(json.loads(report)["video"]["lastFailure"]["reason"], "Engine render failed")
 
         # 2) 恢复后传文件回执 + --no-finish
         v2_file = self.root / "proj" / "out" / "v2.mp4"
@@ -2063,7 +2072,7 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         self.assertEqual(code, 200)
         notes_doc2 = json.loads(notes_body2)
         self.assertEqual(notes_doc2["video"]["currentVersionId"], "V2")
-        self.assertEqual(notes_doc2["video"]["lastFailure"]["reason"], "ffmpeg segfault")
+        self.assertEqual(notes_doc2["video"]["lastFailure"]["reason"], "引擎渲染失败")
 
         # 英文服务下的 HandoffError 响应也返回本地化英文报错与 code
         server_en = serve.ReviewServer(self.review, 0, log_to_file=False, locale="en")

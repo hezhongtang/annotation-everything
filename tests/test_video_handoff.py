@@ -34,7 +34,7 @@ import video_engines  # noqa: E402
 import video_source  # noqa: E402
 import wakeup  # noqa: E402
 
-from tests.test_video_review import synthetic_mp4  # noqa: E402
+from tests.test_video_review import run_video_cli, synthetic_mp4  # noqa: E402
 
 V1_MEDIA = {"duration": 6.0, "fps": 30, "frames": 180, "width": 640, "height": 360}
 
@@ -333,7 +333,7 @@ class VideoSourceCliTests(VideoHandoffBase):
                         args += ["--no-claim", "--timeout", "0.01", "--interval", "0.2"]
                     buf = io.StringIO()
                     with redirect_stdout(buf):
-                        code = notes_cli.main(args)
+                        code = run_video_cli(notes_cli.main, args)
                     self.assertEqual(code, 3 if command == "wait" and not linked else 0)
                     text = buf.getvalue()
                     self.assertNotIn("源文件（改稿改这里）", text)
@@ -366,7 +366,7 @@ class ClaimPayloadTests(VideoHandoffBase):
         try:
             buf = io.StringIO()
             with redirect_stdout(buf):
-                code = notes_cli.main(["claim", str(self.d)])
+                code = run_video_cli(notes_cli.main, ["claim", str(self.d)])
         finally:
             os.environ.clear()
             os.environ.update(env)
@@ -417,7 +417,9 @@ class ClaimPayloadTests(VideoHandoffBase):
         try:
             buf, err = io.StringIO(), io.StringIO()
             with redirect_stdout(buf), redirect_stderr(err):
-                code = notes_cli.main(["wait", str(self.d), "--no-claim", "--timeout", "0", "--locale", "en"])
+                code = run_video_cli(
+                    notes_cli.main, ["wait", str(self.d), "--no-claim", "--timeout", "0", "--locale", "en"]
+                )
         finally:
             os.environ.clear()
             os.environ.update(env)
@@ -428,7 +430,9 @@ class ClaimPayloadTests(VideoHandoffBase):
         rev = store.load(self.d)["rev"]
         store.handoff_submit(self.d, "只交两条", note_ids=["n1", "n2"])
         store.update(self.d, "n1", {"text": "提交后编辑"})
+        previous = notes_cli.i18n.current_locale()
         text = self.wait_text()
+        self.assertEqual(notes_cli.i18n.current_locale(), previous)
         self.assertIn(f". rev {rev}\n", text)
         self.assertNotIn("top-left of the page", text)
         self.assertIn("relative to the actual video picture", text)
@@ -450,7 +454,7 @@ class ClaimPayloadTests(VideoHandoffBase):
 
         with mock.patch.object(Path, "read_text", read_document):
             with redirect_stdout(io.StringIO()):
-                self.assertEqual(notes_cli.main(["show", str(self.d)]), 0)
+                self.assertEqual(run_video_cli(notes_cli.main, ["show", str(self.d)]), 0)
             self.assertIn("n1", self.wait_text())
 
     def test_wait_omits_unrecorded_revision_for_legacy_video_snapshot(self):
@@ -622,6 +626,64 @@ class ServeSourceProjectTests(VideoHandoffBase):
         code, _h, body = self.get("/api/video/source-project")
         self.assertEqual(code, 200)
         self.assertIsNone(json.loads(body)["sourceProject"])
+
+    def test_missing_project_entry_lists_candidates_in_the_page_language(self):
+        project = self.root / "hf"
+        for lang, separator in (("zh-CN", "、"), ("en", ", ")):
+            with self.subTest(lang=lang):
+                self.server.locale = lang
+                code, _, response = self.post(
+                    "/api/video/source-project",
+                    {"engine": "hyperframes", "root": str(project), "entry": {"id": "unknown"}},
+                )
+                self.assertEqual(code, 400)
+                self.assertIn("compositions/scene-b.html" + separator + "index.html", json.loads(response)["error"])
+
+    def test_unreadable_remotion_config_names_the_file_and_other_projects_remain_selectable(self):
+        project = self.root / "project"
+        config = project / "remotion.config.ts"
+        config.write_text("// synthetic project", encoding="utf-16")
+        for lang, instruction in (("en", "save"), ("zh-CN", "保存")):
+            with self.subTest(lang=lang):
+                self.server.locale = lang
+                code, _, body = self.post(
+                    "/api/video/source-project", {"engine": "remotion", "root": str(project), "entry": {"id": "Main"}}
+                )
+                self.assertEqual(code, 400)
+                self.assertEqual(json.loads(body)["code"], "bad-source-project")
+                for fragment in (config.name, "UTF-8", instruction):
+                    self.assertIn(fragment, json.loads(body)["error"])
+                with self.assertRaises(build_viewer.BuildError) as error:
+                    build_viewer.build(project, None, self.root / "from-project", no_scan_skills=True, locale=lang)
+                for fragment in (config.name, "UTF-8", instruction):
+                    self.assertIn(fragment, str(error.exception))
+        code, _, body = self.post(
+            "/api/video/source-project", {"engine": "remotion", "root": str(self.root / "p"), "entry": {"id": "Main"}}
+        )
+        self.assertEqual(code, 200, body)
+
+    def test_project_proposal_identifies_unreadable_cuts_alongside_readable_media(self):
+        import video_review
+
+        project = self.root / "project"
+        out = project / "out"
+        out.mkdir()
+        (out / "preview.mp4").write_bytes(synthetic_mp4(frames=72))
+        (out / "empty.mp4").write_bytes(b"")
+        body = {"engine": "remotion", "root": str(project), "entry": {"id": "Main"}}
+
+        def project_cuts():
+            code, _, response = self.post("/api/video/source-project", body)
+            self.assertEqual(code, 200, response)
+            cuts = json.loads(response)["sourceProject"]["cutComparison"]["movies"]
+            return {cut["name"]: cut for cut in cuts}
+
+        with mock.patch.object(video_review, "MAX_BOX_DEPTH", 2):
+            issue = project_cuts()["out/preview.mp4"]["diagnostic"]
+            self.assertEqual(issue, {"code": "boxDepth", "params": {"limit": 2}})
+        cuts = project_cuts()
+        self.assertEqual(cuts["out/empty.mp4"]["diagnostic"]["code"], "emptyFile")
+        self.assertEqual(cuts["out/preview.mp4"]["media"]["frames"], 72)
 
     def test_proposal_compares_registered_media_with_each_existing_project_cut(self):
         for engine, folder, entry in (("remotion", "project", "Main"), ("hyperframes", "hf", "index.html")):

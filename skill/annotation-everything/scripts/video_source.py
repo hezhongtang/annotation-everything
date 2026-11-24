@@ -41,7 +41,11 @@ class SourceError(ValueError):
         super().__init__(self.localized("zh-CN"))
 
     def localized(self, locale: str) -> str:
-        return i18n.translate(i18n.catalog(locale), "video.source.error." + self.code, **self.params)
+        catalog = i18n.catalog(locale)
+        params = self.params
+        if self.code == "entries":
+            params = {"entries": i18n.translate(catalog, "build.source.listSep").join(params["entries"])}
+        return i18n.translate(catalog, "video.source.error." + self.code, **params)
 
 
 def _now_iso() -> str:
@@ -149,6 +153,7 @@ def _compare_project_cuts(
         {
             "name": movie["path"].relative_to(info["root"]).as_posix(),
             "media": _clean_media(movie["meta"]),
+            **({"diagnostic": movie["diagnostic"]} if "diagnostic" in movie else {}),
             "differences": _differences(version, movie["meta"]),
         }
         for movie in movies
@@ -241,13 +246,15 @@ def local_project_link(video: dict[str, Any], **payload) -> dict[str, Any]:
     try:
         info = video_engines.detect_project(root)
     except video_engines.EngineError as exc:
+        if exc.code == "configUnreadable":
+            raise SourceError("configUnreadable", file=exc.detail) from exc
         raise SourceError("project", root=str(root)) from exc
     if engine != info["engine"]:
         raise SourceError("engineMismatch", engine=info["engine"])
     if engine == "hyperframes":
         declarations = info["compositions"]
         if entry["id"] not in {c["id"] for c in declarations}:
-            raise SourceError("entries", entries=", ".join(c["id"] for c in declarations))
+            raise SourceError("entries", entries=[c["id"] for c in declarations])
     else:
         # JSX 字面量仅作人工选择线索，动态生成的合成以工程 CLI 巡检为准。
         declarations = []

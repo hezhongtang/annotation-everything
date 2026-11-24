@@ -1118,7 +1118,7 @@ def to_markdown(
     video = manifest.get("video")
     if isinstance(video, dict):
         head.extend(_video_source_lines(video, t))
-        lf = video_review.public_manifest(manifest).get("lastFailure")
+        lf = video.get("lastFailure")
         if isinstance(lf, dict) and lf.get("reason"):
             head.append(t("cli.show.video.lastFailure", batch=lf.get("batch") or "—", reason=lf["reason"]))
     else:
@@ -1546,7 +1546,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 "alwaysSkills": store.always_skills(d),
             }
             if isinstance(manifest.get("video"), dict):
-                payload["video"] = video_review.public_manifest(manifest)
+                payload["video"] = video_review.public_manifest(manifest, locale=lang)
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
             _refuse_newer_format(manifest)

@@ -41,7 +41,7 @@ import video_source  # noqa: E402
 import wakeup  # noqa: E402
 from tests.test_analysis_page import interaction_program  # noqa: E402
 from tests.test_video_handoff import V1_MEDIA, video_note  # noqa: E402
-from tests.test_video_review import synthetic_mp4  # noqa: E402
+from tests.test_video_review import run_video_cli, synthetic_mp4  # noqa: E402
 
 
 class VideoReviewReworkBase(unittest.TestCase):
@@ -891,7 +891,7 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         try:
             with redirect_stdout(out), redirect_stderr(err):
                 try:
-                    code = notes_cli.main(argv)
+                    code = run_video_cli(notes_cli.main, argv)
                 except SystemExit as exc:
                     code = int(exc.code) if isinstance(exc.code, int) else 2
         finally:
@@ -1368,12 +1368,14 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
             store.locked, ledger.metadata_lock = orig_store_locked, orig_meta_lock
 
         # CLI show 与 batches 在中英文下正确渲染 decision / returnReason / reply / history / replied 痕迹
+        previous = notes_cli.i18n.current_locale()
         for lang, expected_tokens in (
             ("zh-CN", ("已通过", "人声被背景音盖住", "保留原片头并渐隐", "已答复", "历史")),
             ("en", ("Approved", "人声被背景音盖住", "保留原片头并渐隐", "Replied", "History")),
         ):
             sc, sout, serr = self._run_cli(["show", str(self.review), "--all", "--locale", lang])
             self.assertEqual(sc, 0, serr)
+            self.assertEqual(notes_cli.i18n.current_locale(), previous)
             for tok in expected_tokens:
                 self.assertIn(tok, sout)
             self.assertNotIn("cli.batch.trail.action.", sout)

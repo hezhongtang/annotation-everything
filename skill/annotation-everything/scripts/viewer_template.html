@@ -2145,8 +2145,9 @@ function videoFindVersion(versionId){const m=videoManifest();if(!m)return null;c
   return (m.versions||[]).find(v=>v.versionId===targetId)||null}
 function videoCurrentVersion(){return videoFindVersion(videoActiveVersionId)}
 function renderVideoFailure(){const m=videoManifest(),banner=sr&&sr.getElementById("videoFailureBanner");if(!banner||!m)return;
-  const lf=m.lastFailure;if(!lf||!lf.reason){banner.hidden=true;banner.textContent="";return}
-  banner.hidden=false;banner.textContent=tMsg("viewer.video.failureBanner",{batch:lf.batch||"—",reason:lf.reason,version:m.currentVersionId||"V1"})}
+  const lf=m.lastFailure;if(!lf){banner.hidden=true;banner.textContent="";return}
+  const stage=["render","probe","decode"].includes(lf.stage)?lf.stage:"unknown";
+  banner.hidden=false;banner.textContent=tMsg("viewer.video.failureBanner",{batch:lf.batch||"—",reason:tMsg("viewer.video.failure."+stage),version:m.currentVersionId||"V1"})}
 function renderVideoVersions(){const m=videoManifest(),pick=sr&&sr.getElementById("videoVersionPick"),verEl=sr&&sr.getElementById("videoVersion"),frameEl=sr&&sr.getElementById("videoFrame");if(!m)return;
   if(pick&&pick.setAttribute)pick.setAttribute("aria-label",tMsg("viewer.video.versionAria"));
   if(frameEl&&frameEl.setAttribute)frameEl.setAttribute("aria-label",tMsg("viewer.video.frameAria"));
@@ -3859,6 +3860,9 @@ function renderVsrc(){
         html+=line(tMsg("viewer.video.source.reviewCut",{version:sp.versionId,media:sourceMediaText(comparison.review),
           duration:comparison.review?.duration??tMsg("viewer.video.source.unknown")}));
         for(const movie of comparison.movies||[]){
+          if(movie.diagnostic?.code){
+            html+=line(tMsg("viewer.video.source.cutDiagnostic",{name:movie.name,
+              reason:tMsg("video.media.error."+movie.diagnostic.code,movie.diagnostic.params)}));continue}
           html+=line(tMsg("viewer.video.source.projectCut",{name:movie.name,media:sourceMediaText(movie.media),
             duration:movie.media?.duration??tMsg("viewer.video.source.unknown")}));
           html+=sourceDifferencesHtml(movie.differences)}}

@@ -51,7 +51,7 @@ class EngineError(ValueError):
     """工程无法识别、候选有歧义、复用证据不足或渲染失败。
 
     code 是稳定的错误标识（build_viewer 按 build.video.<code> 取本地化文案），
-    detail 是语言无关的证据（路径、数字、引擎 stderr 摘录）。
+    detail 包含原始证据（路径、数字、引擎 stderr 摘录）及所选语言的标签。
     """
 
     def __init__(self, code: str, detail: str = ""):
@@ -60,10 +60,14 @@ class EngineError(ValueError):
         self.detail = detail
 
 
-def _warn(locale: str | None, key: str, **params: object) -> str:
+def _text(locale: str | None, key: str, **params: object) -> str:
     import i18n
 
-    tag = i18n.normalize_locale(locale) if locale else None
+    tag = (
+        i18n.resolve_locale("auto", system_languages=i18n.system_languages())
+        if locale == "auto"
+        else i18n.normalize_locale(locale)
+    )
     if tag is None:  # 未知或未给语言时按默认语言给警告，不让诊断中断流程
         tag = i18n.DEFAULT_LOCALE
     return i18n.translate(i18n.catalog(tag), key, **params)
@@ -104,7 +108,7 @@ def _package_deps(root: Path) -> tuple[Path | None, set[str]]:
     return package, deps
 
 
-def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
+def _remotion_entry(root: Path, locale: str | None) -> tuple[Path, Path | None]:
     config = None
     for name in REMOTION_CONFIG_NAMES:
         cand = root / name
@@ -117,8 +121,8 @@ def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
     if config is not None:
         try:
             text = config.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+        except (OSError, UnicodeError) as exc:
+            raise EngineError("configUnreadable", config.name) from exc
         for match in SET_ENTRY_POINT.finditer(text):
             candidates.append(root / match.group(1))
     candidates += [root / name for name in REMOTION_ENTRY_NAMES]
@@ -127,7 +131,9 @@ def _remotion_entry(root: Path) -> tuple[Path, Path | None]:
             raise EngineError("entryOutside", str(candidate))
         if candidate.is_file():
             return candidate.resolve(), config
-    tried = "、".join(str(c.relative_to(root)) if _inside(root, c) else str(c) for c in candidates)
+    tried = _text(locale, "build.source.listSep").join(
+        str(c.relative_to(root)) if _inside(root, c) else str(c) for c in candidates
+    )
     raise EngineError("noEntry", tried)
 
 
@@ -211,7 +217,7 @@ def scan_html_compositions(root: Path) -> list[dict[str, Any]]:
     return compositions
 
 
-def detect_project(root: Path) -> dict[str, Any]:
+def detect_project(root: Path, *, locale: str | None = None) -> dict[str, Any]:
     """识别引擎与入口。只读工程文件，不执行任何工程代码。"""
     root = Path(root).expanduser()
     if not root.is_dir():
@@ -225,9 +231,9 @@ def detect_project(root: Path) -> dict[str, Any]:
     remotion_hit = "remotion" in deps or remotion_bin.is_file()
     hyperframes_hit = "hyperframes" in deps or hyperframes_bin.is_file()
     if remotion_hit and hyperframes_hit:
-        raise EngineError("ambiguousEngine", "remotion + hyperframes indicators in one project")
+        raise EngineError("ambiguousEngine", "Remotion + HyperFrames")
     if remotion_hit:
-        entry, config = _remotion_entry(root)
+        entry, config = _remotion_entry(root, locale)
         return {
             "engine": ENGINE_REMOTION,
             "root": root,
@@ -239,7 +245,7 @@ def detect_project(root: Path) -> dict[str, Any]:
     if hyperframes_hit:
         compositions = scan_html_compositions(root)
         if not compositions:
-            raise EngineError("noCompositions", "HTML composition not found in project root")
+            raise EngineError("noCompositions", _text(locale, "engine.detail.noHtml"))
         return {
             "engine": ENGINE_HYPERFRAMES,
             "root": root,
@@ -247,7 +253,7 @@ def detect_project(root: Path) -> dict[str, Any]:
             "package": package,
             "bin": hyperframes_bin,
         }
-    raise EngineError("notProject", f"package.json={'yes' if package else 'no'} html={len(list(root.glob('*.html')))}")
+    raise EngineError("notProject", f"package.json={int(package is not None)} *.html={len(list(root.glob('*.html')))}")
 
 
 # ── 固定 argv 模板与输出解析 ─────────────────────────────────────────────────
@@ -311,7 +317,7 @@ def parse_compositions(stdout: str) -> tuple[list[dict[str, Any]], int]:
     """识别 Remotion 4 的无表头行，兼容按表头映射列位置的旧清单。"""
     lines = [line.strip() for line in ANSI_CSI.sub("", stdout).splitlines() if line.strip()]
     if not lines:
-        raise EngineError("compositionsUnparsed", "empty output")
+        raise EngineError("compositionsUnparsed", "stdout=0 B")
     rows = [match.groups() for line in lines if (match := REMOTION_ROW.fullmatch(line))]
     if rows:
         return [
@@ -382,11 +388,11 @@ def list_compositions(info: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def choose_composition(
-    compositions: list[dict[str, Any]], wanted: str | None, engine: str, root: Path
+    compositions: list[dict[str, Any]], wanted: str | None, engine: str, root: Path, *, locale: str | None = None
 ) -> dict[str, Any]:
     if wanted is None:
         if len(compositions) != 1:
-            raise EngineError("compositionAmbiguous", "\n".join(_composition_line(c) for c in compositions))
+            raise EngineError("compositionAmbiguous", "\n".join(_composition_line(c, locale) for c in compositions))
         wanted = compositions[0]["id"]
     if engine == ENGINE_HYPERFRAMES:
         candidate = root / wanted
@@ -394,25 +400,29 @@ def choose_composition(
             raise EngineError("compositionOutside", str(candidate))
     target = next((c for c in compositions if c["id"] == wanted), None)
     if target is None:
-        raise EngineError("compositionMissing", "、".join(c["id"] for c in compositions))
+        raise EngineError(
+            "compositionMissing", _text(locale, "build.source.listSep").join(c["id"] for c in compositions)
+        )
     return target
 
 
-def _composition_line(comp: dict[str, Any]) -> str:
-    if "fpsDeclared" not in comp and comp.get("width") and comp.get("height"):
-        source = "remotion compositions"
-        return f"{comp['id']}  {comp['width']}x{comp['height']}  fps={comp['fps']}  frames={comp['frames']}  ({source})"
-    declared = "data-fps" if comp.get("fpsDeclared") else "fallback"
-    return (
-        f"{comp['id']}  fps={comp['fps']} ({declared})  "
-        f"{comp.get('width') or '?'}x{comp.get('height') or '?'}  frames={comp.get('frames') or '?'}"
-    )
+def _media_text(meta: dict[str, Any], locale: str | None) -> str:
+    unknown = _text(locale, "viewer.video.source.unknown")
+    fields = {key: meta.get(key) or unknown for key in ("width", "height", "fps", "frames")}
+    return _text(locale, "viewer.video.source.mediaSummary", **fields)
+
+
+def _composition_line(comp: dict[str, Any], locale: str | None) -> str:
+    source = "remotion compositions"
+    if "fpsDeclared" in comp:
+        source = "data-fps" if comp["fpsDeclared"] else _text(locale, "engine.detail.defaultFps")
+    return _text(locale, "engine.detail.candidate", id=comp["id"], media=_media_text(comp, locale), source=source)
 
 
 # ── 成片扫描、匹配与新鲜度 ──────────────────────────────────────────────────
 
 
-def scan_movies(root: Path) -> list[dict[str, Any]]:
+def scan_movies(root: Path, *, locale: str | None = None) -> list[dict[str, Any]]:
     import video_review
 
     paths: list[Path] = []
@@ -425,8 +435,16 @@ def scan_movies(root: Path) -> list[dict[str, Any]]:
             continue
         try:
             meta = video_review.probe(path)
-        except video_review.VideoError as exc:
-            movies.append({"path": path, "meta": None, "reason": str(exc), "mtime": _mtime(path)})
+        except video_review.MediaError as exc:
+            movies.append(
+                {
+                    "path": path,
+                    "meta": None,
+                    "reason": exc.localized(locale),
+                    "diagnostic": {"code": exc.code, "params": exc.params},
+                    "mtime": _mtime(path),
+                }
+            )
             continue
         movies.append({"path": path, "meta": meta, "reason": "", "mtime": _mtime(path)})
     return movies
@@ -615,14 +633,10 @@ def _matches(meta: dict[str, Any], comp: dict[str, Any]) -> bool:
     return True
 
 
-def _compare(meta: dict[str, Any], comp: dict[str, Any]) -> str:
-    left = f"movie {meta['width']}x{meta['height']} fps={meta['fps']} frames={meta['frames']}"
-    right = (
-        f"composition {comp['width']}x{comp['height']} fps={comp['fps']} frames={comp['frames']}"
-        if comp.get("width")
-        else f"composition fps={comp['fps']}"
+def _compare(meta: dict[str, Any], comp: dict[str, Any], locale: str | None) -> str:
+    return _text(
+        locale, "engine.detail.compare", movie=_media_text(meta, locale), composition=_media_text(comp, locale)
     )
-    return f"{left} vs {right}"
 
 
 def _source_context(info: dict[str, Any], chosen: dict[str, Any]) -> dict[str, Any]:
@@ -743,10 +757,10 @@ def resolve_source(
     if reuse_movie is not None and no_reuse:
         raise EngineError("reuseConflict", "")
     timeout = _resolve_timeout(render_timeout)
-    info = detect_project(root)
+    info = detect_project(root, locale=locale)
     engine: str = info["engine"]
     compositions = list_compositions(info)
-    chosen = choose_composition(compositions, composition, engine, info["root"])
+    chosen = choose_composition(compositions, composition, engine, info["root"], locale=locale)
     warnings: list[str] = []
     staging_dir = Path(review_dir).resolve() / ".render"
     source_hash = source_fingerprint(info, staging_dir=staging_dir)
@@ -759,13 +773,13 @@ def resolve_source(
             raise EngineError("movieUnreadable", str(movie))
         try:
             meta = video_review.probe(movie, with_digest=True)
-        except video_review.VideoError as exc:
-            raise EngineError("movieUnreadable", str(exc)) from exc
+        except video_review.MediaError as exc:
+            raise EngineError("movieUnreadable", exc.localized(locale)) from exc
         if not _matches(meta, chosen):
-            raise EngineError("movieMismatch", f"{movie} {_compare(meta, chosen)}")
+            raise EngineError("movieMismatch", f"{movie} {_compare(meta, chosen, locale)}")
         if _mtime(movie) < source_mtime:
-            warnings.append(_warn(locale, "engine.warn.staleReuse", path=str(movie), composition=chosen["id"]))
-        warnings.append(_warn(locale, "engine.warn.reused", path=str(movie), composition=chosen["id"]))
+            warnings.append(_text(locale, "engine.warn.staleReuse", path=str(movie), composition=chosen["id"]))
+        warnings.append(_text(locale, "engine.warn.reused", path=str(movie), composition=chosen["id"]))
         return {
             "action": "reused",
             "source": movie.resolve(),
@@ -777,7 +791,7 @@ def resolve_source(
             **_source_context(info, chosen),
         }
 
-    movies = scan_movies(info["root"])
+    movies = scan_movies(info["root"], locale=locale)
     matching = [m for m in movies if m["meta"] and _matches(m["meta"], chosen)]
     fresh = [m for m in matching if m["mtime"] >= source_mtime]
     if not no_reuse and fresh:
@@ -792,7 +806,7 @@ def resolve_source(
                     known.append((candidate, digest))
         if len(known) == 1:
             picked, digest = known[0]
-            warnings.append(_warn(locale, "engine.warn.reused", path=str(picked["path"]), composition=chosen["id"]))
+            warnings.append(_text(locale, "engine.warn.reused", path=str(picked["path"]), composition=chosen["id"]))
             return {
                 "action": "reused",
                 "source": picked["path"].resolve(),
@@ -804,15 +818,18 @@ def resolve_source(
                 **_source_context(info, chosen),
             }
         if len(fresh) > 1 and engine == ENGINE_REMOTION:
-            raise EngineError("movieAmbiguous", "\n".join(f"{m['path']} {_describe(m)}" for m in fresh))
+            raise EngineError("movieAmbiguous", "\n".join(f"{m['path']} {_describe(m, locale)}" for m in fresh))
         possible = [c["id"] for c in compositions if any(_matches(m["meta"], c) for m in fresh)]
         raise EngineError(
-            "movieConfirm", "\n".join(f"{m['path']} {_describe(m)}" for m in fresh) + " — " + ", ".join(possible)
+            "movieConfirm",
+            "\n".join(f"{m['path']} {_describe(m, locale)}" for m in fresh)
+            + " — "
+            + _text(locale, "build.source.listSep").join(possible),
         )
     if not no_reuse and matching:
         raise EngineError(
             "movieStale" if engine == ENGINE_REMOTION else "movieConfirm",
-            "\n".join(f"{m['path']} {_describe(m)}" for m in matching),
+            "\n".join(f"{m['path']} {_describe(m, locale)}" for m in matching),
         )
 
     result = _render(info, chosen, review_dir, timeout, locale, warnings)
@@ -830,13 +847,8 @@ def resolve_source(
     return result
 
 
-def _describe(movie: dict[str, Any]) -> str:
-    meta = movie["meta"]
-    return (
-        f"{meta['width']}x{meta['height']} fps={meta['fps']} frames={meta['frames']} mtime={movie['mtime']:.0f}"
-        if meta
-        else f"unprobeable({movie['reason']})"
-    )
+def _describe(movie: dict[str, Any], locale: str | None) -> str:
+    return _text(locale, "engine.detail.movie", media=_media_text(movie["meta"], locale), mtime=f"{movie['mtime']:.0f}")
 
 
 def _render(
@@ -867,8 +879,8 @@ def _render(
             raise EngineError("renderNoOutput", str(staging))
         try:
             meta = video_review.probe(staging, with_digest=True)
-        except video_review.VideoError as exc:
-            raise EngineError("renderInvalid", str(exc)) from exc
+        except video_review.MediaError as exc:
+            raise EngineError("renderInvalid", exc.localized(locale)) from exc
     except BaseException:
         _unlink(staging)
         try:
@@ -878,15 +890,15 @@ def _render(
         raise
     if engine == ENGINE_REMOTION and not _matches(meta, chosen):
         warnings.append(
-            _warn(
+            _text(
                 locale,
                 "engine.warn.listingMismatch",
                 composition=chosen["id"],
-                detail=_compare(meta, chosen),
+                detail=_compare(meta, chosen, locale),
             )
         )
     warnings.append(
-        _warn(
+        _text(
             locale,
             "engine.warn.rendered",
             engine=ENGINE_NAMES[engine],
@@ -917,20 +929,20 @@ def _unlink(path: Path) -> None:
 # ── 只读巡检与 CLI ──────────────────────────────────────────────────────────
 
 
-def inspect(project: Path, render_timeout: float | None = None) -> dict[str, Any]:
+def inspect(project: Path, render_timeout: float | None = None, *, locale: str | None = None) -> dict[str, Any]:
     """给审阅人 / Agent 的候选与差异证据；只读，不渲染、不写审阅目录。"""
     _resolve_timeout(render_timeout)  # 只做参数校验，巡检本身不渲染
-    info = detect_project(project)
+    info = detect_project(project, locale=locale)
     compositions = list_compositions(info)
     sources = freshness_sources(info)
     source_mtime = max((_mtime(p) for p in dict.fromkeys(sources)), default=0.0)
-    movies = scan_movies(info["root"])
+    movies = scan_movies(info["root"], locale=locale)
     return {
         "engine": ENGINE_NAMES[info["engine"]],
         "root": str(info["root"]),
         "entry": str(info["entry"]) if info["engine"] == ENGINE_REMOTION else None,
         "compositions": [
-            {k: v for k, v in comp.items() if k != "fpsDeclared"} | {"evidence": _composition_line(comp)}
+            {k: v for k, v in comp.items() if k != "fpsDeclared"} | {"evidence": _composition_line(comp, locale)}
             for comp in compositions
         ],
         "movies": [
@@ -951,20 +963,28 @@ def inspect(project: Path, render_timeout: float | None = None) -> dict[str, Any
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    import i18n
 
     argv = sys.argv[1:] if argv is None else argv
-    ap = argparse.ArgumentParser(
-        prog="video_engines.py", description="Inspect a Remotion / HyperFrames project for AE video review."
-    )
+    try:
+        locale = i18n.cli_locale(i18n.explicit_locale(argv))
+    except i18n.LocaleError as exc:
+        print(json.dumps({"error": "invalidLocale", "detail": exc.params.get("locale", "")}, ensure_ascii=False))
+        return 2
+    t = i18n.Translator(locale)
+    ap = argparse.ArgumentParser(prog="video_engines.py", description=t("engine.inspect.help"))
+    ap.add_argument("--locale", help=t("engine.inspect.locale"))
     sub = ap.add_subparsers(dest="command", required=True)
-    viewer = sub.add_parser("inspect", help="list engine, composition candidates and reusable movies as JSON")
+    viewer = sub.add_parser("inspect", help=t("engine.inspect.help"))
+    viewer.add_argument("--locale", help=t("engine.inspect.locale"))
     viewer.add_argument("project", type=Path)
     viewer.add_argument("--render-timeout", type=float, default=None)
     args = ap.parse_args(argv)
     try:
-        report = inspect(args.project, render_timeout=args.render_timeout)
+        report = inspect(args.project, render_timeout=args.render_timeout, locale=locale)
     except EngineError as exc:
-        print(json.dumps({"error": exc.code, "detail": exc.detail}, ensure_ascii=False))
+        message = t("build.video." + exc.code, path=args.project, detail=exc.detail or "—")
+        print(json.dumps({"error": exc.code, "detail": exc.detail, "message": message}, ensure_ascii=False))
         return 2
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

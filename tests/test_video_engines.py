@@ -745,6 +745,25 @@ class RenderTests(EngineEnvMixin):
 
 
 class InspectCliTests(EngineEnvMixin):
+    def test_inspect_identifies_each_unreadable_cut_and_keeps_the_other_candidate(self):
+        import io
+
+        project = self.copy_fixture("hyperframes")
+        output = project / "out"
+        self.make_movie(output / "good.mp4")
+        (output / "empty.mp4").write_bytes(b"")
+        for lang, reason, fallback in (
+            ("en", "The MP4 file is empty", "default frame rate"),
+            ("zh-CN", "MP4 文件为空", "默认帧率"),
+        ):
+            with self.subTest(lang=lang), redirect_stdout(io.StringIO()) as buffer:
+                self.assertEqual(video_engines.main(["inspect", str(project), "--locale", lang]), 0)
+                report = json.loads(buffer.getvalue())
+                movies = {Path(m["path"]).name: m for m in report["movies"]}
+                self.assertEqual(movies["empty.mp4"]["reason"], reason)
+                self.assertEqual(movies["good.mp4"]["meta"]["frames"], 180)
+                self.assertIn(fallback, report["compositions"][0]["evidence"])
+
     def test_inspect_prints_candidate_evidence_as_json(self):
         project = self.copy_fixture("remotion")
         media = self.make_movie(project / "out" / "Main.mp4")
@@ -778,6 +797,30 @@ class InspectCliTests(EngineEnvMixin):
 
 class BuildIntegrationTests(EngineEnvMixin):
     """从工程目录开始的完整构建：与 MP4 入口同一审阅形态。"""
+
+    def test_candidate_lists_media_comparisons_and_file_descriptions_use_the_build_language(self):
+        project = self.copy_fixture("hyperframes")
+        movie = project / "out" / "candidate.mp4"
+        self.make_movie(movie, fps=30)
+        for lang, default, separator, comparison, modified in (
+            ("en", "default frame rate", ", ", "Movie ", "modified"),
+            ("zh-CN", "默认帧率", "、", "成片 ", "修改时间"),
+        ):
+            for opts, fragments in (
+                ({}, [default, "data-fps"]),
+                ({"video_composition": "missing"}, [separator, "scene-b.html", "index.html"]),
+                ({"video_composition": "index.html", "reuse_movie": movie}, [comparison, "24", "30", "180"]),
+                ({"video_composition": "compositions/scene-b.html"}, [modified, "180"]),
+            ):
+                with self.subTest(lang=lang, opts=opts):
+                    with self.assertRaises(build_viewer.BuildError) as error:
+                        build_viewer.build(
+                            project, None, self.root / "review", locale=lang, no_scan_skills=True, **opts
+                        )
+                    for fragment in fragments:
+                        self.assertIn(fragment, str(error.exception))
+                    if lang == "en":
+                        self.assertNotIn("、", str(error.exception))
 
     def build(self, report, out, **kwargs):
         return build_viewer.build(report, None, out, no_scan_skills=True, locale="zh-CN", **kwargs)
