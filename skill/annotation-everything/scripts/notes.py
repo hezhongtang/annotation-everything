@@ -354,6 +354,8 @@ def target_text(h: dict[str, Any], lang: str | None = None, *, video: bool = Fal
 
 def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     """只翻译已知交接错误；中文和未知错误保留原始诊断，不解析异常字符串。"""
+    if isinstance(error, store.VideoCommitError):
+        return error.localized(cli_text(lang))
     messages = i18n.HANDOFF_ERROR_KEYS
     protection_codes = (
         "analysis-locked",
@@ -541,6 +543,11 @@ def batches_text(
                 out.append(t("cli.batch.stageSummary", stage=name, summary=e["summary"]))
         if h.get("reviewMessage"):
             out.append(t("cli.batch.reviewNote", message=h["reviewMessage"]))
+        for nid in h.get("videoWithdrawals") or {}:
+            out.append(t("viewer.batch.videoWithdrawn", id=nid))
+        unhandled = (h.get("videoStageRecovery") or {}).get("unhandledIds")
+        if unhandled:
+            out.append(t("viewer.batch.videoRecoveryUnprocessed", ids=sep.join(unhandled)))
         if "resolvedCount" in h:
             pages = sep.join(map(str, h.get("resolvedPages") or []))
             note = t("cli.batch.live") if h.get("live") else t("cli.batch.estimated") if h.get("estimated") else ""
@@ -2463,6 +2470,12 @@ def claim_next(
             return "handoff", int(batch["seq"])
         return ("analysis", rounds[0]["seq"]) if rounds else None
 
+    def authorize_recovery():
+        review_stop.assert_accepts_work(d)
+        if authorize is not None:
+            authorize()
+
+    store.recover_video_claim_queue(d, authorize_recovery)
     selected = next_waiting()
     requested = ("analysis", round_no) if round_no is not None else ("handoff", seq) if seq is not None else None
 

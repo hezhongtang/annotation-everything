@@ -627,6 +627,41 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertEqual(code, 200)
         self.assertIsNone(json.loads(body)["sourceProject"])
 
+    def test_page_distinguishes_an_unusable_receipt_directory_and_can_confirm(self):
+        import i18n
+        import ledger
+
+        project = self.root / "hf"
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "index.html").write_text('<html data-fps="30"></html>')
+        (project / "out").mkdir()
+        movie = project / "out" / "cut.mp4"
+        movie.write_bytes(self.source.read_bytes())
+        fresh = max(p.stat().st_mtime_ns for p in project.rglob("*")) + 1_000_000_000
+        os.utime(movie, ns=(fresh, fresh))
+        payload = {"engine": "hyperframes", "root": str(project), "entry": {"id": "index.html"}}
+        isolated = self.root / "receipt-ledger"
+        isolated.mkdir()
+        with mock.patch.dict(os.environ, AE_HOME=str(isolated)):
+            code, _, raw = self.post("/api/video/source-project", payload)
+            self.assertEqual(code, 200, raw)
+            self.assertIn("missingReceipt", json.loads(raw)["sourceProject"]["reasons"])
+            (isolated / ledger.VIDEO_RENDERS_DIR).write_text("synthetic misplaced file")
+            for locale, label in (("en", "receipt directory"), ("zh-CN", "凭据目录")):
+                self.server.locale = locale
+                code, _, raw = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, raw)
+                proposal = json.loads(raw)["sourceProject"]
+                self.assertEqual(proposal["status"], "pending")
+                self.assertIn("renderEvidenceDirectory", proposal["reasons"])
+                self.assertNotIn("missingReceipt", proposal["reasons"])
+                self.assertIn(label, i18n.Translator(locale)("viewer.video.source.reason.renderEvidenceDirectory"))
+            code, _, raw = self.post(
+                "/api/video/source-project/confirm", {"proposalRevision": proposal["proposalRevision"]}
+            )
+            self.assertEqual(code, 200, raw)
+            self.assertEqual(json.loads(raw)["sourceProject"]["match"], "confirmed")
+
     def test_missing_project_entry_lists_candidates_in_the_page_language(self):
         project = self.root / "hf"
         for lang, separator in (("zh-CN", "、"), ("en", ", ")):

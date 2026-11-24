@@ -596,6 +596,115 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             self.assertEqual(json.loads(raw)["seq"], 1)
             self.assertEqual(store.handoff_load(self.review)["items"][0]["openIds"], ["n1"])
 
+    def test_damaged_transaction_snapshots_preserve_the_saved_review(self):
+        saved = self._note("n1")
+        for name, data in (
+            ("notes.json", {"rev": 1, "notes": [{"id": "n1"}]}),
+            ("notes.json", {"rev": 1, "notes": [saved, saved]}),
+            ("handoff.json", {"seq": 1, "items": [{"seq": 1, "status": "done"}, {"seq": 1, "status": "pending"}]}),
+            ("handoff.json", {"seq": 1, "items": [{"seq": 2, "status": "pending"}]}),
+        ):
+            with self.subTest(name=name, data=data):
+                journal = self.pending_pair()
+                txn = json.loads(journal.read_bytes())
+                txn[name] = data
+                journal.write_text(json.dumps(txn))
+                before = self.review_files()
+                with self.assertRaises(store.VideoCommitError) as failed:
+                    store.recover_video_writes(self.review, self.rid)
+                self.assertEqual(failed.exception.part, name)
+                self.assertEqual(self.review_files(), before)
+                backup = store.recover_video_writes(self.review, self.rid, failed.exception.confirmation)
+                self.assertEqual(json.loads((self.review / backup).read_bytes()), txn)
+                self.assertEqual(self._note("n1"), saved)
+
+    def test_recovery_control_preserves_a_dangling_transaction_entry(self):
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        journal.symlink_to("absent-synthetic-record")
+        with self.review_http() as (server, headers):
+            status, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": headers["Host"]})
+            self.assertEqual(status, 200)
+            self.assertTrue(json.loads(raw).get("videoRecoveryPending"))
+            status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+            self.assertEqual(status, 409, raw)
+            token = json.loads(raw)["params"]["confirmation"]
+            status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {"preserve": token})
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(os.readlink(self.review / json.loads(raw)["preserved"]), "absent-synthetic-record")
+            status, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": headers["Host"]})
+            self.assertFalse(json.loads(raw).get("videoRecoveryPending"))
+
+    def test_recovery_resumes_each_interrupted_audit_append_exactly_once(self):
+        from unittest.mock import patch
+
+        log = self.review / store.LOG_FILE
+        real_open = os.open
+        for failure_at in (1, 2):
+            with self.subTest(failure_at=failure_at):
+                journal = self.pending_pair()
+                changes = json.loads(journal.read_bytes())
+                for event in changes["events"]:
+                    event["case"] = failure_at
+                journal.write_text(json.dumps(changes))
+                writes = 0
+
+                def disk_open(path, flags, *args, **kwargs):
+                    nonlocal writes
+                    if Path(path) == log and flags & os.O_APPEND:
+                        writes += 1
+                        if writes == failure_at:
+                            raise OSError("synthetic interruption during audit append")
+                    return real_open(path, flags, *args, **kwargs)
+
+                with patch.object(os, "open", side_effect=disk_open), self.assertRaises(OSError):
+                    store.recover_video_writes(self.review, self.rid)
+                self.assertTrue(journal.is_file())
+                for _ in range(2):
+                    store.recover_video_writes(self.review, self.rid)
+                events = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertEqual(
+                    [e["op"] for e in events if e.get("case") == failure_at], ["video-receipt", "handoff-draft"]
+                )
+                self.assertEqual(self._note("n1")["text"], "待恢复的合成意见")
+                self.assertFalse(journal.exists())
+
+    def test_page_releases_unattributed_legacy_work_and_keeps_completed_decisions(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="partial",
+            finish=False,
+            receipt=[{"noteId": "n3", "outcome": "question", "question": "保留片头吗？"}],
+        )
+        store.video_decision(self.review, "n3", action="reply", reply="保留")
+        saved = self._note("n3")
+        handoff = store.handoff_load(self.review)
+        batch = handoff["items"][0]
+        batch["status"] = "reviewing"
+        batch["claimedAt"] = "2000-01-01T00:00:00Z"
+        batch["videoSubmission"].pop("claimedReceiver")
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        with self.review_http() as (server, headers):
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+            self.assertEqual(code, 200, raw)
+            self.assertTrue(json.loads(raw)["videoRecoveryPending"])
+            self.assertEqual(store.handoff_load(self.review), handoff)
+            code, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+            self.assertEqual(code, 200, raw)
+            code, _, raw = serve._req(server.port, "GET", "/api/handoff", headers)
+            current = json.loads(raw)["latest"]
+            self.assertEqual(current["status"], "done")
+            self.assertEqual(current["videoStageRecovery"]["unhandledIds"], ["n1"])
+            self.assertEqual(self._note("n3"), saved)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(run_video_cli(notes_cli.main, ["batches", str(self.review), "--locale", "en"]), 0)
+            self.assertIn("Select these annotations again: n1", output.getvalue())
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            store.handoff_submit(self.review, note_ids=["n1"])
+            self.assertEqual(store.handoff_claim(self.review)["seq"], 2)
+
     def test_copy_with_pending_writes_rebuilds_only_from_settled_source(self):
         journal = self.pending_pair()
         copied = self.root / "copy-before-recovery"

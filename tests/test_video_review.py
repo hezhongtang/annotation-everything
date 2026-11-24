@@ -196,7 +196,7 @@ class VideoBuildTests(unittest.TestCase):
                     timeout=10,
                 )
                 self.assertEqual(result.returncode, 73, result.stderr)
-                abandoned = set(media.glob("*.tmp")) - {revision, other}
+                abandoned = set(media.rglob("*.tmp")) - {revision, other}
                 self.assertEqual(len(abandoned), 1)
 
                 if interruption == "receipt":
@@ -211,6 +211,20 @@ class VideoBuildTests(unittest.TestCase):
                 self.assertEqual((media / "v2.mp4").read_bytes(), revision.read_bytes())
                 self.assertEqual(revision.read_bytes(), synthetic_mp4(frames=192))
                 self.assertEqual(other.read_text(), "synthetic local file")
+
+    def test_registration_preserves_another_staging_named_input(self):
+        self.build()
+        media = self.out / "media"
+        waiting = media / ".v2-personal.tmp"
+        waiting.write_bytes(synthetic_mp4(frames=128))
+        waiting.chmod(0o600)
+        other = self.root / "first.mp4"
+        other.write_bytes(synthetic_mp4(frames=190))
+        video_review.register_version(self.out, other, batch=1, by="agent", receipt_id="first")
+        self.assertTrue(waiting.is_file())
+        version = video_review.register_version(self.out, waiting, batch=2, by="agent", receipt_id="second")
+        self.assertEqual(version["frames"], 128)
+        self.assertEqual(waiting.read_bytes(), (media / "v3.mp4").read_bytes())
 
     def test_concurrent_registration_preserves_the_active_copy(self):
         import threading

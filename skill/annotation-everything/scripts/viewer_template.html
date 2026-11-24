@@ -3733,6 +3733,8 @@ function renderBatches(){
                 +(e.stage==="review"&&e.doneAt?tMsg("viewer.batch.stageReviewed",{ok:+e.approved||0,revised:+e.revised||0,returned:+e.returned||0,resolved:+e.resolved||0}):"")})}`
             +(e.summary&&e.summary!==h.summary?`<br>${tMsg("viewer.batch.stageSummary",{stage:escH(nm),summary:escH(e.summary)})}`:"")+`</div>`}).join(""):"")
       +(h.reviewMessage?`<div class="bm">${tMsg("viewer.batch.reviewMessage",{message:escH(h.reviewMessage)})}</div>`:"")
+      +(h.videoWithdrawals?Object.keys(h.videoWithdrawals).map(id=>`<div class="bt">${escH(tMsg("viewer.batch.videoWithdrawn",{id}))}</div>`).join(""):"")
+      +(h.videoStageRecovery?.unhandledIds?.length?`<div class="bt">${escH(tMsg("viewer.batch.videoRecoveryUnprocessed",{ids:h.videoStageRecovery.unhandledIds.join(tMsg("viewer.hand.listSep"))}))}</div>`:"")
       +(Array.isArray(h.videoReceipts)?h.videoReceipts.filter(r=>r&&typeof r==="object").map(r=>r.failure
           ?`<div class="bt">${escH(tMsg("viewer.batch.videoFailureTag",{receiptId:r.receiptId||"",reason:r.failure.reason||""}))}</div>`
           :r.versionId?`<div class="bt">${escH(tMsg("viewer.batch.videoVersionTag",{receiptId:r.receiptId||"",version:r.versionId,n:(r.items||[]).length}))}</div>`:"").join(""):"")

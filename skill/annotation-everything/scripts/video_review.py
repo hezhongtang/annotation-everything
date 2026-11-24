@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -14,7 +15,7 @@ import os
 import re
 import struct
 import sys
-import tempfile
+import stat
 from datetime import datetime, timezone
 from fractions import Fraction
 from functools import lru_cache
@@ -28,7 +29,6 @@ import ledger  # noqa: E402
 
 FORMAT_VERSION = 1
 VERSION_ID = re.compile(r"^V[1-9][0-9]*$")
-STAGED_MP4 = re.compile(r"\.v([1-9][0-9]*)-[a-z0-9_]{8}\.tmp")
 CONTAINERS = {b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts"}
 MAX_BOX_DEPTH = 32
 RECEIPT_TARGET_KINDS = ("frame", "range", "cut")
@@ -401,36 +401,51 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _remove_abandoned_staging(review_dir: Path, video: dict, source: Path | None = None) -> None:
-    """只在登记方持有元数据写锁时调用。识别 mkstemp 的私有副本，保留源文件和已登记路径。"""
+def _staging_slot(review_dir: Path, *, create: bool = False) -> Path | None:
+    """仅在元数据锁内使用。由 AE 声明的私有目录拥有一个成片复制槽。"""
     media = review_dir / "media"
     try:
-        directory = media.lstat()
+        media_info = media.lstat()
     except FileNotFoundError:
-        return
-    if fsutil._is_reparse_or_symlink(directory):
+        return None
+    if fsutil._is_reparse_or_symlink(media_info):
         raise MediaError("directorySymlink")
-    registered = {
-        v["path"] for v in video.get("versions", []) if isinstance(v, dict) and isinstance(v.get("path"), str)
-    }
-    original = Path(source).resolve() if source is not None else None
-    copying = str(_next_version_number(video)) if original is not None else None
-    for path in media.glob(".v*-*.tmp"):
-        match = STAGED_MP4.fullmatch(path.name)
-        if not match or f"media/{path.name}" in registered:
-            continue
-        try:
-            fsutil.check_private_regular_file(path, max_bytes=None)
-        except (FileNotFoundError, ValueError):
-            continue
-        if path.resolve() == original:
-            continue
-        if match[1] != copying:
-            # 恢复回执或处理旧版时，仅移除与发布副本同一 inode 的临时链接。
-            published = media / f"v{match[1]}.mp4"
-            if not published.is_file() or not path.samefile(published):
-                continue
-        path.unlink(missing_ok=True)
+    directory = media / ".ae-staging"
+    owner = directory / ".ae-staged-mp4-v1"
+    try:
+        info = directory.lstat()
+    except FileNotFoundError:
+        if not create:
+            return None
+        directory.mkdir(mode=0o700)
+        info = directory.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or fsutil._is_reparse_or_symlink(info)
+        or (not fsutil.is_windows() and (info.st_uid != os.getuid() or info.st_mode & 0o077))
+        or (fsutil.is_windows() and not fsutil._win_same_owner(directory))
+    ):
+        raise MediaError("unregisteredCopy", path="media/.ae-staging")
+    try:
+        fsutil.check_private_regular_file(owner, max_bytes=0)
+    except FileNotFoundError:
+        if not create:
+            return None
+        if any(directory.iterdir()):
+            raise MediaError("unregisteredCopy", path="media/.ae-staging")
+        # 空标记由一次独占创建完成，复制中断时不会留下半写的归属声明。
+        os.close(os.open(owner, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except ValueError as exc:
+        raise MediaError("unregisteredCopy", path="media/.ae-staging") from exc
+    return directory / "copy.tmp"
+
+
+def _remove_abandoned_staging(review_dir: Path, source: Path | None = None) -> None:
+    slot = _staging_slot(review_dir)
+    if slot is not None:
+        if source is not None and Path(source).resolve() == slot.resolve():
+            raise MediaError("unregisteredCopy", path="media/.ae-staging/copy.tmp")
+        slot.unlink(missing_ok=True)
 
 
 def _stage_and_probe_mp4(
@@ -446,8 +461,8 @@ def _stage_and_probe_mp4(
     target = media_dir / f"v{version_num}.mp4"
     if target.exists() or target.is_symlink():
         raise MediaError("unregisteredCopy", path=rel_path)
-    fd, tmp = tempfile.mkstemp(dir=media_dir, prefix=f".v{version_num}-", suffix=".tmp")
-    temporary = Path(tmp)
+    temporary = _staging_slot(review_dir, create=True)
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     digest = hashlib.sha256()
     try:
         try:
@@ -536,7 +551,7 @@ def prepare(
     journal = review_dir / ".video-first-build.json"
     identity = origin or {"source": str(source.resolve())}
     with ledger.metadata_lock(review_dir, exclusive=True):
-        _remove_abandoned_staging(review_dir, {}, source)
+        _remove_abandoned_staging(review_dir, source)
         if journal.is_file() and (review_dir / "media" / "v1.mp4").exists():
             try:
                 saved = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
@@ -587,7 +602,7 @@ def register_version(
     with ledger.metadata_lock(review_dir, exclusive=True):
         manifest_path, manifest = _read_video_manifest(review_dir, review_id=review_id)
         video = manifest["video"]
-        _remove_abandoned_staging(review_dir, video, source_mp4)
+        _remove_abandoned_staging(review_dir, source_mp4)
         if rid_key:
             for item in video["versions"]:
                 if isinstance(item, dict) and item.get("batch") == batch and item.get("receiptId") == rid_key:
@@ -653,7 +668,7 @@ def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool | 
             raise VideoError("暂存的视频版本已改变")
         manifest_path, manifest = _read_video_manifest(review_dir, review_id=pending["reviewId"])
         video = manifest["video"]
-        _remove_abandoned_staging(review_dir, video)
+        _remove_abandoned_staging(review_dir)
         if failure := pending.get("failure"):
             if accepted and failure not in video.get("failures", []):
                 _append_failure(video, failure)
@@ -1130,6 +1145,84 @@ def _public_failure(failure: dict, locale: str | None) -> dict:
         "stage": stage,
         "reason": i18n.translate(i18n.catalog(lang), "viewer.video.failure." + stage),
     }
+
+
+def public_review_response(response: dict, video: dict, handoff: dict, locale: str) -> dict:
+    """将实时批注、处理痕迹与批次里复制的引擎诊断投影为同一阶段摘要。"""
+    diagnostics = {}
+    authored = set()
+
+    def remember(failure):
+        if isinstance(failure, dict) and isinstance(failure.get("reason"), str):
+            diagnostics[failure.get("batch"), failure["reason"]] = failure.get("stage") or "unknown"
+
+    for failure in video.get("failures") or []:
+        remember(failure)
+    remember(video.get("lastFailure"))
+    for version in video.get("versions") or []:
+        remember(version.get("playbackFailure"))
+    for batch in handoff.get("items") or []:
+        remember(batch.get("videoFailure"))
+        for receipt in batch.get("videoReceipts") or []:
+            failure = receipt.get("failure")
+            remember(failure)
+            for item in receipt.get("items") or []:
+                reason = item.get("failure")
+                if isinstance(reason, str):
+                    if failure and failure.get("reason") == reason.strip()[:2000]:
+                        diagnostics[batch["seq"], reason] = failure.get("stage") or "unknown"
+                    else:
+                        authored.add((batch["seq"], item.get("noteId"), reason))
+
+    summaries = {}
+
+    def project_text(row, field, batch, note_id):
+        if not isinstance(row, dict) or not isinstance(row.get(field), str):
+            return
+        text = row[field]
+        stage = row.get("failureStage") or diagnostics.get((batch, text))
+        if stage == "item" or (not stage and (batch, note_id, text) in authored):
+            return
+        if stage not in ("render", "probe", "decode"):
+            stage = "unknown"
+        if stage not in summaries:
+            summaries[stage] = _public_failure({"stage": stage}, locale)["reason"]
+        row[field] = summaries[stage]
+
+    def project_note(note):
+        if not isinstance(note, dict):
+            return
+        vr = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else {}
+        note_id = note.get("id")
+        for row in [vr, *(vr.get("history") or []), vr.get("relocatedFrom")]:
+            if isinstance(row, dict):
+                project_text(row, "failure", row.get("batch", vr.get("batch")), note_id)
+        for trail in note.get("trail") or []:
+            if isinstance(trail, dict) and trail.get("action") == "failed":
+                project_text(trail, "note", trail.get("batch"), note_id)
+
+    def project_failure(row, key):
+        failure = row.get(key)
+        if isinstance(failure, dict):
+            row[key] = {
+                **{k: failure[k] for k in ("by", "receiptId") if k in failure},
+                **_public_failure(failure, locale),
+            }
+
+    result = copy.deepcopy(response)
+    notes = [*(result.get("notes") or []), *((result.get("doc") or {}).get("notes") or []), result.get("note")]
+    for note in {id(note): note for note in notes}.values():
+        project_note(note)
+    state = result.get("handoff") or result
+    # latest 和 history[0] 可以引用同一批次。每一份对象只投影一次。
+    batches = {id(b): b for b in [state.get("latest"), *(state.get("history") or [])] if isinstance(b, dict)}
+    for batch in batches.values():
+        project_failure(batch, "videoFailure")
+        for receipt in batch.get("videoReceipts") or []:
+            project_failure(receipt, "failure")
+            for item in receipt.get("items") or []:
+                project_text(item, "failure", batch["seq"], item.get("noteId"))
+    return result
 
 
 def public_manifest(manifest: dict[str, Any], *, locale: str | None = None) -> dict[str, Any]:

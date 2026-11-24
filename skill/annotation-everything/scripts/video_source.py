@@ -183,7 +183,10 @@ def _compare_project_cuts(
     try:
         if video_engines.known_render(info, entry, video_engines.source_fingerprint(info), digest):
             return comparison, []
-    except (OSError, video_engines.EngineError):
+    except video_engines.EngineError as exc:
+        if exc.code == "renderEvidenceDirectory":
+            return comparison, [exc.code]
+    except OSError:
         pass
     return comparison, ["missingReceipt"]
 

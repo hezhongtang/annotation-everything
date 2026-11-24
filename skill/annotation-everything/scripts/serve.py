@@ -660,6 +660,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, code: int, obj: Any) -> None:
+        if (
+            self.server.review_dir is not None
+            and isinstance(obj, dict)
+            and obj.keys() & {"note", "notes", "doc", "handoff", "latest"}
+        ):
+            video = self.server.manifest().get("video")
+            if isinstance(video, dict):
+                handoff = self._request_reads().handoff()
+                obj = video_review.public_review_response(
+                    obj, video, handoff if isinstance(handoff, dict) else {}, self.server.locale
+                )
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
     def _reject(self, e: Reject) -> None:
@@ -1395,7 +1406,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"preserved": backup, **self._ident()})
         elif path == "/api/notes" and cmd == "GET":
             doc = self._notes_doc()
-            if store.video_recovery_pending(d, self.server.manifest()):
+            if store.video_recovery_pending(d, self.server.manifest(), self._request_reads().handoff()):
                 doc["videoRecoveryPending"] = True
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」

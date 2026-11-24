@@ -1151,6 +1151,185 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             reason="decoder rejected V2",
         )
 
+    def test_live_notes_and_batch_history_keep_render_diagnostics_in_local_cli(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        reason = "renderer could not read /synthetic/private/overlay.png"
+        explanation = "The edit needs the original title card"
+        code, _, err = self.run_cli(
+            ["video-receipt", str(self.review), "--receipt-id", "attempt", "--render-error", reason, "--receipt", "-"],
+            stdin_text=json.dumps(
+                [
+                    {"noteId": "n1", "outcome": "failed"},
+                    {"noteId": "n2", "outcome": "failed", "failure": explanation},
+                ]
+            ),
+        )
+        self.assertEqual(code, 0, err)
+        code, output, err = self.run_cli(["show", str(self.review), "--locale", "en"])
+        self.assertEqual(code, 0, err)
+        self.assertIn(reason, output)
+        for locale, summary in (("en", "Engine render failed"), ("zh-CN", "引擎渲染失败")):
+            with self.subTest(locale=locale):
+                server = serve.ReviewServer(self.review, 0, log_to_file=False, locale=locale)
+                worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+                worker.start()
+                self.addCleanup(worker.join, 2)
+                self.addCleanup(server.server_close)
+                self.addCleanup(server.shutdown)
+                host = f"127.0.0.1:{server.port}"
+                headers = {"Host": host, "Origin": "http://" + host, "Content-Type": "application/json"}
+                for method, path, body in (
+                    ("GET", "/api/notes", None),
+                    ("GET", "/api/handoff", None),
+                    ("POST", "/api/notes/import", {"notes": []}),
+                    ("PATCH", "/api/notes/n1", {"text": "Recheck the title"}),
+                ):
+                    with self.subTest(method=method, path=path):
+                        status, _, raw = serve._req(server.port, method, path, headers, body)
+                        self.assertEqual(status, 200, raw)
+                        self.assertNotIn(reason.encode(), raw)
+                        data = json.loads(raw)
+                        doc = data.get("doc", data)
+                        if "notes" in doc:
+                            n1, n2 = doc["notes"][:2]
+                            self.assertEqual(n1["videoReview"]["failure"], summary)
+                            self.assertEqual(n1["videoReview"]["history"][-1]["failure"], summary)
+                            self.assertEqual(n1["trail"][-1]["note"], summary)
+                            self.assertEqual(n2["videoReview"]["failure"], explanation)
+                        handoff = data.get("handoff", data)
+                        for batch in [handoff.get("latest"), *(handoff.get("history") or [])]:
+                            if batch:
+                                self.assertEqual(batch["videoFailure"]["reason"], summary)
+                                receipt = batch["videoReceipts"][-1]
+                                self.assertEqual(receipt["failure"]["reason"], summary)
+                                self.assertEqual([i["failure"] for i in receipt["items"]], [summary, explanation])
+        self.assertEqual(store.load(self.review)["notes"][0]["videoReview"]["failure"], reason)
+
+    def test_cli_translates_recovery_diagnostics_for_damaged_and_foreign_records(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        for raw, detail in ((b"{", "damaged (JSON)"), (b'{"reviewId":"abababababababab"}', "another review")):
+            with self.subTest(raw=raw):
+                journal.write_bytes(raw)
+                journal.chmod(0o600)
+                code, _, error = self.run_cli(
+                    ["video-receipt", str(self.review), "--locale", "en", "--render-error", "test"]
+                )
+                self.assertNotEqual(code, 0)
+                self.assertIn(detail, error)
+                self.assertIn("Recover video review", error)
+                self.assertEqual(journal.read_bytes(), raw)
+
+    def test_legacy_failure_trails_and_page_exports_round_trip_without_losing_private_records(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        private = "legacy diagnostic /synthetic/inputs/overlay.mkv"
+        code, _, err = self.run_cli(
+            ["video-receipt", str(self.review), "--receipt-id", "old", "--render-error", private]
+        )
+        self.assertEqual(code, 0, err)
+        # 旧批注没有阶段标记。第二条仅保留处理痕迹。
+        notes = store.load(self.review)
+        for note in notes["notes"][:2]:
+            review = note["videoReview"]
+            for row in [review, *review["history"], *note["trail"]]:
+                row.pop("failureStage", None)
+        notes["notes"][1].pop("videoReview")
+        (self.review / store.NOTES_FILE).write_text(json.dumps(notes))
+        with serve.ReviewServer(self.review, 0, log_to_file=False, locale="en") as server:
+            worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+            worker.start()
+            try:
+                host = f"127.0.0.1:{server.port}"
+                headers = {"Host": host, "Origin": "http://" + host, "Content-Type": "application/json"}
+                status, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+                self.assertEqual(status, 200, raw)
+                exported = json.loads(raw)["notes"]
+                with self.subTest("legacy trail"):
+                    self.assertEqual(exported[1]["trail"][-1]["note"], "Engine render failed")
+                with self.subTest("import current public copy"):
+                    status, _, raw = serve._req(server.port, "POST", "/api/notes/import", headers, {"notes": exported})
+                    self.assertEqual(status, 200, raw)
+                    self.assertNotIn(private.encode(), raw)
+                    self.assertEqual(store.load(self.review)["notes"], notes["notes"])
+                server.locale = "zh-CN"
+                status, _, raw = serve._req(server.port, "POST", "/api/notes/import", headers, {"notes": exported})
+                self.assertEqual(status, 200, raw)
+                exported[0]["videoReview"]["decision"] = "approved"
+                self.assertEqual(
+                    serve._req(server.port, "POST", "/api/notes/import", headers, {"notes": exported})[0], 400
+                )
+            finally:
+                server.shutdown()
+                worker.join(2)
+
+    def test_deletion_records_withdrawal_without_hiding_a_missing_receipt(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2", "n3", "n4"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        store.delete(self.review, "n1")
+        # 升级前，删除普通批注只更新 notes.json，未向原批次记录撤回。
+        old = store.load(self.review)
+        old["notes"] = [n for n in old["notes"] if n["id"] != "n2"]
+        (self.review / store.NOTES_FILE).write_text(json.dumps(old))
+        with self.assertRaises(store.HandoffError) as missing:
+            store.video_receipt(self.review, receipt=[{"noteId": "n3", "outcome": "question", "question": "换色吗？"}])
+        self.assertEqual(missing.exception.params["ids"], ["n4"])
+        result = store.video_receipt(
+            self.review,
+            receipt=[{"noteId": nid, "outcome": "question", "question": "换色吗？"} for nid in ("n3", "n4")],
+        )
+        self.assertEqual(result["status"], "done")
+        batch = store.handoff_state(self.review)["history"][0]
+        self.assertEqual(batch["videoWithdrawals"]["n1"]["by"], "page")
+        self.assertEqual(batch["videoWithdrawals"]["n2"]["source"], "missing-note")
+        self.assertIn("n1", batch["videoWithdrawals"])
+        self.assertEqual([i["noteId"] for i in batch["videoReceipts"][0]["items"]], ["n3", "n4"])
+
+    def test_legacy_agent_review_recovers_current_work_and_ready_reviewer_decisions(self):
+        def old_stage(seq, state):
+            handoff = store.handoff_load(self.review)
+            next(b for b in handoff["items"] if b["seq"] == seq)["status"] = state
+            (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+
+        store.handoff_submit(self.review, note_ids=["n1", "n2"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        store.video_receipt(
+            self.review,
+            receipt_id="partial",
+            finish=False,
+            receipt=[{"noteId": "n1", "outcome": "question", "question": "用原色吗？"}],
+        )
+        store.video_decision(self.review, "n1", action="reply", reply="是")
+        retained = store.load(self.review)["notes"][0]
+        old_stage(1, "reviewing")
+        store.handoff_submit(self.review, note_ids=["n3"])
+        code, output, err = self.run_cli(
+            ["video-receipt", str(self.review), "--seq", "1", "--receipt-id", "complete", "--receipt", "-", "--json"],
+            stdin_text=json.dumps([{"noteId": "n2", "outcome": "question", "question": "用原音吗？"}]),
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(output)["status"], "done")
+        self.assertEqual(store.load(self.review)["notes"][0], retained)
+        self.assertEqual(self.run_cli(["claim", str(self.review), "--seq", "2"])[0], 0)
+        store.video_receipt(
+            self.review,
+            seq=2,
+            movie=self.v1_path,
+            receipt=[{"noteId": "n3", "outcome": "fixed", "summary": "片头已缩短", "target": {"frame": 10}}],
+        )
+        old_stage(2, "review")
+        store.handoff_submit(self.review, note_ids=["n4"])
+        code, output, err = self.run_cli(["claim", str(self.review)])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(output)["seq"], 3)
+        self.assertEqual(store.handoff_load(self.review)["items"][1]["status"], "drafted")
+        before = store.handoff_load(self.review)
+        store.recover_video_writes(self.review, self.rid)
+        self.assertEqual(store.handoff_load(self.review), before)
+        self.assertEqual(store.video_decision(self.review, "n3", action="approve")["note"]["status"], "resolved")
+
     def test_prior_approval_stays_in_the_finished_batch_when_legacy_receipt_details_are_absent(self):
         store.handoff_submit(self.review, note_ids=["n1", "n3"])
         store.handoff_claim(self.review)
