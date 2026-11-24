@@ -832,6 +832,7 @@ function applyLocale(){
   if(VIDEO&&typeof renderVideoSource==="function") renderVideoSource();
   if(VIDEO&&$("vsrc").classList.contains("on")&&typeof renderVsrc==="function") renderVsrc();
   if(VIDEO&&typeof videoCompareRefreshLocale==="function") videoCompareRefreshLocale();
+  if(VIDEO&&typeof videoLayout==="function")videoLayout();
   if(typeof showQuote==="function") showQuote();
   updatePageStat();
   updatePairText();
@@ -1033,6 +1034,7 @@ ${RCSS}
 .video-mark{position:absolute;pointer-events:none;border:2px solid #ff5c45;background:rgba(255,92,69,.12);box-sizing:border-box}
 .video-mark.point{width:18px;height:18px;border-radius:50%;transform:translate(-50%,-50%)}
 #videoControls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px;background:#20242a;font:12px/1.4 sans-serif}
+#videoControls[hidden]{display:none}
 #videoControls button,#videoControls input{font:inherit}
 #videoControls input{width:76px}
 #vsrc .vrow{display:flex;gap:10px;margin:6px 0;flex-wrap:wrap;align-items:center}
@@ -1048,7 +1050,7 @@ ${RCSS}
 #handPick .hp-loc{white-space:nowrap;color:var(--ae-dim,#888)}
 #handPick .hp-tag{font-size:11px;padding:0 5px;border-radius:3px;background:rgba(128,128,128,.16);white-space:nowrap}
 #handPick .hp-text{overflow:hidden;text-overflow:ellipsis}
-#videoError,#videoFailureBanner{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
+#videoError,#videoFailureBanner,.vc-media-notice{margin:4px 8px;color:#ffb4a8;font:12px/1.4 sans-serif}
 #videoFailureBanner{padding:4px 8px;background:rgba(160,40,30,.35);border:1px solid #d9776c;border-radius:4px}
 #videoVersionPick{font:inherit;background:#2b3038;color:#fff;border:1px solid #484f5b;border-radius:4px;padding:1px 6px}
 #videoCompareStage{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;padding:8px;background:#14171c;color:#fff;font:12px/1.4 sans-serif;overflow:auto}
@@ -1096,8 +1098,8 @@ ${RCSS}
 <div id="videoCompareReplyBox" hidden><span id="videoCompareReplyLbl"></span><input id="videoCompareReplyInput" type="text"><button id="videoCompareReplySave" type="button" class="primary"></button></div>
 <div id="videoCompareDecisionErr" role="alert" hidden></div>
 <div id="videoCompareGrid">
-<div id="videoCompareBeforePane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareBeforeTitle"></strong><span id="videoCompareBeforeInfo"></span></div><div id="videoCompareBeforeBox" class="vc-box"><video id="videoCompareBefore" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareBeforeMarks" class="vc-marks"></div></div><div id="videoCompareBeforeBar" class="vc-bar"><button id="videoComparePlayBefore" type="button"></button><button id="videoComparePauseBefore" type="button"></button><span id="videoCompareBeforeTime"></span></div></div>
-<div id="videoCompareAfterPane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareAfterTitle"></strong><span id="videoCompareAfterInfo"></span></div><div id="videoCompareAfterBox" class="vc-box"><video id="videoCompareAfter" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareAfterMarks" class="vc-marks"></div></div><div id="videoCompareAfterBar" class="vc-bar"><button id="videoComparePlayAfter" type="button"></button><button id="videoComparePauseAfter" type="button"></button><span id="videoCompareAfterTime"></span></div><div id="videoCompareAfterReason" class="vc-reason" hidden></div></div>
+<div id="videoCompareBeforePane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareBeforeTitle"></strong><span id="videoCompareBeforeInfo"></span></div><div id="videoCompareBeforeBox" class="vc-box"><video id="videoCompareBefore" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareBeforeMarks" class="vc-marks"></div></div><div id="videoCompareBeforeBar" class="vc-bar"><button id="videoComparePlayBefore" type="button"></button><button id="videoComparePauseBefore" type="button"></button><span id="videoCompareBeforeTime"></span><span id="videoCompareBeforeFrame"></span></div><div id="videoCompareBeforeMediaNotice" class="vc-media-notice" role="status" hidden></div></div>
+<div id="videoCompareAfterPane" class="vc-pane"><div class="vc-pane-head"><strong id="videoCompareAfterTitle"></strong><span id="videoCompareAfterInfo"></span></div><div id="videoCompareAfterBox" class="vc-box"><video id="videoCompareAfter" class="vc-video" controls playsinline preload="metadata"></video><div id="videoCompareAfterMarks" class="vc-marks"></div></div><div id="videoCompareAfterBar" class="vc-bar"><button id="videoComparePlayAfter" type="button"></button><button id="videoComparePauseAfter" type="button"></button><span id="videoCompareAfterTime"></span><span id="videoCompareAfterFrame"></span></div><div id="videoCompareAfterMediaNotice" class="vc-media-notice" role="status" hidden></div><div id="videoCompareAfterReason" class="vc-reason" hidden></div></div>
 </div>
 <div id="videoCompareHistory" hidden></div>
 <div id="videoCompareRelocate" hidden>
@@ -1106,9 +1108,8 @@ ${RCSS}
 <div id="videoRelocateErr" role="alert" hidden></div>
 </div>
 </div>
-<div id="videoError" role="alert" hidden></div>
 <div id="videoFailureBanner" role="alert" hidden></div>
-<div id="videoControls"><span id="videoVersion"></span><select id="videoVersionPick" hidden></select><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
+<div id="videoControls"><span id="videoVersion"></span><select id="videoVersionPick" hidden></select><button id="videoPrevFrame" type="button">−1</button><input id="videoFrame" type="number" min="0" step="1" value="0"><button id="videoNextFrame" type="button">+1</button><button id="videoSetStart" type="button">[</button><button id="videoSetEnd" type="button">]</button><button id="videoPlayRange" type="button">▶</button><span id="videoRange"></span><span id="videoError" role="alert" hidden></span><button id="videoRetry" type="button" hidden></button><button id="videoSourceBtn" type="button"></button><span id="videoSourceHint"></span></div>
 </section></div></div>`;
 const stage=sr.getElementById("ae-stage"), frame=sr.getElementById("ae-frame");
 function fit(){const slide=$("slide"),style=getComputedStyle(slide),b=slide.getBoundingClientRect();
@@ -1891,6 +1892,13 @@ function videoContentRect(viewportWidth,viewportHeight,videoWidth,videoHeight){c
   return{x:(viewportWidth-width)/2,y:(viewportHeight-height)/2,width,height}}
 function videoNormalizedPoint(clientX,clientY,viewport,content){const x=clientX-viewport.left-content.x,y=clientY-viewport.top-content.y;
   if(x<0||y<0||x>content.width||y>content.height)return null;return{x:x/content.width,y:y/content.height}}
+function videoShowMediaNotice(label,player,version){
+  if(!label)return;
+  const differs=version&&player.readyState>=1&&player.videoWidth&&player.videoHeight&&
+    (player.videoWidth!==version.width||player.videoHeight!==version.height);
+  label.hidden=!player.error&&!differs;
+  label.textContent=player.error?tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable"):differs?tMsg("viewer.video.dimensionMismatch",{version:version.versionId,
+    decoded:player.videoWidth+" × "+player.videoHeight,registered:version.width+" × "+version.height}):""}
 function videoVersionClock(source){
   if(typeof source==="number"&&Number.isFinite(source)&&source>0)return{num:1,den:source,fps:source};
   if(!source||typeof source!=="object")return null;
@@ -1925,11 +1933,40 @@ function videoCutContext(target,version,padSeconds=1){
 function videoSeekTime(player,seconds){
   // 解码器只接收整微秒。定位到帧内的第一个可表示时刻，避免截断后显示上一帧。
   player.currentTime=Math.ceil(seconds*1e6)/1e6}
-function videoSeekFrame(player,frame,clockOrFps){player.pause();player.muted=false;videoSeekTime(player,videoFrameTime(frame,clockOrFps));return player.currentTime}
+const videoIntervals=new WeakMap(),videoPendingPositions=new WeakMap(),videoPendingPlays=new WeakMap();
+function videoAfterMetadata(player,callback,pending=videoPendingPositions){
+  pending.get(player)?.();
+  if(!callback)return;
+  if(player.readyState>=1)return callback();
+  return new Promise((resolve,reject)=>{
+    const detach=()=>{pending.delete(player);player.removeEventListener("loadedmetadata",ready);player.removeEventListener("error",cancel)};
+    const cancel=()=>{detach();resolve()};
+    const ready=()=>{detach();try{resolve(callback())}catch(error){reject(error)}};
+    pending.set(player,cancel);
+    player.addEventListener("loadedmetadata",ready);player.addEventListener("error",cancel)})}
+function videoCancelSelection(player){
+  videoIntervals.delete(player);videoPendingPositions.get(player)?.();videoPendingPlays.get(player)?.()}
+function videoLoadMedia(player,url){
+  const changed=player.getAttribute("src")!==url;
+  if(!changed&&!player.error)return false;
+  videoCancelSelection(player);
+  if(changed)player.src=url;
+  player.load();return true}
+function videoSeekFrame(player,frame,clockOrFps){
+  videoIntervals.delete(player);player.pause();player.muted=false;
+  videoSeekTime(player,videoFrameTime(frame,clockOrFps));return player.currentTime}
 async function videoPlayInterval(player,anchor,version){const times=videoRangeTimes(anchor,version||anchor);
-  videoSeekFrame(player,times.startFrame,version||anchor);videoRangeEnd=times.endTime;player.muted=false;await player.play()}
-function videoRangeTick(player){if(videoRangeEnd==null||player.currentTime+1e-6<videoRangeEnd)return;
-  const end=videoRangeEnd;videoRangeEnd=null;player.pause();player.currentTime=end}
+  const start=videoSeekFrame(player,times.startFrame,version||anchor);
+  videoIntervals.set(player,{start,end:times.endTime});await player.play()}
+function videoWatchInterval(player){
+  player.addEventListener("pause",()=>{if(player.paused&&!player.ended)videoIntervals.delete(player)});
+  player.addEventListener("seeking",()=>{const range=videoIntervals.get(player);
+    // 第一次 seeking 也可能来自区间自己的起点定位。
+    if(range&&(range.start==null||Math.abs(player.currentTime-range.start)>1e-6))videoIntervals.delete(player)});
+  player.addEventListener("seeked",()=>{const range=videoIntervals.get(player);if(range)range.start=null})}
+function videoRangeTick(player){const range=videoIntervals.get(player);
+  if(!range||player.seeking||(player.paused&&!player.ended)||player.currentTime+1e-6<range.end)return;
+  videoIntervals.delete(player);player.pause();videoSeekTime(player,range.end)}
 function videoExportLine(anchor,en){return(en?"   Video location: ":"   视频定位：")+JSON.stringify(anchor)}
 function videoImportLine(line,en){const match=line.match(en?/^\s+Video location: (\{.*\})$/:/^\s+视频定位：(\{.*\})$/);if(!match)return null;
   try{const value=JSON.parse(match[1]);return value&&typeof value==="object"&&!Array.isArray(value)?value:null}catch(error){return null}}
@@ -2101,7 +2138,7 @@ function videoReceiptCardHtml(note,manifest,opts){
     parts.push(`<div class="vr-acts">${canCompare?`<button type="button" class="vr-jump" data-act="video-compare" data-id="${eid}">${escH(tMsg("viewer.video.compareBtn"))}</button>`:""}${canRelocate?`<button type="button" class="vr-jump" data-act="video-relocate" data-id="${eid}">${escH(tMsg("viewer.video.relocateBtn"))}</button>`:""}</div>`);
   parts.push("</div>");return parts.join("")}
 // ---------- 视频审阅 DOM ----------
-let videoDraft=null,videoRangeStart=null,videoRangeEnd=null,videoPointerStart=null,videoPendingMark=null;
+let videoDraft=null,videoRangeStart=null,videoPointerStart=null,videoPendingMark=null;
 const videoEl=()=>sr.getElementById("videoPlayer"),videoLayer=()=>sr.getElementById("videoMarkLayer");
 const videoManifest=()=>liveVideo||VIDEO;
 function videoFindVersion(versionId){const m=videoManifest();if(!m)return null;const targetId=versionId||videoActiveVersionId||m.currentVersionId;
@@ -2117,20 +2154,15 @@ function renderVideoVersions(){const m=videoManifest(),pick=sr&&sr.getElementByI
   videoActiveVersionId=activeId;if(verEl)verEl.textContent=activeId;if(!pick)return;
   pick.innerHTML=vers.map(v=>`<option value="${escH(v.versionId)}"${v.versionId===activeId?" selected":""}>${escH(v.versionId===m.currentVersionId?tMsg("viewer.video.versionOption",{version:v.versionId}):v.versionId)}</option>`).join("");
   pick.hidden=vers.length<=1;pick.value=activeId}
-let videoPendingSeek=null;
-function videoAfterMetadata(player,callback){
-  if(videoPendingSeek){player.removeEventListener("loadedmetadata",videoPendingSeek);videoPendingSeek=null}
-  if(!callback)return;
-  if(player.readyState>=1){callback();return}
-  videoPendingSeek=()=>{videoPendingSeek=null;callback()};
-  player.addEventListener("loadedmetadata",videoPendingSeek,{once:true})}
 function videoSelectVersion(versionId,resetTime=true){const version=videoFindVersion(versionId),player=videoEl();if(!version||!player)return;
   videoActiveVersionId=version.versionId;renderVideoVersions();
-  if(player.getAttribute("src")!==version.url){const t=resetTime?0:player.currentTime;player.src=version.url;player.load();
-    videoRangeEnd=null;videoAfterMetadata(player,t>0?()=>{player.currentTime=Math.min(t,version.duration||t)}:null)}
+  const t=resetTime?0:player.currentTime;
+  if(videoLoadMedia(player,version.url))videoAfterMetadata(player,t>0?()=>{player.currentTime=Math.min(t,version.duration||t)}:null);
   videoLayout()}
 function videoCurrentFrame(){return videoTimeToFrame(videoEl().currentTime,videoCurrentVersion())}
 function videoLayout(){if(!VIDEO)return;const viewport=sr.getElementById("videoViewport"),player=videoEl(),layer=videoLayer(),version=videoCurrentVersion();if(!viewport||!player||!layer||!version)return;
+  videoShowMediaNotice(sr.getElementById("videoError"),player,version);
+  const retry=sr.getElementById("videoRetry");if(retry){retry.hidden=!player.error||FILE;retry.textContent=tMsg("viewer.video.retry")}
   const rect=videoContentRect(viewport.clientWidth,viewport.clientHeight,player.videoWidth||version.width,player.videoHeight||version.height);   // 标记相对实际解码画面，不信登记尺寸
   for(const el of [player,layer])Object.assign(el.style,{left:rect.x+"px",top:rect.y+"px",width:rect.width+"px",height:rect.height+"px"});
   videoDrawMarks();
@@ -2154,17 +2186,18 @@ function videoUpdateRange(){const label=sr.getElementById("videoRange");if(label
 function videoDraftAt(mark=videoPendingMark){const m=videoManifest(),version=videoCurrentVersion();if(!m||!version)return null;const frame=videoCurrentFrame();
   if(videoRangeStart!=null){const start=videoRangeStart,end=Math.max(frame+1,start+1);return videoMakeAnchor(m,{startFrame:start,endFrame:Math.min(end,version.frames)},mark,version.versionId)}
   return videoMakeAnchor(m,{frame},mark,version.versionId)}
-function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version);videoRangeEnd=null;
+function videoSeekDraftFrame(frame){const version=videoCurrentVersion();if(!version)return;videoSeekFrame(videoEl(),Math.max(0,Math.min(version.frames-1,frame)),version);
   sr.getElementById("videoFrame").value=videoCurrentFrame();videoDrawMarks()}
 function videoJumpPlay(version,temporal){const player=videoEl();if(!version||!player)return;
   if(typeof videoCompareClose==="function")videoCompareClose();
   videoActiveVersionId=version.versionId;renderVideoVersions();
-  if(player.getAttribute("src")!==version.url){player.src=version.url;player.load()}
-  videoRangeEnd=null;
+  videoLoadMedia(player,version.url);
+  videoIntervals.delete(player);
   videoAfterMetadata(player,()=>{
     const spec=videoTargetPlaySpec(temporal,version);if(!spec)return;
     sr.getElementById("videoFrame").value=spec.seekFrame;
-    if(spec.playRange){videoPlayInterval(player,spec.playRange,version).catch(()=>{const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg("viewer.video.playbackUnavailable")})}
+    if(spec.playRange){videoPlayInterval(player,spec.playRange,version).catch(error=>{
+      if(error.name!=="AbortError"&&player.getAttribute("src")===version.url&&!player.error)toast(tMsg("viewer.video.playbackUnavailable"))})}
     else videoSeekFrame(player,spec.seekFrame,version);
     videoDrawMarks()})}
 function videoShowNote(note){if(!VIDEO||!note||!note.video)return;const version=videoFindVersion(note.video.versionId);
@@ -2179,12 +2212,13 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
   renderVideoVersions();renderVideoFailure();
   const verPick=sr.getElementById("videoVersionPick");if(verPick)verPick.onchange=e=>videoSelectVersion(e.target.value,false);
   const sourceBtn=sr.getElementById("videoSourceBtn");if(sourceBtn)sourceBtn.onclick=()=>openVsrc();
+  const retry=sr.getElementById("videoRetry");if(retry)retry.onclick=()=>videoSelectVersion(videoActiveVersionId,false);
   renderVideoSource();
-  if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",()=>{const cur=videoCurrentVersion()||version;if(Math.abs(player.videoWidth-cur.width)>0||Math.abs(player.videoHeight-cur.height)>0){
-      sr.getElementById("videoError").hidden=false;sr.getElementById("videoError").textContent=tMsg("viewer.video.dimensionMismatch")}videoLayout()})}
-  player.addEventListener("loadeddata",()=>videoPlaybackState(videoActiveVersionId,true));
-  player.addEventListener("error",()=>{videoPlaybackState(videoActiveVersionId,false,player.error?.code);const box=sr.getElementById("videoError");box.hidden=false;box.textContent=tMsg(FILE?"viewer.video.filePlayback":"viewer.video.playbackUnavailable")});
+  if(version){player.src=version.url;player.muted=false;player.addEventListener("loadedmetadata",videoLayout)}
+  player.addEventListener("loadeddata",()=>{videoPlaybackState(videoActiveVersionId,true);videoLayout()});
+  player.addEventListener("error",()=>{videoPlaybackState(videoActiveVersionId,false,player.error?.code);videoLayout()});
   const syncFrame=frame=>{const input=sr.getElementById("videoFrame");if(sr.activeElement!==input)input.value=frame;videoDrawMarks(frame)};
+  videoWatchInterval(player);
   player.addEventListener("seeked",()=>syncFrame(videoCurrentFrame()));
   player.addEventListener("timeupdate",()=>{videoRangeTick(player);if(!player.requestVideoFrameCallback||player.paused)syncFrame(videoCurrentFrame())});
   if(player.requestVideoFrameCallback){
@@ -2205,7 +2239,7 @@ function videoInit(){if(!VIDEO)return;const player=videoEl(),stageEl=sr.getEleme
   videoLayout()}
 
 // ---------- 视频对照与重定位 ----------
-let videoServerFeatures=new Set(),videoCompareNoteId=null,videoCompareEnds={before:null,after:null},videoComparePairState=null,videoRelocateOpen=false,videoCompareReturnOpen=false,videoCompareSig="";
+let videoServerFeatures=new Set(),videoCompareNoteId=null,videoComparePairState=null,videoRelocateOpen=false,videoCompareReturnOpen=false,videoCompareSig="";
 function setVideoServerFeatures(d){videoServerFeatures=new Set(Array.isArray(d&&d.features)?d.features:[])}
 function serverSupports(name){return mode==="server"&&videoServerFeatures.has(name)}
 function videoDecisionError(err){return err&&err.message?err.message:tMsg("viewer.video.decisionOldService")}
@@ -2299,8 +2333,20 @@ function videoCompareDrawSideMark(side,mark){const layer=videoCompareMarksEl(sid
   if(mark.kind==="point")Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%"});
   else Object.assign(el.style,{left:mark.x*100+"%",top:mark.y*100+"%",width:mark.width*100+"%",height:mark.height*100+"%"});
   layer.appendChild(el)}
+function videoCompareDisplayedVersion(side){const info=videoComparePairState?.[side],src=videoCompareEl(side)?.getAttribute("src");
+  if(!info||!src)return null;
+  return src===info.url?info.version:videoManifest().versions.find(v=>v.url===src)}
+function videoCompareShowFrame(side){
+  const el=videoCompareEl(side),label=sr.getElementById(side==="before"?"videoCompareBeforeFrame":"videoCompareAfterFrame");
+  if(!label)return;
+  const ver=videoCompareDisplayedVersion(side);
+  label.textContent=ver&&el.readyState>=2&&!el.error?tMsg("viewer.video.compare.currentFrame",{frame:videoTimeToFrame(el.currentTime,ver)}):""}
 function videoCompareLayoutSide(side){const pair=videoComparePairState;if(!pair)return;const box=videoCompareBoxEl(side),el=videoCompareEl(side),layer=videoCompareMarksEl(side);
-  const info=side==="before"?pair.before:pair.after,ver=info&&info.version;if(!box||!el||!layer||!ver)return;
+  const info=side==="before"?pair.before:pair.after;
+  const ver=videoCompareDisplayedVersion(side);videoCompareShowFrame(side);
+  if(!box||!el||!layer)return;
+  videoShowMediaNotice(sr.getElementById(side==="before"?"videoCompareBeforeMediaNotice":"videoCompareAfterMediaNotice"),el,ver);
+  if(!ver)return;
   const rect=videoContentRect(box.clientWidth||600,box.clientHeight||340,el.videoWidth||ver.width||640,el.videoHeight||ver.height||360);
   for(const target of [el,layer])Object.assign(target.style,{left:rect.x+"px",top:rect.y+"px",width:rect.width+"px",height:rect.height+"px"});
   videoCompareDrawSideMark(side,info.mark)}
@@ -2349,13 +2395,11 @@ function videoCompareRenderLabels(){
 }
 function videoCompareLoadSide(el,url,spec,onReady){
   if(!el)return;
-  el.controls=!spec||spec.kind!=="frame";
+  videoCancelSelection(el);el.controls=!spec||spec.kind!=="frame";
   if(!url){el.pause();if(el.getAttribute("src")){el.removeAttribute("src");el.load()}if(onReady)onReady();return}
-  const changed=el.getAttribute("src")!==url;
-  if(changed){el.src=url;el.load()}
+  videoLoadMedia(el,url);
   const apply=()=>{el.pause();el.muted=false;videoSeekTime(el,spec?spec.seekTime:0);if(onReady)onReady()};
-  if(el.readyState>=1)apply();
-  else el.addEventListener("loadedmetadata",apply,{once:true})}
+  videoAfterMetadata(el,apply)}
 function videoRelocateKindSync(){
   const kind=(sr.getElementById("videoRelocateKind")||{}).value||"frame";
   sr.getElementById("videoRelocateFrameWrap").hidden=kind==="range";
@@ -2423,9 +2467,8 @@ function videoCompareOpen(note,openRelocate=false){
     &&note.videoReview?.decisionInputRevision!==videoComparePairState.evidence)videoEvidenceToReview.set(note.id,pair.evidence);
   if(videoCompareNoteId!==note.id||videoComparePairState?.evidence!==pair.evidence)videoCompareReturnOpen=false;
   videoCompareNoteId=note.id;videoComparePairState=pair;videoCompareSig=videoKey(pair);
-  videoCompareEnds={before:null,after:null};
   const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage"),mainPlayer=typeof videoEl==="function"?videoEl():sr.getElementById("videoPlayer");
-  if(mainPlayer)mainPlayer.pause();
+  if(mainPlayer){videoCancelSelection(mainPlayer);mainPlayer.pause()}
   if(vp)vp.hidden=true;if(ctrl)ctrl.hidden=true;if(cs)cs.hidden=false;
   videoCompareRenderLabels();
   const stEl=sr.getElementById("videoCompareState");
@@ -2479,8 +2522,8 @@ function videoCompareOpen(note,openRelocate=false){
 function videoCompareClose(){
   if(!videoCompareNoteId)return;
   const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");
-  if(bEl)bEl.pause();if(aEl)aEl.pause();
-  videoCompareNoteId=null;videoComparePairState=null;videoRelocateOpen=false;videoCompareReturnOpen=false;videoCompareSig="";videoCompareEnds={before:null,after:null};
+  for(const el of [bEl,aEl])if(el){videoCancelSelection(el);el.pause()}
+  videoCompareNoteId=null;videoComparePairState=null;videoRelocateOpen=false;videoCompareReturnOpen=false;videoCompareSig="";
   const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage");
   if(cs)cs.hidden=true;if(vp)vp.hidden=false;if(ctrl)ctrl.hidden=false;
   videoLayout()}
@@ -2532,29 +2575,21 @@ function videoCompareSync(){
   if(!found){videoCompareClose();return}
   if(videoKey(videoCompareCurrentPair(found))===videoCompareSig)return;
   videoCompareOpen(found,videoRelocateOpen)}
-function videoComparePause(side){const el=videoCompareEl(side);videoCompareEnds[side]=null;if(el)el.pause()}
+function videoComparePause(side){const el=videoCompareEl(side);if(el){videoIntervals.delete(el);videoPendingPlays.get(el)?.();el.pause()}}
 async function videoComparePlay(side){
   const pair=videoComparePairState;if(!pair)return;
   const other=side==="before"?"after":"before";
   videoComparePause(other);
-  const el=videoCompareEl(side),info=side==="before"?pair.before:pair.after,spec=info&&info.spec,ver=info&&info.version;
-  if(!el)return;
-  const startPlay=()=>{
+  const el=videoCompareEl(side),info=pair[side];if(!el||!el.getAttribute("src"))return;
+  const url=el.getAttribute("src"),spec=url===info.url?info.spec:null,ver=info.version;
+  videoLoadMedia(el,url);
+  return videoAfterMetadata(el,()=>{
     el.muted=false;
-    if(spec&&spec.playRange){
-      el.pause();videoSeekTime(el,spec.playRange.startTime);videoCompareEnds[side]=spec.playRange.endTime;
-    }else if(spec){
-      el.pause();videoSeekTime(el,spec.seekTime);videoCompareEnds[side]=null;
-    }else if(ver){
-      videoCompareEnds[side]=null;
-    }
-    return el.play()};
-  if(el.readyState>=1||!el.getAttribute("src"))return await startPlay();
-  return await new Promise((resolve,reject)=>{
-    el.addEventListener("loadedmetadata",()=>startPlay().then(resolve,reject),{once:true})})}
-function videoCompareTick(side){const end=videoCompareEnds[side],el=videoCompareEl(side);
-  if(end==null||!el||el.currentTime+1e-6<end)return;
-  videoCompareEnds[side]=null;el.pause();el.currentTime=end}
+    if(spec&&spec.playRange)return videoPlayInterval(el,spec.playRange,ver);
+    videoIntervals.delete(el);
+    if(spec){el.pause();videoSeekTime(el,spec.seekTime)}
+    return el.play()},videoPendingPlays)}
+function videoCompareTick(side){videoRangeTick(videoCompareEl(side))}
 function videoRelocateUseFrame(){const f=videoCompareAfterCurrentFrame(),el=sr.getElementById("videoRelocateFrame");if(el)el.value=f;return f}
 function videoRelocateReadTarget(ver){
   const kind=(sr.getElementById("videoRelocateKind")||{}).value||"frame";
@@ -2626,15 +2661,16 @@ function videoCompareInit(){
   const sAfter=sr.getElementById("videoComparePauseAfter");if(sAfter)sAfter.onclick=()=>videoComparePause("after");
   for(const side of ["before","after"]){
     const player=videoCompareEl(side);if(!player)continue;
+    videoWatchInterval(player);
     for(const event of ["loadeddata","seeked","seeking","emptied","error"])
-      player.addEventListener(event,videoCompareEvidenceControls);
-    const changed=ok=>{const info=videoComparePairState?.[side];if(!info?.url||player.getAttribute("src")!==info.url)return;
-      videoPlaybackState(info.versionId,ok,player.error?.code,notes.find(n=>n.id===videoCompareNoteId));
-      if(!ok){const err=sr.getElementById("videoCompareDecisionErr");if(err){err.hidden=false;err.textContent=tMsg("viewer.video.playbackUnavailable")}}};
+      player.addEventListener(event,()=>{videoCompareEvidenceControls();videoCompareShowFrame(side)});
+    player.addEventListener("timeupdate",()=>{videoCompareTick(side);videoCompareShowFrame(side)});
+    player.addEventListener("loadedmetadata",()=>videoCompareLayoutSide(side));
+    const changed=ok=>{videoCompareLayoutSide(side);
+      const version=videoCompareDisplayedVersion(side);
+      if(version)videoPlaybackState(version.versionId,ok,player.error?.code,notes.find(n=>n.id===videoCompareNoteId))};
     player.addEventListener("loadeddata",()=>changed(true));player.addEventListener("error",()=>changed(false))}
-  const bEl=videoCompareEl("before"),aEl=videoCompareEl("after");
-  if(bEl){bEl.addEventListener("timeupdate",()=>videoCompareTick("before"));bEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("before"))}
-  if(aEl){aEl.addEventListener("timeupdate",()=>videoCompareTick("after"));aEl.addEventListener("loadedmetadata",()=>videoCompareLayoutSide("after"))}
+  const aEl=videoCompareEl("after");
   const kindSel=sr.getElementById("videoRelocateKind");if(kindSel)kindSel.onchange=()=>videoRelocateKindSync();
   const verSel=sr.getElementById("videoRelocateVersion");if(verSel)verSel.onchange=()=>{const ver=videoFindVersion(verSel.value);if(ver&&ver.url)videoCompareLoadSide(aEl,ver.url,null,()=>videoCompareLayoutSide("after"))};
   const useF=sr.getElementById("videoRelocateUseFrame");if(useF)useF.onclick=()=>videoRelocateUseFrame();

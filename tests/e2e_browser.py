@@ -10117,7 +10117,7 @@ def video_demo_movies(browser, tmp):
                 background += f",drawbox=color=0x634452:t=fill:enable='lt(n,{intro})'"
             else:
                 background += ",drawbox=x=40:y=40:w=120:h=90:color=0xe6566b:t=fill:enable='between(n,30,44)'"
-                background += ",drawbox=x=0:y=0:w=32:h=32:color=0x28ed60:t=fill:enable='eq(n,179)'"
+            background += ",drawbox=x=0:y=0:w=32:h=32:color=0x28ed60:t=fill:enable='eq(n,179)'"
             subprocess.run(
                 [
                     "ffmpeg",
@@ -10357,11 +10357,141 @@ def video_play_segment(page, side, start, end):
     )
 
 
+def video_retry_single_cut(page):
+    source = page.locator("#videoPlayer").get_attribute("src")
+    route = "**" + source
+    page.route(route, lambda request: request.fulfill(status=503, body="Synthetic media outage"))
+    retry = page.get_by_role("button", name="Retry playback")
+    try:
+        page.reload(wait_until="domcontentloaded")
+        retry.wait_for()
+        assert page.locator("#videoVersionPick").is_hidden()
+    finally:
+        page.unroute(route)
+    retry.click()
+    ok(
+        wait_dom(
+            page,
+            """() => {
+              const root=document.querySelector('#host').shadowRoot,v=root.getElementById('videoPlayer');
+              return v.readyState>=2 && v.videoWidth===640 && !v.error && root.getElementById('videoRetry').hidden;
+            }""",
+            8,
+            condition="同一份 V1 恢复解码",
+        ),
+        "仅有一版且尚无批注时，服务恢复后可用页面按钮重新加载 V1",
+    )
+
+
+def video_check_endpoint_frame(page, note_id):
+    def pause_and_scrub(button, player_id):
+        page.click(button)
+        assert wait_dom(
+            page,
+            """id => {
+              const v=document.querySelector('#host').shadowRoot.getElementById(id);
+              return !v.paused && !v.seeking && v.currentTime>4.02 && v.currentTime<5.9;
+            }""",
+            5,
+            arg=player_id,
+            condition=f"{player_id} 正在播放区间",
+        )
+        page.locator("#" + player_id).evaluate("""v=>{
+          delete v.dataset.scrubbed;
+          v.addEventListener('seeked',()=>v.dataset.scrubbed='yes',{once:true});
+          v.pause();v.currentTime=5.99;
+        }""")
+        ok(
+            wait_dom(
+                page,
+                """id=>{
+                  const v=document.querySelector('#host').shadowRoot.getElementById(id);
+                  return v.dataset.scrubbed==='yes' && v.paused && !v.seeking && Math.abs(v.currentTime-5.99)<.000002;
+                }""",
+                5,
+                arg=player_id,
+                condition=f"{player_id} 保持拖动后的 5.99 秒",
+            ),
+            f"{player_id} 暂停后可拖过原区间终点",
+        )
+
+    def stopped_on_marker(player_id, readout_id):
+        return wait_dom(
+            page,
+            """([playerId,readoutId]) => {
+              const root=document.querySelector('#host').shadowRoot,video=root.getElementById(playerId);
+              const field=root.getElementById(readoutId);
+              if(!video.paused || video.seeking || video.readyState<2 ||
+                 (field.value ?? field.textContent.replace('Current frame ',''))!=='179')return false;
+              const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;
+              const ctx=canvas.getContext('2d');ctx.drawImage(video,15,15,1,1,0,0,1,1);
+              const [r,g]=ctx.getImageData(0,0,1,1).data;
+              return g>r+120;
+            }""",
+            6,
+            arg=[player_id, readout_id],
+            condition=f"{player_id} 实际呈现第 179 帧的绿色角标，读数同为 179",
+        )
+
+    jump = f"[data-act='video-jump-orig'][data-id='{note_id}']"
+    pause_and_scrub(jump, "videoPlayer")
+    page.click(jump)
+    assert stopped_on_marker("videoPlayer", "videoFrame")
+    frame = video_save_note(page, "The endpoint shows the green corner")["video"]
+    ok((frame["versionId"], frame["frame"]) == ("V1", 179), "区间停止后新建的帧批注与角标及读数一致")
+    # 同一事件循环内开、播、关、重开，再让真实媒体元数据到达。
+    waiting = page.locator(f"[data-act='video-compare'][data-id='{note_id}']").evaluate("""button=>{
+        const root=document.querySelector('#host').shadowRoot,players=['Before','After'].map(s=>root.getElementById('videoCompare'+s));
+        for(const v of players){
+          v.dataset.playsWhileClosed='0';
+          v.addEventListener('play',()=>{
+            if(root.getElementById('videoCompareStage').hidden)v.dataset.playsWhileClosed='1';
+          });
+          v.addEventListener('loadedmetadata',()=>v.dataset.firstMetadata='ready',{once:true});
+        }
+        let waiting=true;
+        for(const side of ['Before','After']){
+          button.click();waiting=waiting && root.getElementById('videoCompare'+side).readyState===0;
+          root.getElementById('videoComparePlay'+side).click();root.getElementById('videoCompareClose').click();
+        }
+        return waiting;
+    }""")
+    assert waiting and wait_dom(
+        page,
+        """()=>['Before','After'].every(side=>document.querySelector('#host').shadowRoot
+            .getElementById('videoCompare'+side).dataset.firstMetadata==='ready')""",
+        8,
+        condition="对照关闭后两份成片的元数据都已到达",
+    )
+    ok(
+        all(
+            page.locator("#videoCompare" + side).evaluate("v=>v.paused && v.dataset.playsWhileClosed==='0'")
+            for side in ("Before", "After")
+        ),
+        "关闭并重新打开过的对照播放器收到媒体就绪事件后保持暂停",
+    )
+    video_compare(page, note_id)
+    for side in ("Before", "After"):
+        pause_and_scrub("#videoComparePlay" + side, "videoCompare" + side)
+        page.click("#videoComparePlay" + side)
+        ok(stopped_on_marker("videoCompare" + side, "videoCompare" + side + "Frame"), f"{side} 区间停止画面与帧号一致")
+    page.click("#videoCompareToggleRelocate")
+    page.select_option("#videoRelocateKind", "frame")
+    page.click("#videoRelocateUseFrame")
+    ok(page.input_value("#videoRelocateFrame") == "179", "对照中的重定位也取已解码的第 179 帧")
+    page.click("#videoCompareClose")
+
+
 def video_cut_and_relocate(page, review, identity, movies):
     video_seek(page, 35)
     cut = video_save_note(page, "Remove the pink insert")["id"]
     video_seek(page, 55)
     relocate = video_save_note(page, "Find the retimed shot")["id"]
+    video_seek(page, 120)
+    page.click("#videoSetStart")
+    video_seek(page, 178)
+    page.click("#videoSetEnd")
+    endpoint = video_save_note(page, "Check the green endpoint frame")["id"]
     page.click("#handBtn")
     claim = video_claim(page, review, identity, 1)
     cut_target = {"kind": "cut", "frame": 42, "contextStart": 30, "contextEnd": 60}
@@ -10374,9 +10504,16 @@ def video_cut_and_relocate(page, review, identity, movies):
         [
             {"noteId": cut, "outcome": "deleted", "summary": "Removed the pink insert", "target": cut_target},
             {"noteId": relocate, "outcome": "needs_relocate", "relocateReason": "The intro shifted this shot"},
+            {
+                "noteId": endpoint,
+                "outcome": "fixed",
+                "summary": "Kept the endpoint marker",
+                "target": {"kind": "range", "startFrame": 120, "endFrame": 179},
+            },
         ],
         "V2",
     )
+    video_check_endpoint_frame(page, endpoint)
     video_compare(page, cut)
     cut_readout = page.inner_text("#videoCompareAfterTime")
     ok(
@@ -10709,6 +10846,7 @@ def video_review_checks(browser, tmp: Path):
     video_cli(builder, *build_args, "--video-composition", "index.html", "--reuse-movie", movies["V1"])
     with video_review_page(browser, direct) as (page, identity):
         ok(page.locator("#videoPlayer").is_visible(), "指定合成与成片后，浏览器可以直接审阅 V1")
+        video_retry_single_cut(page)
         video_recover_pending_record(page, direct)
         video_cut_and_relocate(page, direct, identity, movies)
     review = tmp / "video-mp4-review"

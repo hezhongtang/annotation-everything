@@ -1905,7 +1905,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             + json.dumps(cmp_notes, ensure_ascii=False)
             + ";"
             "const srNodes=new Map();"
-            "const makeBox=id=>({id,hidden:false,disabled:false,value:'',textContent:'',innerHTML:'',clientWidth:600,clientHeight:340,style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},appendChild(){},querySelectorAll(){return []},addEventListener(){},pause(){},load(){},setAttribute(){},getAttribute(){return null},currentTime:0,duration:6.4,paused:true,muted:false});"
+            "const makeBox=id=>({id,hidden:false,disabled:false,value:'',textContent:'',innerHTML:'',clientWidth:600,clientHeight:340,style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},appendChild(){},querySelectorAll(){return []},addEventListener(){},removeEventListener(){},pause(){},load(){},setAttribute(){},getAttribute(){return null},currentTime:0,duration:6.4,paused:true,muted:false});"
             "const getEl=id=>{if(!srNodes.has(id))srNodes.set(id,makeBox(id));return srNodes.get(id)};"
             "const sr={getElementById:getEl},probes=[],seeks=[];let decode=false;const document={createElement:tag=>tag==='video'?{readyState:2,time:0,get currentTime(){return this.time},set currentTime(v){this.time=v;seeks.push([this.src,v]);queueMicrotask(()=>this.onseeked?.())},removeAttribute(){this.src=''},load(){if(this.src){probes.push(this.src);queueMicrotask(()=>decode?this.onloadeddata():this.onerror())}}}:makeBox('d')};"
             "const videoEl=()=>getEl('videoPlayer'),videoManifest=()=>VIDEO,videoFindVersion=vid=>VIDEO.versions.find(v=>v.versionId===(vid||videoActiveVersionId))||null,videoCurrentVersion=()=>videoFindVersion(videoActiveVersionId);"

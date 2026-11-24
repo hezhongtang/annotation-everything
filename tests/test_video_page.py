@@ -406,13 +406,15 @@ class VideoPagePureTests(unittest.TestCase):
             sr.activeElement=null;player.onFrame(0,{mediaTime:1});
             const playingMark=[get("videoMarkLayer").children.length,input.value];
             get("videoPlayRange").onclick();
-            const preview=[videoDraft.startFrame,videoDraft.endFrame,player.currentTime,videoRangeEnd];
+            const preview=[videoDraft.startFrame,videoDraft.endFrame,player.currentTime,player.paused];
             calls.length=0;
             videoShowNote({id:"old",video:{versionId:"V1",startFrame:15,endFrame:30}});
             const loading=calls.slice();
             videoShowNote({id:"latest",video:{versionId:"V1",startFrame:45,endFrame:90}});
             player.readyState=1;player.dispatchEvent(new Event("loadedmetadata"));
-            const loaded=[...calls,player.currentTime,videoRangeEnd];
+            const loaded=[...calls,player.currentTime];
+            player.currentTime=3.1;player.dispatchEvent(new Event("timeupdate"));
+            loaded.push(player.paused,player.currentTime);
             videoShowNote({id:"missing",video:{versionId:"V3",frame:1}});
             const missing=videoComparePair({video:{versionId:"V1",frame:0},
               videoReview:{versionId:"V3",target:{kind:"frame",versionId:"V3",frame:1}}},VIDEO);
@@ -422,9 +424,9 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertEqual((actual["atMark"], actual["pastMark"]), (1, 0))
         self.assertEqual(actual["editing"], "17")
         self.assertEqual(actual["playingMark"], [1, 30])
-        self.assertEqual(actual["preview"], [120, 180, 4, 6])
+        self.assertEqual(actual["preview"], [120, 180, 4, False])
         self.assertEqual(actual["loading"], [])
-        self.assertEqual(actual["loaded"], ["pause", "play", 1.5, 3])
+        self.assertEqual(actual["loaded"], ["pause", "play", 1.5, True, 3])
         self.assertIsNone(actual["missingUrl"])
         self.assertIn("V3", actual["messages"][0])
         self.assertEqual(actual["src"], "/V1")
@@ -684,6 +686,206 @@ class VideoPageWiringTests(unittest.TestCase):
         self.assertNotIn('aria-label="Video version"', self.source)
         self.assertNotIn('aria-label="Frame"', self.source)
         self.assertNotIn('{message:"root / entry"}', self.source)
+
+
+def playback_page(expression, locale="en"):
+    return interaction_program(
+        [("// ---------- 视频审阅纯函数 ----------", "// ---------- 批注区：")],
+        """
+        const version=id=>({versionId:id,url:'/'+id,frames:180,fps:30,timebase:{num:1,den:30},
+          width:640,height:360,duration:6});
+        const VIDEO={currentVersionId:'V1',versions:['V1','V2'].map(version)},liveVideo=VIDEO,FILE=false;
+        let videoActiveVersionId='V1',mode='server';
+        const notes=[],isDone=()=>false,renderVideoSource=()=>{},saveDraft=()=>{},toast=()=>{};
+        class Control extends EventTarget {
+          constructor(){super();this.style={};this.hidden=false;this.value='';this.textContent='';this.clientWidth=400;this.clientHeight=400;}
+          getAttribute(key){return this[key]??null}
+          setAttribute(key,value){this[key]=value}
+          appendChild(){}
+          click(){if(!this.disabled&&!this.hidden)return this.onclick?.()}
+          change(value){this.value=value;return this.onchange?.({target:this})}
+        }
+        class Player extends Control {
+          constructor(){super();this.currentTime=0;this.paused=true;this.readyState=0;this.error=null;}
+          get currentTime(){return this.time}
+          set currentTime(seconds){this.time=Math.floor(seconds*1e6)/1e6}
+          emit(name){this.dispatchEvent(new Event(name))}
+          load(){this.error=null;this.readyState=0;this.paused=true;this.currentTime=0}
+          metadata(width=640,height=360){
+            this.videoWidth=width;this.videoHeight=height;this.readyState=1;this.emit('loadedmetadata');
+          }
+          pause(){if(!this.paused){this.paused=true;queueMicrotask(()=>this.emit('pause'))}}
+          async play(){if(this.paused){this.paused=false;this.emit('play')}}
+        }
+        const controls=new Map(),players=['videoPlayer','videoCompareBefore','videoCompareAfter'];
+        const get=id=>{
+          if(!controls.has(id))controls.set(id,players.includes(id)?new Player():new Control());
+          return controls.get(id);
+        };
+        const sr={getElementById:get},document={createElement:()=>new Control()};
+        const player=get('videoPlayer'),before=get('videoCompareBefore'),after=get('videoCompareAfter');
+        const range={id:'cue',status:'drafted',text:'cue',video:{v:1,versionId:'V1',startFrame:12,endFrame:30},
+          videoReview:{state:'pending_review',versionId:'V2',target:{kind:'range',startFrame:15,endFrame:45}}};
+        notes.push(range);
+        """,
+        "videoInit();\n" + expression,
+        locale=locale,
+    )
+
+
+class VideoPlaybackTests(unittest.TestCase):
+    def test_dimension_notice_names_the_displayed_cut_and_explains_mark_and_annotation_dimensions(self):
+        for locale, decoded, registered in (("en", "decoded", "registered"), ("zh-CN", "解码", "登记")):
+            with self.subTest(locale=locale):
+                notices = playback_page(
+                    """
+                    const box=get('videoError'),messages=[];
+                    for(const id of ['V1','V2']){
+                      get('videoVersionPick').change(id);player.metadata(320,240);
+                      messages.push([box.hidden,box.textContent]);
+                    }
+                    const layer=get('videoMarkLayer').style,draft=videoDraftAt();
+                    const geometry=[layer.top,layer.height,draft.videoWidth,draft.videoHeight];
+                    player.metadata();
+                    const matchingHidden=box.hidden;
+                    videoCompareOpen(range);
+                    before.metadata(320,240);after.metadata(320,240);
+                    for(const side of ['Before','After']){
+                      const hint=get('videoCompare'+side+'MediaNotice');messages.push([hint.hidden,hint.textContent]);
+                    }
+                    return {messages,matchingHidden,geometry};
+                    """,
+                    locale,
+                )
+                for version, (hidden, message) in zip(("V1", "V2", "V1", "V2"), notices["messages"]):
+                    self.assertFalse(hidden)
+                    self.assertIn(version, message)
+                    self.assertRegex(message, decoded + r"[^.。]*320 × 240")
+                    self.assertRegex(message, registered + r"[^.。]*640 × 360")
+                self.assertTrue(notices["matchingHidden"])
+                self.assertEqual(notices["geometry"], ["50px", "300px", 640, 360])
+
+    def test_native_pause_and_scrub_release_the_range_on_each_player(self):
+        result = playback_page("""
+            player.metadata();
+            const observations={};
+            for(const side of ['Main','Before','After']){
+              const el=side==='Main'?player:get('videoCompare'+side),end=side==='After'?1.5:1;
+              if(side!=='Main'){videoCompareOpen(range);before.metadata();after.metadata()}
+              const seek=seconds=>{
+                el.seeking=true;el.currentTime=seconds;el.emit('seeking');
+                el.seeking=false;el.emit('seeked');el.emit('timeupdate');
+              };
+              const start=async()=>{
+                if(side==='Main')videoShowNote(range);
+                else get('videoComparePlay'+side).click();
+                seek(el.currentTime);await Promise.resolve();
+              };
+              const crossed=()=>{el.currentTime=2.5;el.emit('timeupdate');return [el.paused,el.currentTime]};
+              await start();el.currentTime=end+.1;el.emit('timeupdate');const normal=[el.paused,el.currentTime];
+              await start();el.pause();await Promise.resolve();await el.play();const paused=crossed();
+              await start();seek(.8);const scrubbed=crossed();
+              await start();el.pause();seek(3);const pausedScrub=el.currentTime;
+              observations[side]={normal,paused,scrubbed,pausedScrub};
+            }
+            return observations;
+        """)
+        for side, end in (("Main", 1), ("Before", 1), ("After", 1.5)):
+            with self.subTest(side=side):
+                self.assertEqual(
+                    result[side],
+                    {"normal": [True, end], "paused": [False, 2.5], "scrubbed": [False, 2.5], "pausedScrub": 3},
+                )
+
+    def test_late_metadata_cannot_play_a_closed_replaced_or_paused_comparison(self):
+        result = playback_page("""
+            const replacement={...range,id:'replacement',video:{versionId:'V2',frame:54},
+              videoReview:{...range.videoReview,versionId:'V1',target:{kind:'frame',frame:57}}};
+            notes.push(replacement);
+            const observations={};
+            for(const side of ['Before','After']){
+              const el=get('videoCompare'+side),starts=[];
+              el.addEventListener('play',()=>starts.push(el.src));
+              const play=()=>get('videoComparePlay'+side).click();
+              videoCompareOpen(range);play();get('videoCompareClose').click();el.metadata();
+              const closed=[el.paused,el.currentTime,starts.splice(0)];
+              el.load();videoCompareOpen(range);play();get('videoCompareClose').click();
+              videoCompareOpen(replacement);el.metadata();
+              const reopened=[el.paused,el.currentTime,starts.splice(0)];
+              el.load();videoCompareOpen(range);play();videoCompareOpen(replacement);el.metadata();
+              const switched=[el.paused,el.currentTime,starts.splice(0)];
+              el.load();videoCompareOpen(range);play();get('videoComparePause'+side).click();el.metadata();
+              const stopped=[el.paused,el.currentTime,starts.splice(0)];
+              get('videoCompareClose').click();el.load();
+              observations[side]={closed,reopened,switched,stopped};
+            }
+            videoShowNote(range);videoCompareOpen(range);player.metadata();
+            return {observations,mainPaused:player.paused};
+        """)
+        for side, frame_time, range_start in (("Before", 1.8, 0.4), ("After", 1.9, 0.5)):
+            with self.subTest(side=side):
+                expected = [True, frame_time, []]
+                self.assertEqual(
+                    result["observations"][side],
+                    {
+                        "closed": [True, 0, []],
+                        "reopened": expected,
+                        "switched": expected,
+                        "stopped": [True, range_start, []],
+                    },
+                )
+        self.assertTrue(result["mainPaused"])
+
+    def test_interval_endpoint_uses_the_same_decodable_frame_as_the_readout_and_annotation(self):
+        result = playback_page("""
+            range.video.endFrame=179;range.videoReview.target.endFrame=179;
+            player.metadata();videoShowNote(range);
+            const stop=el=>{el.currentTime=5.99;el.emit('timeupdate');el.emit('seeked')};
+            stop(player);
+            const main=[player.currentTime,get('videoFrame').value,videoDraftAt().frame];
+            videoCompareOpen(range);before.metadata();after.metadata();
+            const compare={};
+            for(const side of ['Before','After']){
+              const el=get('videoCompare'+side);
+              el.readyState=2;el.emit('loadeddata');await get('videoComparePlay'+side).click();
+              stop(el);compare[side]=[el.currentTime,get('videoCompare'+side+'Frame').textContent];
+            }
+            get('videoCompareToggleRelocate').click();get('videoRelocateUseFrame').click();
+            return {main,compare,relocated:get('videoRelocateFrame').value};
+        """)
+        # 30 fps 的第 179 帧在 5.966666…秒开始。解码器能在该帧内表示的第一微秒是 5.966667 秒。
+        self.assertEqual(result["main"], [5.966667, 179, 179])
+        self.assertEqual(result["compare"], dict.fromkeys(("Before", "After"), [5.966667, "Current frame 179"]))
+        self.assertEqual(result["relocated"], 179)
+
+    def test_failed_media_can_be_retried_in_place_or_from_the_same_location(self):
+        result = playback_page("""
+            const fail=el=>{el.readyState=0;el.error={code:2};el.emit('error')};
+            const recover=el=>{
+              if(el.error)return false;
+              el.metadata();el.readyState=2;el.emit('loadeddata');return true;
+            };
+            const v2=VIDEO.versions.pop();renderVideoVersions();recover(player);fail(player);
+            const retry=get('videoRetry'),single=[get('videoVersionPick').hidden,!retry.hidden&&retry.textContent];
+            retry.click();single.push(recover(player),retry.hidden,get('videoError').hidden);
+            fail(player);videoShowNote(range);recover(player);
+            const jump=[player.src,player.currentTime,player.paused,!!player.error];
+            VIDEO.versions.push(v2);videoCompareOpen(range);recover(before);recover(after);
+            const comparison={};
+            for(const side of ['Before','After']){
+              const el=get('videoCompare'+side);
+              fail(el);videoCompareOpen(range);const reopened=[recover(el),el.currentTime,el.paused];
+              fail(el);get('videoComparePlay'+side).click();const played=[recover(el),el.currentTime,el.paused];
+              comparison[side]={reopened,played};
+            }
+            return {single,jump,comparison};
+        """)
+        self.assertEqual(result["single"], [True, "Retry playback", True, True, True])
+        self.assertEqual(result["jump"], ["/V1", 0.4, False, False])
+        for side, start in (("Before", 0.4), ("After", 0.5)):
+            self.assertEqual(
+                result["comparison"][side], {"reopened": [True, start, True], "played": [True, start, False]}
+            )
 
 
 if __name__ == "__main__":
