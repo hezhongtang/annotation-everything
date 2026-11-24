@@ -833,7 +833,10 @@ class ServeSourceProjectTests(VideoHandoffBase):
             with self.subTest(engine=engine):
                 source_asset = project / "music.txt"
                 source_asset.write_text("music A")
-                # 代替引擎输出；渲染凭据使用工程入口自身的生产写入路径。
+                # 工程入口要求已安装引擎。仅替代渲染输出，凭据仍走实际登记流程。
+                engine_bin = video_engines.detect_project(project)["bin"]
+                engine_bin.parent.mkdir(parents=True, exist_ok=True)
+                engine_bin.touch()
                 with (
                     mock.patch.object(video_engines, "list_compositions", return_value=[{"id": entry, **V1_MEDIA}]),
                     mock.patch.object(

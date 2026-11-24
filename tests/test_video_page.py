@@ -716,6 +716,14 @@ class VideoPagePureTests(unittest.TestCase):
             self.assertIn(waiting_label, actual["tags"][1])
             self.assertNotIn("data-vid-reply=", actual["cards"][8])
             self.assertIn("data-vid-reply=", actual["cards"][1])
+            self.assertEqual(
+                {
+                    state
+                    for state, card in zip(actual["states"], actual["cards"])
+                    if 'data-act="video-relocate"' in card
+                },
+                {"pending_review", "needs_relocate", "missing_evidence"},
+            )
             self.assertIn("120", actual["cutText"])
             self.assertIn("108", actual["cutText"])
             self.assertIn("132", actual["cutText"])
@@ -812,7 +820,6 @@ class VideoPageWiringTests(unittest.TestCase):
             'tMsg("viewer.video.frameAria")',
             "videoCompareRefreshLocale()",
             'if(typeof videoCompareClose==="function")videoCompareClose();',
-            '["needs_reply","returned","failed"].includes(st)',
             "docxBlocked()||pptxBlocked()||videoBlocked()",
             'hasPrior?"viewer.hand.pickTitleRework":"viewer.hand.pickTitle"',
         ):
