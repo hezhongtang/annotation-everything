@@ -487,7 +487,7 @@ class VideoReceiptStoreTests(unittest.TestCase):
         self.assertEqual(latest["videoStats"]["unsubmittedIds"], ["n4", "n5"])
         self.assertEqual(latest["videoStats"]["unsubmittedCount"], 2)
         btxt = notes_cli.batches_text(state, store.load(self.review)["notes"], lang="zh-CN")
-        self.assertIn("待复核 2，待答复 1，待定位 0，缺证据 0，失败 0，未提交 2", btxt)
+        self.assertIn("待复核 2，待答复 1，已答复 0，待定位 0，缺证据 0，失败 0，未提交 2", btxt)
 
     def test_missing_evidence_needs_relocate_cut_and_followup_history(self):
         store.handoff_submit(self.review, "交三条", note_ids=["n1", "n2", "n3"])

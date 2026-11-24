@@ -4661,14 +4661,6 @@ def relocate_video_note(
         if note.get("status") == "resolved" or (vr and vr.get("decision") in ("approved", "returned", "replied")):
             raise HandoffError(f"批注 {note_id} 已有人工决定，不能重定位", code="note-already-decided", id=note_id)
         _check_video_evidence(note, expected_evidence)
-        handoff_doc = handoff_load(review_dir)
-        if vr and vr.get("state") in VIDEO_NON_RELOCATABLE_STATES:
-            raise HandoffError("当前意见仍需要答复或返工", code="video-not-ready", id=note_id, reason=vr["state"])
-        eligible = _video_relocation_batches([note], handoff_doc["items"], manifest.get("video") or {})
-        if note_id not in eligible:
-            raise HandoffError("这条批注尚无提交或处理依据", code="video-not-ready", id=note_id, reason="unsubmitted")
-        batch_seq = eligible[note_id]
-
         if version_id is not None:
             if target.get("versionId") is not None and target.get("versionId") != version_id:
                 raise HandoffError(
@@ -4688,6 +4680,15 @@ def relocate_video_note(
             cleaned_target = video_review.clean_receipt_target(target, version_meta)
         except video_review.VideoError as exc:
             raise HandoffError(str(exc), code="invalid-receipt-target", id=note_id) from None
+        if version_meta.get("playbackFailure"):
+            raise HandoffError("该版本成片已解码失败，不能作为复核目标", code="invalid-receipt-target", id=note_id)
+        if vr and vr.get("state") in VIDEO_NON_RELOCATABLE_STATES:
+            raise HandoffError("当前意见仍需要答复或返工", code="video-not-ready", id=note_id, reason=vr["state"])
+        handoff_doc = handoff_load(review_dir)
+        eligible = _video_relocation_batches([note], handoff_doc["items"], manifest.get("video") or {})
+        if note_id not in eligible:
+            raise HandoffError("这条批注尚无提交或处理依据", code="video-not-ready", id=note_id, reason="unsubmitted")
+        batch_seq = eligible[note_id]
 
         clean_summary = _receipt_str(summary) if summary is not None else ""
         existing_summary = _receipt_str(vr.get("summary")) if vr else ""
@@ -4714,8 +4715,6 @@ def relocate_video_note(
             and int(version_meta["versionId"][1:]) <= int(original_version[1:])
         ):
             raise HandoffError("请在原批注之后的成片版本补定位", code="invalid-receipt-target", id=note_id)
-        if version_meta.get("playbackFailure"):
-            raise HandoffError("该版本成片已解码失败，不能作为复核目标", code="invalid-receipt-target", id=note_id)
         if batch_seq is not None and version_meta.get("batch") != batch_seq:
             raise HandoffError("请重定位到本批实际渲染的成片", code="invalid-receipt-target", id=note_id)
         if prev_vr and prev_vr.get("outcome") == "deleted" and cleaned_target.get("kind") != "cut":
