@@ -1058,6 +1058,9 @@ ${RCSS}
 #videoCompareHead button,#videoCompareRelocate button,#videoCompareRelocate input,#videoCompareRelocate select,.vc-bar button{font:inherit}
 #videoCompareHead button,.vc-bar button,#videoCompareRelocate button{background:#2d3440;color:#fff;border:1px solid #4d5666;border-radius:4px;padding:2px 8px;cursor:pointer}
 #videoCompareHead button.primary,#videoCompareRelocate button.primary{background:#2a78d6;border-color:#3b89e8}
+#videoCompareEvidenceNotice{padding:6px 8px;background:#44381e;border-radius:4px}
+#videoCompareEvidenceNotice button{margin-inline-start:8px;font:inherit}
+#videoCompareHead button:disabled{opacity:.55;cursor:default}
 #videoCompareGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;flex:1;min-height:220px}
 .vc-pane{display:flex;flex-direction:column;gap:6px;min-height:0;background:#1b2028;border:1px solid #303744;border-radius:6px;padding:6px}
 .vc-pane-head{display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap}
@@ -1088,6 +1091,7 @@ ${RCSS}
 <div id="videoViewport"><video id="videoPlayer" controls playsinline preload="metadata"></video><div id="videoMarkLayer"></div></div>
 <div id="videoCompareStage" hidden>
 <div id="videoCompareHead"><div class="vc-head-info"><span id="videoCompareState" class="chip"></span><span id="videoCompareNoteText"></span></div><div class="vc-head-acts"><button id="videoCompareApprove" type="button" class="primary" hidden></button><button id="videoCompareReturnBtn" type="button" hidden></button><button id="videoCompareToggleRelocate" type="button" hidden></button><button id="videoCompareClose" type="button"></button></div></div>
+<div id="videoCompareEvidenceNotice" hidden><span id="videoCompareEvidenceMessage" role="status"></span><button id="videoCompareAcknowledge" type="button"></button></div>
 <div id="videoCompareReturnBox" hidden><span id="videoCompareReturnLbl"></span><input id="videoCompareReturnReason" type="text"><button id="videoCompareReturnSave" type="button" class="primary"></button><button id="videoCompareReturnCancel" type="button"></button></div>
 <div id="videoCompareReplyBox" hidden><span id="videoCompareReplyLbl"></span><input id="videoCompareReplyInput" type="text"><button id="videoCompareReplySave" type="button" class="primary"></button></div>
 <div id="videoCompareDecisionErr" role="alert" hidden></div>
@@ -1930,6 +1934,8 @@ function videoTargetValid(target,version){
     return true}
   return false}
 function videoEvidence(note){return note?.videoReview?.evidenceRevision||"legacy"}
+const videoEvidenceToReview=new Map();
+function videoEvidenceNeedsReview(note){return !!note&&videoEvidenceToReview.get(note.id)===videoEvidence(note)}
 function videoReceiptReady(note,manifest){
   if(!note||typeof note!=="object")return false;
   const vr=note.videoReview;
@@ -1943,7 +1949,7 @@ function videoReceiptReady(note,manifest){
   const version=versions.find(v=>v&&v.versionId===verId);if(!version||version.playbackFailure||versions.find(v=>v?.versionId===note.video?.versionId)?.playbackFailure)return false;
   return videoTargetValid(vr.target,version)}
 function videoBatchApprovable(note,manifest){
-  return !!(note&&note.status==="drafted"&&videoReceiptReady(note,manifest)&&videoNoteState(note)==="pending_review")}
+  return !!(note&&note.status==="drafted"&&!videoEvidenceNeedsReview(note)&&videoReceiptReady(note,manifest)&&videoNoteState(note)==="pending_review")}
 function videoTargetText(target,fallbackVersionId){
   if(!target||typeof target!=="object")return"";
   const ver=String(target.versionId||fallbackVersionId||"");
@@ -1998,7 +2004,7 @@ function videoTimelineHistory(note){
     const detail=[tgt,e.summary||e.question||e.relocateReason||e.failure||""].filter(Boolean).join(" · ");
     const text=detail?tMsg("viewer.video.historyReceiptDetail",{version:ver,state:st,detail}):tMsg("viewer.video.historyReceipt",{version:ver,state:st});
     return{...e,text}})}
-function videoComparePair(note,manifest){
+function videoComparePair(note,manifest,fallbackVersionId){
   if(!note||typeof note!=="object")return null;
   const m=manifest||null,vers=m&&Array.isArray(m.versions)?m.versions:[];
   const findVer=vid=>vid?(vers.find(v=>v&&v.versionId===vid)||null):null;
@@ -2006,7 +2012,7 @@ function videoComparePair(note,manifest){
   const beforeVer=orig?(findVer(orig.versionId)||{versionId:orig.versionId,fps:orig.fps,timebase:orig.timebase,frames:orig.frames,width:orig.videoWidth,height:orig.videoHeight,url:null}):null;
   const beforeSpec=orig?videoTargetPlaySpec(orig,beforeVer):null;
   const vr=note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
-  const afterVerId=(vr&&vr.target&&vr.target.versionId)||(vr&&vr.versionId)||(m&&m.currentVersionId)||(beforeVer&&beforeVer.versionId)||null;
+  const afterVerId=(vr&&vr.target&&vr.target.versionId)||(vr&&vr.versionId)||fallbackVersionId||(m&&m.currentVersionId)||(beforeVer&&beforeVer.versionId)||null;
   const afterVer=findVer(afterVerId);
   const afterSpec=vr&&vr.target?videoTargetPlaySpec(vr.target,afterVer||vr.target):null;
   const approved=note.status==="resolved"||(vr&&vr.decision==="approved");
@@ -2185,6 +2191,7 @@ async function submitVideoDecision(noteId,action,opts={}){
   if(mode!=="server"){onErr(tMsg("viewer.video.decisionNeedServer"));return null}
   if(!serverSupports("video-decisions")||!serverSupports("video-evidence-revision")){onErr(tMsg("viewer.video.decisionOldService"));return null}
   const note=(typeof notes!=="undefined"&&Array.isArray(notes))?notes.find(n=>n.id===noteId):null;
+  if(action==="approve"&&videoEvidenceNeedsReview(note)){onErr(tMsg("viewer.video.compare.evidenceUpdated"));return null}
   const vr=note&&note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
   if(action!=="approve"&&!serverSupports("video-feedback-revision")){onErr(tMsg("viewer.video.revisionOldService"));return null}
   const body={action,expectedEvidence:opts.expectedEvidence||videoEvidence(note)};
@@ -2285,6 +2292,8 @@ function videoCompareFormatReadout(versionId,spec,ver){
   return tMsg("viewer.video.compare.frameReadout",{version:vid,frame:spec.seekFrame||0,time:sec.toFixed(3)})}
 function videoCompareRenderLabels(){
   const setText=(id,key)=>{const el=sr.getElementById(id);if(el)el.textContent=tMsg(key)};
+  setText("videoCompareEvidenceMessage","viewer.video.compare.evidenceUpdated");
+  setText("videoCompareAcknowledge","viewer.video.compare.acknowledgeEvidence");
   setText("videoCompareBeforeTitle","viewer.video.compare.beforeTitle");
   setText("videoCompareAfterTitle","viewer.video.compare.afterTitle");
   setText("videoCompareClose","viewer.video.compare.close");
@@ -2365,11 +2374,31 @@ function videoCompareAfterVersion(){const verSel=sr.getElementById("videoRelocat
   return videoFindVersion(vid)}
 function videoCompareAfterCurrentFrame(){const ver=videoCompareAfterVersion(),el=videoCompareEl("after");
   if(!ver||!el)return 0;return videoTimeToFrame(el.currentTime||0,ver,true)}
+function videoCompareEvidenceControls(){
+  const pair=videoComparePairState;if(!pair)return;
+  const pending=videoEvidenceToReview.get(pair.noteId)===pair.evidence;
+  const approve=sr.getElementById("videoCompareApprove"),notice=sr.getElementById("videoCompareEvidenceNotice"),
+    ack=sr.getElementById("videoCompareAcknowledge");
+  if(approve)approve.disabled=pending;
+  if(notice)notice.hidden=!pending;
+  if(ack){ack.hidden=!pending||!pair.ready;
+    ack.disabled=ack.hidden||!["before","after"].every(side=>{
+      const player=videoCompareEl(side);
+      return player&&player.getAttribute("src")===pair[side].url&&player.readyState>=2&&!player.seeking&&!player.error})}
+}
+function videoCompareCurrentPair(note){
+  const previous=videoComparePairState;
+  const fallback=previous?.noteId===note.id&&previous.evidence===videoEvidence(note)?previous.after.versionId:null;
+  return videoComparePair(note,videoManifest(),fallback)}
 function videoCompareOpen(note,openRelocate=false){
   if(!VIDEO||!note)return;
-  const m=videoManifest(),pair=videoComparePair(note,m);if(!pair)return;
+  const pair=videoCompareCurrentPair(note);if(!pair)return;
+  const wasPending=videoEvidenceNeedsReview(note);
+  if(note.status==="resolved"||pair.state==="approved")videoEvidenceToReview.delete(note.id);
+  else if(videoCompareNoteId===note.id&&videoComparePairState.evidence!==pair.evidence
+    &&note.videoReview?.decisionInputRevision!==videoComparePairState.evidence)videoEvidenceToReview.set(note.id,pair.evidence);
   if(videoCompareNoteId!==note.id||videoComparePairState?.evidence!==pair.evidence)videoCompareReturnOpen=false;
-  videoCompareNoteId=note.id;videoComparePairState=pair;videoCompareSig=JSON.stringify({note,versions:m&&m.versions||null});
+  videoCompareNoteId=note.id;videoComparePairState=pair;videoCompareSig=videoKey(pair);
   videoCompareEnds={before:null,after:null};
   const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage"),mainPlayer=typeof videoEl==="function"?videoEl():sr.getElementById("videoPlayer");
   if(mainPlayer)mainPlayer.pause();
@@ -2420,6 +2449,8 @@ function videoCompareOpen(note,openRelocate=false){
   videoCompareLoadSide(videoCompareEl("before"),pair.before.url,pair.before.spec,()=>videoCompareLayoutSide("before"));
   videoCompareLoadSide(videoCompareEl("after"),pair.after.url,pair.after.spec,()=>videoCompareLayoutSide("after"));
   videoRelocatePopulate(pair,openRelocate||pair.state==="needs_relocate"||pair.state==="missing_evidence");
+  videoCompareEvidenceControls();
+  if(wasPending!==videoEvidenceNeedsReview(note)&&typeof refreshList==="function")refreshList();
   videoCompareLayout()}
 function videoCompareClose(){
   if(!videoCompareNoteId)return;
@@ -2432,10 +2463,10 @@ function videoCompareClose(){
 function videoCompareRefreshLocale(){
   if(!videoCompareNoteId)return;
   const note=notes.find(n=>n.id===videoCompareNoteId);
-  const pair=note?videoComparePair(note,videoManifest()):videoComparePairState;
+  const pair=note?videoCompareCurrentPair(note):videoComparePairState;
   if(!pair)return;
   if(note&&videoComparePairState?.evidence!==pair.evidence){videoCompareOpen(note,videoRelocateOpen);return}
-  videoComparePairState=pair;
+  videoComparePairState=pair;videoCompareSig=videoKey(pair);
   videoCompareRenderLabels();
   const stEl=sr.getElementById("videoCompareState");
   if(stEl)stEl.textContent=tMsg("viewer.video.state."+pair.state)+(pair.after.versionId?" · "+pair.after.versionId:"");
@@ -2475,8 +2506,7 @@ function videoCompareSync(){
   if(!videoCompareNoteId)return;
   const found=notes.find(n=>n.id===videoCompareNoteId);
   if(!found){videoCompareClose();return}
-  const m=videoManifest(),sig=JSON.stringify({note:found,versions:m&&m.versions||null});
-  if(sig===videoCompareSig)return;
+  if(videoKey(videoCompareCurrentPair(found))===videoCompareSig)return;
   videoCompareOpen(found,videoRelocateOpen)}
 function videoComparePause(side){const el=videoCompareEl(side);videoCompareEnds[side]=null;if(el)el.pause()}
 async function videoComparePlay(side){
@@ -2551,6 +2581,14 @@ async function videoCompareDecision(action){
   return res}
 function videoCompareInit(){
   const closeBtn=sr.getElementById("videoCompareClose");if(closeBtn)closeBtn.onclick=()=>videoCompareClose();
+  const ack=sr.getElementById("videoCompareAcknowledge");
+  if(ack)ack.onclick=()=>{
+    const pair=videoComparePairState,note=notes.find(n=>n.id===videoCompareNoteId);
+    if(!pair||!note||pair.evidence!==videoEvidence(note)){videoCompareSync();return}
+    videoCompareEvidenceControls();
+    if(ack.disabled)return;
+    videoEvidenceToReview.delete(note.id);videoCompareEvidenceControls();
+    if(typeof refreshList==="function")refreshList()};
   const toggleRel=sr.getElementById("videoCompareToggleRelocate");if(toggleRel)toggleRel.onclick=()=>videoRelocatePopulate(videoComparePairState,!videoRelocateOpen);
   const approveBtn=sr.getElementById("videoCompareApprove");if(approveBtn)approveBtn.onclick=()=>videoCompareDecision("approve");
   const retBtn=sr.getElementById("videoCompareReturnBtn"),retBox=sr.getElementById("videoCompareReturnBox");
@@ -2564,6 +2602,8 @@ function videoCompareInit(){
   const sAfter=sr.getElementById("videoComparePauseAfter");if(sAfter)sAfter.onclick=()=>videoComparePause("after");
   for(const side of ["before","after"]){
     const player=videoCompareEl(side);if(!player)continue;
+    for(const event of ["loadeddata","seeked","seeking","emptied","error"])
+      player.addEventListener(event,videoCompareEvidenceControls);
     const changed=ok=>{const info=videoComparePairState?.[side];if(!info?.url||player.getAttribute("src")!==info.url)return;
       videoPlaybackState(info.versionId,ok,player.error?.code,notes.find(n=>n.id===videoCompareNoteId));
       if(!ok){const err=sr.getElementById("videoCompareDecisionErr");if(err){err.hidden=false;err.textContent=tMsg("viewer.video.playbackUnavailable")}}};
@@ -2618,7 +2658,7 @@ function noteHtml(x){
   const vr=isVid&&x.videoReview&&typeof x.videoReview==="object"?x.videoReview:null;
   const vidState=isVid&&typeof videoNoteState==="function"?videoNoteState(x):"";
   const vidApproved=!!(isVid&&vr&&(done||vr.decision==="approved"));
-  const vrReady=typeof VIDEO==="undefined"||!VIDEO||videoReceiptReady(x,videoManifest());
+  const vrReady=!isVid||(!videoEvidenceNeedsReview(x)&&videoReceiptReady(x,videoManifest()));
   const acts=changed?(editingId===x.id?`<button data-act="cancel">${tMsg("viewer.cancel")}</button>`:""):ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
     :vidApproved?`<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`
     :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${isVid?(dr?`${vrReady?`<button data-act="video-approve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.video.approveBtn")}</button>`:""}<button data-act="video-return-open" data-id="${id}">${tMsg("viewer.video.returnBtn")}</button>`:held?"":vr?`<button data-act="video-return-open" data-id="${id}">${tMsg(vidState==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn")}</button>`:(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`)):(dr?`${vrReady?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button>`:""}<button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`:held?"":(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`))}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
@@ -4067,7 +4107,8 @@ $("helpBtn").onclick=$("shortcutsBtn").onclick=()=>$("help").classList.toggle("o
 $("allTab").onclick=openAll;$("historyBtn").onclick=$("batchesTab").onclick=openBatches;
 document.addEventListener("keydown",e=>{
   if(overviewShown())return;
-  if(["SELECT","TEXTAREA","INPUT"].includes(e.target.tagName)||e.target.isContentEditable||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
+  const source=e.composedPath?.()[0]||e.target;
+  if(["SELECT","TEXTAREA","INPUT"].includes(source.tagName)||source.isContentEditable||e.isComposing||e.metaKey||e.ctrlKey||e.altKey)return;
   const k=e.key.toLowerCase();
   if(analysisShown()){
     if(document.querySelector(".modal.on")){if(e.key==="Escape")document.querySelectorAll(".modal.on").forEach(el=>el.classList.remove("on"));return}

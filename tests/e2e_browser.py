@@ -10289,6 +10289,14 @@ def video_compare(page, nid):
     page.locator("#videoCompareStage").wait_for()
 
 
+def video_type_feedback(page, selector, text):
+    field = page.locator(selector)
+    field.press_sequentially(text + "x")
+    field.press("ArrowLeft")
+    field.press("Delete")
+    assert field.input_value() == text
+
+
 def video_play_segment(page, side, start, end):
     page.click("#videoComparePlay" + side)
     return wait_dom(
@@ -10343,17 +10351,36 @@ def video_cut_and_relocate(page, review, identity, movies):
     page.click("#videoCompareClose")
     video_compare(page, relocate)
     ok(not page.locator("#videoCompareApprove").is_visible(), "待定位的镜头没有通过入口")
+    kind = page.locator("#videoRelocateKind")
+    kind.press("Space")
+    kind.press("ArrowDown")
+    kind.press("Enter")
+    assert kind.input_value() == "range"
+    kind.press("Space")
+    kind.press("ArrowUp")
+    kind.press("Enter")
+    assert kind.input_value() == "frame"
     page.fill("#videoRelocateFrame", "67")
-    page.fill("#videoRelocateSummary", "Found original frame 55 after intro")
-    page.fill("#videoRelocateReason", "Matched the first shot after the cut")
+    summary = "Found original frame 55 after intro 片头"
+    reason = "Matched the first shot after the cut 剪口"
+    video_type_feedback(page, "#videoRelocateSummary", summary)
+    video_type_feedback(page, "#videoRelocateReason", reason)
     result = video_click_post(page, "#videoRelocateSave", f"/api/notes/{relocate}/video-relocate")
-    note = result["note"]
+    assert result["note"]["id"] == relocate
+    note = next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == relocate)
     ok(
         note["video"]["frame"] == 55
         and note["videoReview"]["target"]["frame"] == 67
+        and note["videoReview"]["summary"] == summary
+        and note["videoReview"]["relocatedReason"] == reason
         and note["videoReview"]["state"] == "pending_review"
         and page.locator("#videoCompareApprove").is_visible(),
         "人工重定位保留 V1 第 55 帧，并将 V2 第 67 帧送回复核",
+    )
+    page.locator("#videoCompareClose").press("p")
+    ok(
+        page.locator("#pinBtn.on").is_visible() and not page.locator("#videoCompareStage").is_visible(),
+        "焦点离开输入控件后，P 仍可进入标注模式",
     )
 
 
@@ -10466,18 +10493,24 @@ def video_mp4_rework(page, review, identity, movies):
         "两个播放器各自解码 AAC、带声播放指定区间，另一侧保持暂停",
     )
     video_artifact(page, review, "audio-v1-v2")
-    reason = "Please reduce the music another step"
+    reason = "Please soften the music another step 再轻一点"
     page.click("#videoCompareReturnBtn")
-    page.fill("#videoCompareReturnReason", reason)
+    video_type_feedback(page, "#videoCompareReturnReason", reason)
     returned = video_click_post(page, "#videoCompareReturnSave", f"/api/notes/{audio}/video-decision")
     ok(returned["note"]["videoReview"]["returnReason"] == reason, "退回理由保存在原音量批注")
     page.click("#videoCompareClose")
     video_compare(page, question)
-    reply = "Keep the short title"
-    page.fill("#videoCompareReplyInput", reply)
+    reply = "Keep the first title 保留片头"
+    video_type_feedback(page, "#videoCompareReplyInput", reply)
     replied = video_click_post(page, "#videoCompareReplySave", f"/api/notes/{question}/video-decision")
+    saved = {
+        n["id"]: n["videoReview"]
+        for n in page.request.get("/api/notes").json()["notes"]
+        if n["id"] in (audio, question)
+    }
     ok(
-        replied["note"]["videoReview"]["reply"] == reply
+        replied["note"]["videoReview"]["reply"] == saved[question]["reply"] == reply
+        and saved[audio]["returnReason"] == reason
         and page.request.get("/api/handoff").json()["latest"]["seq"] == 1,
         "保存答复和退回只更新原批注，批次仍是第一批",
     )
@@ -10582,11 +10615,29 @@ def video_browser_decode_repair(page, review, identity, movies):
         data["handoff"]["latest"]["status"] == "claimed" and data["doc"]["video"]["currentVersionId"] == "V3",
         "Chrome 解码失败后保留上一有效成片，原接收会话可在同批继续",
     )
+    video_compare(page, nid)
     video_deliver(page, review, identity, claim, movies["V3"], entries, "V5")
     note = next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == nid)
     ok(
         note["videoReview"]["versionId"] == "V5" and note["videoReview"]["state"] == "pending_review",
         "同批补交 V5 后原条目恢复待人工复核",
+    )
+    page.locator("#videoCompareEvidenceNotice").wait_for()
+    assert page.inner_text("#videoCompareAfterInfo") == "V5"
+    ok(
+        page.locator("#videoCompareApprove").is_disabled()
+        and not page.locator(f"[data-act='video-approve'][data-id='{nid}']").count()
+        and not page.locator(f"[data-act='video-batch-pick'][data-id='{nid}']").count(),
+        "对照打开期间收到替换证据，确认前各处通过入口都受限",
+    )
+    page.click("#videoCompareAcknowledge")
+    path = f"/api/notes/{nid}/video-decision"
+    with page.expect_request(lambda r: r.method == "POST" and r.url.endswith(path)) as decision:
+        approved = video_click_post(page, "#videoCompareApprove", path)
+    ok(
+        decision.value.post_data_json["expectedEvidence"] == note["videoReview"]["evidenceRevision"]
+        and approved["note"]["status"] == "resolved",
+        "查看并确认 V5 后，以该修订通过原批注",
     )
 
 

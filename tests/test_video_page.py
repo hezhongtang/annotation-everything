@@ -36,7 +36,204 @@ def frame_anchor():
     }
 
 
+def compare_ui(expression):
+    """视频、DOM 和服务端返回值使用合成数据，控件接线与页面生成代码一致。"""
+    return interaction_program(
+        [
+            (START, END),
+            ("// ---------- 视频对照与重定位 ----------", "// ---------- 批注区："),
+            ("let videoApproveSel=", "function finalizeSkipText"),
+        ],
+        """
+        const version=id=>({versionId:id,url:'/'+id,frames:60,fps:30,timebase:{num:1,den:30},width:160,height:90});
+        const VIDEO={currentVersionId:'V2',versions:['V1','V2'].map(version)},videoManifest=()=>VIDEO;
+        const makeNote=id=>({id,status:'drafted',text:id,video:{versionId:'V1',frame:6},
+          videoReview:{state:'pending_review',batch:1,versionId:'V2',summary:'First receipt',target:{kind:'frame',frame:15}}});
+        let notes=[makeNote('caption'),makeNote('music')],mode='server';
+        const calls=[],api=async (method,path,body)=>{calls.push({path,body});return {}},toast=()=>{},renderFinalizeAll=()=>{};
+        class Control extends EventTarget {
+          constructor(){super();this.style={};this.value='';this.textContent='';this.readyState=2;this.paused=true}
+          click(){if(!this.disabled&&!this.hidden)return this.onclick?.()}
+          getAttribute(key){return this[key]}
+          removeAttribute(key){delete this[key]}
+          load(){if(this.onloadeddata)queueMicrotask(()=>this.onloadeddata?.())}
+          get currentTime(){return this.time||0}
+          set currentTime(value){this.time=value;if(this.onseeked)queueMicrotask(()=>this.onseeked?.())}
+          pause(){this.paused=true}
+        }
+        const controls=new Map(),get=id=>{
+          if(!controls.has(id))controls.set(id,new Control());return controls.get(id)};
+        const sr={getElementById:get},document={createElement:()=>new Control()};
+        const videoLayout=()=>{},videoFindVersion=id=>VIDEO.versions.find(v=>v.versionId===id);
+        """,
+        """
+        setVideoServerFeatures({features:['video-decisions','video-evidence-revision']});
+        videoCompareInit();
+        videoCompareOpen(notes[0]);
+        const replace=(revision,frame)=>{
+          notes[0]={...notes[0],videoReview:{...notes[0].videoReview,evidenceRevision:revision,
+            summary:'Replacement '+frame,target:{kind:'frame',frame}}};
+          videoCompareSync();
+        };
+        """
+        + expression,
+    )
+
+
+class VideoCompareEvidenceTests(unittest.TestCase):
+    def test_question_without_a_target_keeps_reply_and_displayed_version_during_other_receipt(self):
+        result = compare_ui(
+            """
+            videoCompareClose();
+            notes[0].videoReview={state:'needs_reply',question:'Which frame?',evidenceRevision:'question'};
+            videoCompareOpen(notes[0]);
+            get('videoCompareReplyInput').value='Keep frame six 请保留';
+            VIDEO.versions.push(version('V3'));VIDEO.currentVersionId='V3';
+            notes[1].videoReview={...notes[1].videoReview,versionId:'V3',evidenceRevision:'music'};
+            videoCompareSync();
+            return [get('videoCompareReplyInput').value,get('videoCompareAfterInfo').textContent];
+            """,
+        )
+        self.assertEqual(result, ["Keep frame six 请保留", "V2"])
+
+    def test_new_receipt_first_opened_after_a_return_needs_no_extra_confirmation(self):
+        result = compare_ui(
+            """
+            notes[0].videoReview={...notes[0].videoReview,state:'returned',decision:'returned',
+              decisionInputRevision:'legacy',evidenceRevision:'returned',returnReason:'Please shift the title'};
+            videoCompareSync();
+            const returnNotice=!get('videoCompareEvidenceNotice').hidden;
+            videoCompareClose();
+            notes[0].videoReview={...makeNote('caption').videoReview,evidenceRevision:'next-batch',batch:2};
+            videoCompareOpen(notes[0]);
+            const approve=get('videoCompareApprove');
+            return {returnNotice,canApprove:!approve.hidden&&!approve.disabled};
+            """,
+        )
+        self.assertEqual(result, {"returnNotice": False, "canApprove": True})
+
+    def test_card_and_group_approval_wait_for_the_displayed_replacement(self):
+        result = compare_ui(
+            """
+            const picked=()=>videoSelectedBatches({batches:[{seq:1,ids:['caption','music']}]}).batches[0]?.ids;
+            videoSelectAllReady();const initial=picked();
+            replace('second',24);
+            videoCompareClose();videoSelectAllReady();
+            const waiting=picked();
+            await submitVideoDecision('caption','approve');
+            videoCompareOpen(notes[0]);
+            const after=get('videoCompareAfter'),ack=get('videoCompareAcknowledge');
+            after.readyState=1;after.dispatchEvent(new Event('emptied'));
+            await ack.click();const loading=get('videoCompareApprove').disabled;
+            after.readyState=2;after.dispatchEvent(new Event('loadeddata'));await ack.click();
+            videoSelectAllReady();const confirmed=picked();
+            await submitVideoDecision('caption','approve');
+            return {initial,waiting,loading,confirmed,calls};
+            """,
+        )
+        self.assertEqual(result["initial"], ["caption", "music"])
+        self.assertEqual(result["waiting"], ["music"])
+        self.assertTrue(result["loading"])
+        self.assertEqual(result["confirmed"], ["caption", "music"])
+        self.assertEqual([call["body"]["expectedEvidence"] for call in result["calls"]], ["second"])
+
+    def test_unrelated_receipts_and_replays_preserve_the_open_edit_and_playback(self):
+        result = compare_ui(
+            """
+            get('videoCompareToggleRelocate').click();
+            const summary=get('videoRelocateSummary'),player=get('videoCompareAfter');
+            summary.value='Unfinished 剪口';player.currentTime=1.1;player.paused=false;
+            const state=()=>[summary.value,player.currentTime,player.paused,get('videoCompareApprove').disabled];
+            notes=JSON.parse(JSON.stringify(notes));
+            videoCompareSync();const replay=state();
+            VIDEO.versions.push(version('V3'));VIDEO.currentVersionId='V3';
+            notes[1].videoReview={...notes[1].videoReview,versionId:'V3',evidenceRevision:'music-update'};
+            videoCompareSync();return {replay,other:state()};
+            """,
+        )
+        expected = ["Unfinished 剪口", 1.1, False, False]
+        self.assertEqual(result["replay"], expected)
+        self.assertEqual(result["other"], expected)
+
+    def test_replaced_evidence_needs_a_fresh_confirmation_for_each_revision(self):
+        result = compare_ui(
+            """
+            const approve=get('videoCompareApprove'),notice=get('videoCompareEvidenceNotice'),ack=get('videoCompareAcknowledge');
+            const canApprove=()=>!approve.hidden&&!approve.disabled;
+            const opened=canApprove();
+            replace('second',24);
+            const replacement={summary:get('videoCompareAfterReason').textContent,
+              warning:get('videoCompareEvidenceMessage').textContent,notice:!notice.hidden,blocked:!canApprove()};
+            await approve.click();
+            await ack.click();
+            const reviewed=canApprove();
+            videoCompareSync();
+            const replayed=canApprove();
+            replace('third',30);
+            const renewed=!canApprove();
+            await approve.click();
+            await ack.click();await approve.click();
+            return {opened,replacement,reviewed,replayed,renewed,calls};
+            """,
+        )
+        self.assertTrue(result["opened"])
+        self.assertTrue(result["replacement"]["blocked"])
+        self.assertTrue(result["replacement"]["notice"])
+        self.assertIn("updated", result["replacement"]["warning"].lower())
+        self.assertIn("Replacement 24", result["replacement"]["summary"])
+        self.assertTrue(result["reviewed"] and result["replayed"] and result["renewed"])
+        self.assertEqual(
+            result["calls"],
+            [
+                {
+                    "path": "/api/notes/caption/video-decision",
+                    "body": {
+                        "action": "approve",
+                        "expectedEvidence": "third",
+                        "expectedVersion": "V2",
+                        "expectedBatch": 1,
+                    },
+                }
+            ],
+        )
+
+
 class VideoPagePureTests(unittest.TestCase):
+    def test_shortcuts_leave_shadow_form_keys_to_the_control(self):
+        result = interaction_program(
+            [
+                (
+                    'document.addEventListener("keydown",e=>{\n  if(overviewShown())return;',
+                    "// ---------- Analysis view helpers ----------",
+                )
+            ],
+            """
+            let onKey, markMode=false, remarkId=null, focus=false, i=0;
+            const document={addEventListener:(_,f)=>onKey=f,querySelector:()=>null};
+            const overviewShown=()=>false,analysisShown=()=>false;
+            const toggleFocus=()=>{focus=!focus},setMarkMode=on=>{markMode=on},go=k=>{i=k};
+            """,
+            """
+            const host={tagName:'DIV'};
+            const key=(name,origin,target=host)=>{
+              let consumed=false;
+              onKey({key:name,target,composedPath:()=>[origin,target],preventDefault(){consumed=true}});
+              return consumed;
+            };
+            const input={tagName:'INPUT'},select={tagName:'SELECT'};
+            const form=[key('f',input),key('p',input),key('ArrowLeft',input),key('ArrowRight',select)];
+            const documentInput={tagName:'TEXTAREA'};
+            const documentKey=key('p',documentInput,documentInput);
+            const during=[focus,markMode,i];
+            const outside=key('p',host);
+            return {form,documentKey,during,outside,markMode};
+            """,
+        )
+        self.assertEqual(result["form"], [False, False, False, False])
+        self.assertFalse(result["documentKey"])
+        self.assertEqual(result["during"], [False, False, 0])
+        self.assertTrue(result["outside"] and result["markMode"])
+
     def test_microsecond_playback_clock_preserves_frame_boundaries(self):
         actual = run_video(
             "const clock={frames:180,timebase:{num:1,den:30}};"

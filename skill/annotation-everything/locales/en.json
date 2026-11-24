@@ -3038,6 +3038,8 @@
     "viewer.video.compare.beforeTitle": "Before",
     "viewer.video.compare.afterTitle": "After",
     "viewer.video.compare.close": "Close compare",
+    "viewer.video.compare.evidenceUpdated": "The evidence for this note was updated. Review the new evidence before approving.",
+    "viewer.video.compare.acknowledgeEvidence": "I have reviewed the updated evidence",
     "viewer.video.compare.playFrame": "Play from frame",
     "viewer.video.compare.playRange": "Play interval",
     "viewer.video.compare.playContext": "Play cut context",

@@ -2828,6 +2828,8 @@
     "viewer.video.compare.beforeTitle": "原版",
     "viewer.video.compare.afterTitle": "改后",
     "viewer.video.compare.close": "关闭对照",
+    "viewer.video.compare.evidenceUpdated": "这条批注的证据已更新。请查看新版证据，确认后再通过。",
+    "viewer.video.compare.acknowledgeEvidence": "我已查看新版证据",
     "viewer.video.compare.playFrame": "定位原帧 / 播放",
     "viewer.video.compare.playRange": "播放区间",
     "viewer.video.compare.playContext": "播放剪口上下文",
