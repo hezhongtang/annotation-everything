@@ -10635,17 +10635,23 @@ def video_browser_decode_repair(page, review, identity, movies):
     data[start + 4 : start - 4 + size] = bytes(size - 8)
     broken = review.parent / "unencoded-samples.mp4"
     broken.write_bytes(data)
-    with page.expect_response(
-        lambda r: r.request.method == "POST" and r.url.endswith("/api/video/playback-failure")
-    ) as failed:
-        video_deliver(page, review, identity, claim, broken, entries, "V4")
-        if (
-            next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == nid)["videoReview"]["state"]
-            == "pending_review"
-        ):
-            video_compare(page, nid)
-    assert failed.value.ok, failed.value.text()
-    data = failed.value.json()
+
+    def deliver_broken(batch, note_id, outcomes, version):
+        with page.expect_response(
+            lambda r: r.request.method == "POST" and r.url.endswith("/api/video/playback-failure")
+        ) as failed:
+            video_deliver(page, review, identity, batch, broken, outcomes, version)
+            if (
+                next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == note_id)["videoReview"][
+                    "state"
+                ]
+                == "pending_review"
+            ):
+                video_compare(page, note_id)
+        assert failed.value.ok, failed.value.text()
+        return failed.value.json()
+
+    data = deliver_broken(claim, nid, entries, "V4")
     ok(
         data["handoff"]["latest"]["status"] == "claimed" and data["doc"]["video"]["currentVersionId"] == "V3",
         "Chrome 解码失败后保留上一有效成片，原接收会话可在同批继续",
@@ -10673,6 +10679,40 @@ def video_browser_decode_repair(page, review, identity, movies):
         decision.value.post_data_json["expectedEvidence"] == note["videoReview"]["evidenceRevision"]
         and approved["note"]["status"] == "resolved",
         "查看并确认 V5 后，以该修订通过原批注",
+    )
+
+    page.click("#videoCompareClose")
+    credits = next(n["id"] for n in notes if n["text"] == "Check end credits later")
+    page.click("#handBtn")
+    page.check(f"#handPick input[data-noteid='{credits}']")
+    fourth = video_claim(page, review, identity, 4)
+    deliver_broken(
+        fourth,
+        credits,
+        [{"noteId": credits, "outcome": "fixed", "summary": "Credits adjusted", "target": {"frame": 155}}],
+        "V6",
+    )
+    if page.locator("#videoCompareStage").is_visible():
+        page.click("#videoCompareClose")
+    page.click("#batchesTab")
+    release = "[data-release-repair='4']"
+    page.once("dialog", lambda dialog: dialog.accept())
+    released = video_click_post(page, release, "/api/video/release-repair")["handoff"]
+    ok(
+        released["latest"]["videoRepairRelease"]["ids"] == [credits] and released["inFlightIds"] == [],
+        "审阅人在处理记录明确放弃第四批补交，失败项离开在途范围",
+    )
+    page.get_by_text("Reviewer ended the repair for V6", exact=False).wait_for()
+    page.click("#batches [data-close]")
+    page.click("#handBtn")
+    pick = page.locator(f"#handPick input[data-noteid='{credits}']")
+    pick.wait_for()
+    ok(not pick.is_checked(), "失败项可重新勾选，释放后没有自动提交")
+    pick.check()
+    following = video_claim(page, review, identity, 5)
+    ok(
+        following["noteIds"] == [credits] and following["materials"][0]["videoReview"]["state"] == "failed",
+        "重新提交后接收会话只领取勾选的失败项，并能检查前一批的处理历史",
     )
 
 

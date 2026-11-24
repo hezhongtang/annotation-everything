@@ -747,11 +747,14 @@ class VideoReceiptStoreTests(unittest.TestCase):
         )
         self.assertEqual((result["version"]["baseVersionId"], result["currentVersionId"]), ("V3", "V4"))
         self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n3"), approved)
+        with self.assertRaises(store.HandoffError) as failed_key:
+            store.video_receipt(self.review, seq=1, receipt_id="first", movie=self._v2_movie(), receipt=original_fix)
+        self.assertEqual(failed_key.exception.code, "receipt-decode-failed")
         replay = store.video_receipt(
-            self.review, seq=1, receipt_id="first", movie=self._v2_movie(), receipt=original_fix
+            self.review, seq=1, receipt_id="rebased", movie=rebased_movie, receipt=original_fix
         )
         self.assertTrue(replay["replayed"])
-        self.assertEqual((replay["version"]["versionId"], replay["currentVersionId"]), ("V2", "V4"))
+        self.assertEqual((replay["version"]["versionId"], replay["currentVersionId"]), ("V4", "V4"))
 
     def test_legacy_batches_use_only_versions_known_before_submission(self):
         video = {
@@ -1227,6 +1230,145 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             (finished["replayed"], finished["status"], finished["currentVersionId"]), (False, "drafted", "V3")
         )
         self.assertEqual([r["receiptId"] for r in finished["batch"]["videoReceipts"]], ["part-one", "part-two"])
+
+    def test_repairing_a_decode_failure_requires_a_new_receipt_id(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        command = ["video-receipt", str(self.review), "--movie", str(self.v1_path), "--receipt", "-", "--json"]
+        entries = [
+            {"noteId": nid, "outcome": "fixed", "summary": "合成修改", "target": {"frame": 12}} for nid in ("n1", "n3")
+        ]
+        code, output, error = self.run_cli([*command, "--receipt-id", "before"], stdin_text=json.dumps(entries))
+        self.assertEqual(code, 0, error)
+        landed = {n["id"]: n for n in json.loads(output)["notes"]}
+        store.video_decision(self.review, "n1", action="approve")
+        approved = next(n for n in store.load(self.review)["notes"] if n["id"] == "n1")
+        store.video_decode_failed(
+            self.review,
+            note_id="n3",
+            version_id="V2",
+            seq=1,
+            review_id=self.rid,
+            expected_evidence=landed["n3"]["videoReview"]["evidenceRevision"],
+            reason="synthetic decoder error",
+        )
+        self.v1_path.write_bytes(synthetic_mp4(frames=192))
+        correction = json.dumps(entries[1:])
+        for lang, prompt in (("zh-CN", "新"), ("en", "new")):
+            code, _, error = self.run_cli([*command, "--receipt-id", "before", "--locale", lang], stdin_text=correction)
+            self.assertNotEqual(code, 0)
+            self.assertIn(prompt, error)
+            self.assertIn("--receipt-id", error)
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V1")
+        code, output, error = self.run_cli([*command, "--receipt-id", "after"], stdin_text=correction)
+        self.assertEqual(code, 0, error)
+        response = json.loads(output)
+        self.assertEqual((response["seq"], response["currentVersionId"], response["status"]), (1, "V3", "drafted"))
+        notes = {n["id"]: n for n in store.load(self.review)["notes"]}
+        self.assertEqual(notes["n1"], approved)
+        self.assertEqual(notes["n3"]["videoReview"]["state"], "pending_review")
+
+    def test_reviewer_releases_only_the_failed_batch_and_can_submit_its_items_to_another_receiver(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        entries = [
+            {"noteId": nid, "outcome": "fixed", "summary": "合成", "target": {"frame": 12}} for nid in ("n1", "n3")
+        ]
+        result = store.video_receipt(self.review, seq=1, movie=self.v1_path, receipt_id="before", receipt=entries)
+        store.video_decision(self.review, "n1", action="approve")
+        failure = dict(
+            note_id="n3",
+            version_id="V2",
+            seq=1,
+            review_id=self.rid,
+            expected_evidence=result["notes"][1]["videoReview"]["evidenceRevision"],
+            reason="MediaError 3",
+        )
+        store.video_decode_failed(self.review, **failure)
+        old_notes = store.load(self.review)["notes"]
+        self.assertIn("n3", store.handoff_state(self.review)["inFlightIds"])
+        with self.assertRaisesRegex(ValueError, "batch-in-progress"):
+            wakeup.bind_wait(self.review, "Claude Code", "session-b", replace=True)
+
+        with serve.ReviewServer(self.review, 0, log_to_file=False) as server:
+            host = f"127.0.0.1:{server.port}"
+            headers = {
+                "Host": host,
+                "Origin": "http://" + host,
+                "Content-Type": "application/json",
+                "X-AE-Review": self.rid,
+            }
+            worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+            worker.start()
+            try:
+
+                def release(seq=1, version="V2"):
+                    status, _, raw = serve._req(
+                        server.port, "POST", "/api/video/release-repair", headers, {"batch": seq, "versionId": version}
+                    )
+                    return status, json.loads(raw)
+
+                code, body = release()
+                self.assertEqual(code, 200, body)
+                record = body["handoff"]["latest"]["videoRepairRelease"]
+                self.assertEqual((record["versionId"], record["ids"], record["by"]), ("V2", ["n3"], "page"))
+                self.assertTrue(record["at"])
+                self.assertEqual(body["handoff"]["inFlightIds"], [])
+                self.assertEqual(store.load(self.review)["notes"], old_notes)
+                self.assertEqual(store.handoff_state(self.review)["total"], 1)
+                self.assertEqual(
+                    ledger.read_manifest(self.review)["video"]["versions"][1]["playbackFailure"]["stage"], "decode"
+                )
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(wakeup.main(["unbind", str(self.review)]), 0)
+                wakeup.bind_wait(self.review, "Claude Code", "session-b")
+                store.handoff_submit(self.review, note_ids=["n3"])
+                other = {"AE_SESSION_ID": "session-b"}
+                code, output, err = self.run_cli(["claim", str(self.review)], env_extra=other)
+                self.assertEqual(code, 0, err)
+                self.assertEqual(json.loads(output)["seq"], 2)
+                before = store.handoff_load(self.review)
+                self.assertGreaterEqual(release(2)[0], 400)
+                self.assertEqual(release()[0], 200)
+                self.assertEqual(store.handoff_load(self.review), before)
+                with self.assertRaisesRegex(ValueError, "batch-in-progress"):
+                    wakeup.bind_wait(self.review, "Claude Code", "session-a", replace=True)
+                later = store.video_receipt(
+                    self.review, seq=2, movie=self.v1_path, receipt=entries[1:], receipt_id="after"
+                )
+                self.assertEqual(later["version"]["versionId"], "V3")
+                store.video_decision(self.review, "n3", action="approve")
+                final_notes = store.load(self.review)["notes"]
+                final_batches = store.handoff_load(self.review)
+                for key in ("before", "late-key"):
+                    command = [
+                        "video-receipt",
+                        str(self.review),
+                        "--seq",
+                        "1",
+                        "--receipt-id",
+                        key,
+                        "--movie",
+                        str(self.v1_path),
+                        "--receipt",
+                        "-",
+                    ]
+                    self.assertNotEqual(self.run_cli(command, stdin_text=json.dumps(entries[1:]))[0], 0)
+                self.assertEqual(release()[0], 200)
+                self.assertEqual(store.load(self.review)["notes"], final_notes)
+                self.assertEqual(store.handoff_load(self.review), final_batches)
+                by_id = {n["id"]: n for n in final_notes}
+                self.assertEqual(by_id["n1"], next(n for n in old_notes if n["id"] == "n1"))
+                self.assertEqual(by_id["n3"]["videoReview"]["decisionBatch"], 2)
+                self.assertTrue(
+                    any(
+                        h.get("source") == "browser" and h.get("versionId") == "V2"
+                        for h in by_id["n3"]["videoReview"]["history"]
+                    )
+                )
+            finally:
+                server.shutdown()
+                worker.join(2)
 
     def test_unbound_receiver_can_restore_only_its_own_decode_repair(self):
         failure = self._receipt_for_decode_recovery()

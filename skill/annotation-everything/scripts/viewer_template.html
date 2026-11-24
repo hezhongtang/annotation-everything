@@ -3642,7 +3642,8 @@ function renderBatches(){
     return `<div class="batch ${escH(h.status)}"><div class="bh"><b>${tMsg("viewer.batch.item",{seq:+h.seq})}</b><span class="bs">${escH(batchStatus(h.status))}${by?tMsg("viewer.batch.itemWho",{who:escH(who(by))}):""}</span>`
       +(current?`<span class="bt">${tMsg("viewer.batch.current")}</span>`:"")
       +("resolvedCount" in h?`<span class="bn">${tMsg("viewer.batch.resolved",{n:+h.resolvedCount,
-          extra:(h.leftOpen?tMsg("viewer.batch.resolvedLeft",{n:+h.leftOpen}):"")+(h.live?tMsg("viewer.batch.resolvedLive"):h.estimated?tMsg("viewer.batch.resolvedEstimated"):"")})}</span>`:"")+`</div><div${current?` id="batchCurrentDetail"${currentTaskOpen?"":" hidden"}`:""}>`
+          extra:(h.leftOpen?tMsg("viewer.batch.resolvedLeft",{n:+h.leftOpen}):"")+(h.live?tMsg("viewer.batch.resolvedLive"):h.estimated?tMsg("viewer.batch.resolvedEstimated"):"")})}</span>`:"")+`</div>`
+      +videoRepairControl(h)+`<div${current?` id="batchCurrentDetail"${currentTaskOpen?"":" hidden"}`:""}>`
       +`<div class="bt">${tMsg("viewer.batch.submitted",{at:escH(fmtIso(h.at)),n:+h.openCount||0,
           extra:(Array.isArray(h.pages)&&h.pages.length?tMsg("viewer.batch.submittedPages",{pages:h.pages.map(Number).join(tMsg("viewer.hand.listSep"))}):"")
             +(h.claimedAt?tMsg("viewer.batch.submittedClaim",{at:escH(fmtIso(h.claimedAt))}):"")
@@ -3672,8 +3673,21 @@ function renderBatches(){
       +(ids.length?`<details data-seq="${+h.seq}"${(batchOpen?batchOpen.has(String(+h.seq)):h===H[0])?" open":""}><summary>${tMsg("viewer.batch.resolvedList",{count:ids.length})}</summary>${ids.map(id=>{const x=byId.get(id);
         return x?`<div class="bi" data-goto="${escH(id)}">${tMsg("viewer.batch.noteLine",{page:+x.page,summary:escH(clip(noteSummary(x),70))})}${isDone(x)?(x.resolution?`<span class="br">${tMsg("viewer.batch.resolutionNote",{text:escH(clip(x.resolution,100))})}</span>`:""):tMsg("viewer.batch.reopened")}</div>`
           :`<div class="bi">${tMsg("viewer.batch.deleted")}</div>`}).join("")}</details>`:"")+`</div></div>`}).join(""):`<p class="empty">${tMsg("viewer.batch.empty")}</p>`}
+function videoRepairControl(batch){
+  if(!VIDEO)return "";
+  const record=batch.videoRepairRelease;
+  if(record)return `<div class="bt">${escH(tMsg("viewer.batch.repairReleased",{version:record.versionId,at:fmtIso(record.at)}))}</div>`;
+  const failure=batch.videoFailure;
+  if(batch.status!=="claimed"||failure?.stage!=="decode"||!serverSupports("video-release-repair"))return "";
+  return `<div class="bact"><button type="button" data-release-repair="${+batch.seq}" data-version="${escH(failure.versionId)}">${escH(tMsg("viewer.batch.releaseRepair",{version:failure.versionId}))}</button></div>`}
 function openBatches(){if(FILE){toast(tMsg("viewer.batch.fileMode"));return}batchOpen=null;$("batchList").innerHTML="";renderBatches();$("batches").classList.add("on");loadBatches()}
 $("batchList").addEventListener("click",e=>{
+  const release=e.target.closest("[data-release-repair]");
+  if(release){
+    const seq=+release.dataset.releaseRepair,version=release.dataset.version;
+    if(confirm(tMsg("viewer.batch.confirmReleaseRepair",{seq,version})))
+      batchAction("/api/video/release-repair",{batch:seq,versionId:version},tMsg("viewer.batch.repairReleasedToast",{seq}));
+    return}
   const rv=e.target.closest("[data-breview]"),fn=e.target.closest("[data-bfinal]");
   if(rv){$("batches").classList.remove("on");openHand({seq:+rv.dataset.breview});return}
   if(fn){finalizeBatch(+fn.dataset.bfinal);return}
