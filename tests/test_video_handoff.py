@@ -516,6 +516,24 @@ class ServeHandoffTests(VideoHandoffBase):
         code, _, body = self.post("/api/handoff", {**payload, "submitId": "new", "noteIds": ["n2"]})
         self.assertEqual((code, json.loads(body)["code"]), (409, "video-source-changed"))
 
+    def test_submit_retry_reports_original_batch_stage_after_a_later_submission(self):
+        self.link_source()
+        payload = {"noteIds": ["n1"], "submitId": "first-submit"}
+        self.assertEqual(self.post("/api/handoff", payload)[0], 200)
+        self.assertEqual(self.post("/api/handoff", {"noteIds": ["n2"], "submitId": "second-submit"})[0], 200)
+        for status in ("pending", "claimed", "done"):
+            if status == "claimed":
+                store.handoff_claim(self.d, seq=1)
+            elif status == "done":
+                store.video_receipt(
+                    self.d, seq=1, receipt=[{"noteId": "n1", "outcome": "question", "question": "字幕？"}]
+                )
+            code, _, body = self.post("/api/handoff", payload)
+            self.assertEqual(code, 200, body)
+            data = json.loads(body)
+            self.assertEqual((data["seq"], data.get("status"), data["merged"]), (1, status, True))
+            self.assertEqual((data["handoff"]["total"], data["handoff"]["latest"]["seq"]), (2, 2))
+
     def test_video_handoff_rejects_bad_note_ids(self):
         self.link_source()
         code, _h, body = self.post("/api/handoff", {"message": "x", "noteIds": ["n1", "ghost"]})

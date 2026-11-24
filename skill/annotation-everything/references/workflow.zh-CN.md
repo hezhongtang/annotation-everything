@@ -125,8 +125,8 @@ python3 $S/build_viewer.py --report 报告.html --script 讲稿.md --out 审阅�
 
 1. 已有 MP4 时，运行 `python3 "$S/build_viewer.py" --report cut.mp4 --out cut-review --locale zh-CN`。启动服务并打开本机地址。审阅目录会保留 V1 副本。暂停到目标帧，在画面上标点或框选；对声音或节奏写意见时，设置区间起点和终点即可。
 2. 已有本地工程时，运行 `python3 "$S/video_engines.py" inspect PROJECT`，选择 Remotion 合成 ID 或 HyperFrames 的 HTML 入口。运行 `python3 "$S/build_viewer.py" --report PROJECT --video-composition ENTRY --out cut-review --locale zh-CN`。生成器检查已有成片，缺片时用工程里安装的引擎渲染 V1。如果提示确认复用，核对后用 `--reuse-movie PATH` 指定成片，或用 `--no-reuse` 重新渲染。
-3. 从 MP4 开始的审阅，在「关联源工程」填写引擎、本机工程根目录和入口。有差异时，核对并确认要修改的入口。按[接收方绑定与交接](receiver-binding.zh-CN.md)绑定一个接收会话。在提交窗口勾选本批意见，填写附言后交给 Agent。
-4. 接收会话用 `notes.py claim` 或 `notes.py wait` 领取批次，核对所选 ID、原片证据、定位、历次处理记录和源工程入口。改源并渲染后，运行 `python3 "$S/notes.py" video-receipt REVIEW --seq N --review-id ID --receipt-id KEY --movie NEW.mp4 --receipt receipt.json`。重试同一回执沿用原标识。渲染失败时用 `--render-error REASON` 记录原因。逐条回执的字段见[视频格式说明](formats.md)。
+3. 从 MP4 开始的审阅，在「关联源工程」填写引擎、本机工程根目录和入口。有差异时，核对并确认要修改的入口。按[接收方绑定与交接](receiver-binding.zh-CN.md)绑定一个接收会话。在提交窗口勾选本批意见，填写附言后交给 Agent。页面补传同一次提交会沿用原 `submitId`，显示原批次及其当前阶段。
+4. 接收会话用 `notes.py claim` 或 `notes.py wait` 领取批次，核对所选 ID、原片证据、定位、历次处理记录和源工程入口。改源并渲染后，运行 `python3 "$S/notes.py" video-receipt REVIEW --seq N --review-id ID --receipt-id KEY --movie NEW.mp4 --receipt receipt.json`。重试同一回执沿用原 `receiptId`。省略 `--seq` 时，已知标识会找到原批次，新交回使用唯一已领取的批次。若旧记录或多个批次造成歧义，请在处理记录中核对原批次并指定 `--seq`。分次交回用 `--no-finish` 并提前填好 `--receipt-id` 或 JSON 顶层 `receiptId`。即使未收到输出，仍可用原标识重试。下一次补交换新标识，最后一次省略 `--no-finish`。渲染失败时用 `--render-error REASON` 记录原因。逐条回执的字段见[视频格式说明](formats.md)。
 5. 审阅人回到原批注，对照标记帧，或分别播放前后片段。删镜可查看剪口及前后画面，定位存疑时可以在页面校正。逐条通过、说明退回理由或答复提问后，需要返工的条目由审阅人再次勾选并提交。各版本的原片定位、回执和决定均可从原批注回看。
 6. 如果对照视图打开时收到替换这条批注证据的新回执，页面会提示证据已更新。查看新版画面、定位和说明，再点「我已查看新版证据」。此后可逐条通过，也可重新勾选该条批注成组通过。证据再次变化时需再次确认。同一回执重放或其他批注收到回执时，可以继续播放或填写当前批注。
 

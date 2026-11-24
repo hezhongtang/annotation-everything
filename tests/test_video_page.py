@@ -234,6 +234,65 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertEqual(result["during"], [False, False, 0])
         self.assertTrue(result["outside"] and result["markMode"])
 
+    def test_submit_retry_shows_original_batch_stage_and_document_merges_keep_their_message(self):
+        notices = interaction_program(
+            [("function onSent(op,r)", "function onRejected"), ("const BATCH_STATUS=", "const DELIVERY_LABEL=")],
+            "const pend={get:()=>[]},setHand=()=>{},notices=[],toast=text=>notices.push(text);let handQueued=true;",
+            """
+            const handoff={latest:{seq:2,status:"pending"}};
+            const op={kind:"handoff",submitId:"first"};
+            for(const status of ["pending","claimed","done"])onSent(op,{seq:1,status,merged:true,handoff});
+            onSent(op,{seq:1,merged:true,handoff});
+            onSent({kind:"handoff"},{seq:2,merged:true,handoff});
+            return notices;
+            """,
+            locale="zh-CN",
+        )
+        for text, stage in zip(notices, ("等待接收", "处理中", "已处理")):
+            self.assertIn("第 1 批", text)
+            self.assertIn(stage, text)
+        self.assertIn("第 1 批", notices[3])
+        self.assertNotIn("等待接收", notices[3])
+        self.assertNotIn("还没接收", notices[3])
+        self.assertIn("已更新这次提交", notices[4])
+
+    def test_reconnect_keeps_the_claimed_batch_notice_after_flushing_the_submit_queue(self):
+        actual = interaction_program(
+            [
+                ("const sameReview=", "function mirror()"),
+                ("function send(op,", "// 总览和命令行"),
+                ("let handPollKey=", "function applyServer("),
+                ("async function poll(){", "// ---------- 服务不在时"),
+                ("const BATCH_STATUS=", "const DELIVERY_LABEL="),
+            ],
+            """
+            const APP="ae",RID="synthetic",FILE=false,DOCX=null,PPTX=null,VIDEO=true,navigator={},document={hidden:false};
+            const storage=new Map(),K={pending:"p",legacyPending:"l",failed:"f"};
+            const LS={get:(k,v)=>storage.get(k)??v,set:(k,v)=>{storage.set(k,v);return true}};
+            let busy=0,mode="offline",rev=1,srvNoVideo=false,srvNoFullCheck=false,analysisUpgradePoll=null,handQueued=true;
+            const toast=text=>{$("toast").textContent=text},renderDocxBlock=()=>{},renderPptxBlock=()=>{},renderVideoBlock=()=>{};
+            const updateMode=()=>{},setHand=()=>{},applyServer=()=>{},posts=[];
+            const doc={app:APP,reviewId:RID,notes:[],features:["video","selective-handoff","video-handoff-snapshot",
+              "video-source","video-receipt","video-decisions","video-evidence-revision","full-check"]};
+            const api=async(method,path,body)=>{
+              if(method==="GET"&&path==="/api/notes")return doc;
+              if(method==="POST"&&path==="/api/handoff"){
+                posts.push(body.submitId);
+                return {doc,seq:1,merged:true,status:"claimed",handoff:{latest:{seq:2,status:"pending"}}};
+              }
+              throw new Error("unexpected request");
+            };
+            """,
+            """
+            pend.push({kind:"handoff",opId:"op1",noteIds:["n1"],submitId:"lost-response"});
+            await poll();return [posts,pend.get(),$("toast").textContent];
+            """,
+            locale="zh-CN",
+        )
+        self.assertEqual(actual[:2], [["lost-response"], []])
+        self.assertIn("第 1 批", actual[2])
+        self.assertIn("处理中", actual[2])
+
     def test_microsecond_playback_clock_preserves_frame_boundaries(self):
         actual = run_video(
             "const clock={frames:180,timebase:{num:1,den:30}};"

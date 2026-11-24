@@ -10261,6 +10261,41 @@ def video_claim(page, review, identity, seq):
     return claim
 
 
+def video_claim_after_lost_response(page, review, identity):
+    """首次提交落盘并被领取后丢弃响应，由页面用同一标识补传。"""
+    attempts = []
+    claim = {}
+
+    def lose_first_response(route):
+        if route.request.method == "POST":
+            attempts.append(route.request.post_data_json["submitId"])
+            if len(attempts) == 1:
+                result = route.fetch()
+                assert result.ok, result.text()
+                seq = result.json()["seq"]
+                claim.update(
+                    json.loads(video_cli(SCRIPTS / "notes.py", "claim", review, "--seq", seq, *identity).stdout)
+                )
+                route.abort("connectionfailed")
+                return
+        route.continue_()
+
+    page.route("**/api/handoff", lose_first_response)
+    try:
+        page.click("#doHand")
+        ok(
+            wait_toast(page, "Batch 1 submitted · in progress", condition="补传显示原批次已领取")
+            and len(attempts) == 2
+            and attempts[0] == attempts[1]
+            and claim.get("claimed")
+            and claim["seq"] == 1,
+            "提交响应丢失后页面沿用原标识，显示已领取的第 1 批",
+        )
+    finally:
+        page.unroute("**/api/handoff", lose_first_response)
+    return claim
+
+
 def video_deliver(page, review, identity, claim, movie, entries, version):
     result = video_cli(
         SCRIPTS / "notes.py",
@@ -10449,7 +10484,7 @@ def video_mp4_rework(page, review, identity, movies):
     chosen = [subtitle, audio, question]
     for nid in chosen:
         page.check(f"#handPick input[data-noteid='{nid}']")
-    claim = video_claim(page, review, identity, 1)
+    claim = video_claim_after_lost_response(page, review, identity)
     material = {item["noteId"]: item for item in claim["materials"]}
     ok(
         set(claim["noteIds"]) == set(chosen) == set(material)

@@ -1451,6 +1451,7 @@ class Handler(BaseHTTPRequestHandler):
                     "handoff": self._handoff_state(full=False),
                     "merged": merged,
                     "seq": item["seq"],
+                    "status": item["status"],
                     "acceptedFullCheck": item["fullCheck"],
                 },
             )

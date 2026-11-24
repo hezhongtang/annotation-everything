@@ -322,6 +322,26 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(store.load(self.review), before)
         self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
 
+    def test_legacy_notes_only_receipt_finds_its_batch_among_concurrent_claims(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review, seq=1)
+        store.video_receipt(
+            self.review,
+            receipt_id="opening-question",
+            receipt=[{"noteId": "n1", "outcome": "question", "question": "字幕上移一行吗？"}],
+        )
+        store.handoff_submit(self.review, note_ids=["n3"])
+        store.handoff_claim(self.review, seq=2)
+        handoff = store.handoff_load(self.review)
+        # 旧格式写完 notes.json、尚未写回批次时的合成记录。
+        handoff["items"][0].update(status="claimed", videoReceipts=[])
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        before = store.load(self.review)
+        result = store.video_receipt(self.review, receipt_id="opening-question")
+        self.assertEqual((result["seq"], result["replayed"], result["status"]), (1, True, "done"))
+        self.assertEqual(store.load(self.review), before)
+        self.assertEqual(store.handoff_load(self.review)["items"][1], handoff["items"][1])
+
     def interrupt_after_decode_failure_is_registered(self):
         from unittest.mock import patch
 

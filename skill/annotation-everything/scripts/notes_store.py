@@ -2843,6 +2843,7 @@ def _normalize_video_receipt(
     movie: Path | None,
     render_error: str | None,
     summary: str,
+    finish: bool,
 ) -> dict[str, Any]:
     raw_notes: Any = []
     if receipt is not None:
@@ -2878,7 +2879,12 @@ def _normalize_video_receipt(
     ):
         raise HandoffError("baseVersionId 须为 V1、V2 等已登记版本", code="bad-receipt")
 
-    rid_key = _receipt_str(receipt_id, limit=128) if receipt_id is not None else f"vr-{new_id()}"
+    rid_key = _receipt_str(receipt_id, limit=128)
+    if not finish and not rid_key:
+        raise HandoffError(
+            "分次交回前请提供 --receipt-id，或在回执 JSON 顶层填写 receiptId。同一次交回重试时沿用该标识。",
+            code="partial-receipt-id-required",
+        )
     if receipt_id is not None and not rid_key:
         raise HandoffError("receiptId 不能为空", code="bad-receipt")
 
@@ -2952,7 +2958,7 @@ def _normalize_video_receipt(
     return {
         "seq": seq,
         "reviewId": review_id,
-        "receiptId": rid_key,
+        "receiptId": rid_key or f"vr-{new_id()}",
         "movie": Path(movie) if movie is not None else None,
         "renderError": clean_render_err,
         "baseVersionId": base_version,
@@ -2981,6 +2987,48 @@ def _find_receipt_replay(item: dict[str, Any], receipt_id: str) -> dict[str, Any
         if isinstance(rec, dict) and rec.get("receiptId") == receipt_id:
             return rec
     return None
+
+
+def _saved_video_evidence(notes: list[dict], video: dict) -> Iterator[dict]:
+    yield from video.get("versions", [])
+    yield from video.get("failures", [])
+    for note in notes:
+        vr = note.get("videoReview")
+        if isinstance(vr, dict):
+            yield vr
+            yield from vr.get("history") or []
+
+
+def _find_receipt_batch(items: list[dict], notes: list[dict], video: dict, seq: int | None, receipt_id: str) -> dict:
+    """先从批次回执、旧版逐条记录和成片登记辨认原操作，再为新操作选择领取中的批次。"""
+    recorded = [item.get("seq") for item in items if _find_receipt_replay(item, receipt_id)]
+    recorded.extend(
+        entry.get("batch")
+        for entry in _saved_video_evidence(notes, video)
+        if isinstance(entry, dict) and entry.get("receiptId") == receipt_id
+    )
+    owners = set()
+    unattributed = False
+    for batch in recorded:
+        if isinstance(batch, int) and not isinstance(batch, bool) and batch > 0:
+            owners.add(batch)
+        else:
+            unattributed = True
+    if unattributed and (seq is None or not owners):
+        raise HandoffError(
+            "旧回执缺少批次记录。请核对处理记录并用 --seq 指定原批次。如果无法核实归属，新的交回须使用新的 --receipt-id。",
+            code="receipt-batch-unknown",
+        )
+    if seq is None and len(owners) == 1:
+        seq = next(iter(owners))
+    if owners and seq not in owners:
+        batches = ", ".join(str(n) for n in sorted(owners))
+        raise HandoffError(
+            f"这份回执已登记在批次 {batches}。请用 --seq 指定原批次重试，新的交回请换用新的 --receipt-id。",
+            code="receipt-batch-mismatch",
+            batches=batches,
+        )
+    return _find_claimed_batch(items, seq)
 
 
 def _validate_receipt_note(note: dict[str, Any], nid: str, item: dict[str, Any], n_seq: int) -> None:
@@ -3362,6 +3410,7 @@ def video_receipt(
         movie=movie,
         render_error=render_error,
         summary=summary,
+        finish=finish,
     )
     recover_video_decode_failures(review_dir, ledger.read_manifest(review_dir))
     with fsutil.flocked(review_dir / ".video-receipt.lock", exclusive=True):
@@ -3434,7 +3483,7 @@ def _apply_receipt(review_dir, spec, actor, finish, authorize):
             raise HandoffError("审阅标识不匹配，拒绝写入其他审阅", code="review-mismatch")
         doc = handoff_load(review_dir)
         ndoc = load(review_dir)
-        item = _find_claimed_batch(doc["items"], req_seq)
+        item = _find_receipt_batch(doc["items"], ndoc["notes"], manifest["video"], req_seq, rid_key)
         n_seq = int(item["seq"])
         if item.get("status") == "claimed":
             _video_claim_receiver(review_dir, item)

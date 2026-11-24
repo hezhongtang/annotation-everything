@@ -1531,7 +1531,11 @@ async function mutate(op){
   return res}
 function onSent(op,r){
   if(op.kind==="handoff"){if(!pend.get().some(o=>o.kind==="handoff"))handQueued=false;setHand(r.handoff);
-    toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
+    if(op.submitId&&r.merged){
+      const latest=r.handoff?.latest,batch=latest?.seq===r.seq?latest:r.handoff?.open?.find(h=>h.seq===r.seq);
+      const status=batch?.status||r.status,recorded=tMsg("viewer.hand.toast.recorded",{seq:r.seq});
+      toast(status?recorded+" · "+batchStatus(status):recorded,3500)
+    }else toast(r.merged?tMsg("viewer.hand.toast.merged"):tMsg("viewer.hand.toast.sent"),3500)}
   else if(op.kind==="import")toast(tMsg("import.complete",{label:tMsg("import.saved"),added:r.added,updated:r.updated||0,skipped:r.skipped}),3500)}
 function onRejected(op,e){   // 服务明确不接受（4xx）：不重试；返回补传结束时显示的提示。
   saveFailures++;LS.set(K.rejected,newId());   // 其他标签页等待补传锁时也能看到保存被拒
@@ -1718,9 +1722,9 @@ async function poll(){
     if(was==="offline"&&rev!=null)toast(tMsg("viewer.offline.reconnected"));
     applyServer(d,quiet);
     if(mode==="server"&&pend.get().length&&(!d.stop||d.stop.state==="active")){   // 暂存只在审阅重新接收工作后补传
-      const before=pend.get().length;queueSnap=null;
+      const videoSubmit=pend.get().some(op=>op.kind==="handoff"&&op.submitId);queueSnap=null;
       upgradeNotice.successful=await flush();
-      if(upgradeNotice.successful&&mode==="server"&&!pend.get().length&&before)toast(tMsg("viewer.offline.retried"));return}
+      if(upgradeNotice.successful&&mode==="server"&&!pend.get().length&&!videoSubmit)toast(tMsg("viewer.offline.retried"));return}
     updateMode();upgradeNotice.successful=true}
   finally{queueSnap=null;analysisUpgradePoll=null;
     if(upgradeNotice.successful&&upgradeNotice.key&&!analysisSupported)showAnalysisUpgrade(upgradeNotice.key)}}

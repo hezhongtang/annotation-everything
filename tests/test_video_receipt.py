@@ -1107,6 +1107,127 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             reason="decoder rejected V2",
         )
 
+    def test_receipt_retry_with_a_new_claim_keeps_the_returned_note_and_original_batch(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        command = [
+            "video-receipt",
+            str(self.review),
+            "--receipt-id",
+            "subtitle-fix",
+            "--movie",
+            str(self.v1_path),
+            "--receipt",
+            "-",
+            "--json",
+        ]
+        payload = json.dumps([{"noteId": "n1", "outcome": "fixed", "summary": "字幕上移", "target": {"frame": 108}}])
+        self.assertEqual(self.run_cli(command, stdin_text=payload)[0], 0)
+        store.video_decision(self.review, "n1", action="return", reason="再向上移一行", by="page")
+        store.handoff_submit(self.review, note_ids=["n1"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        before = store.load(self.review)
+        handoff = store.handoff_load(self.review)
+        returned = next(n["videoReview"] for n in before["notes"] if n["id"] == "n1")
+        self.assertEqual((returned["decision"], returned["returnReason"]), ("returned", "再向上移一行"))
+        for args in ([], ["--seq", "1"]):
+            code, output, err = self.run_cli([*command, *args], stdin_text=payload)
+            self.assertEqual(code, 0, err)
+            replay = json.loads(output)
+            self.assertEqual((replay["seq"], replay["replayed"], replay["currentVersionId"]), (1, True, "V2"))
+        code, _, err = self.run_cli([*command, "--seq", "2"], stdin_text=payload)
+        self.assertNotEqual(code, 0)
+        self.assertIn("--seq", err)
+        self.assertEqual(store.load(self.review), before)
+        self.assertEqual(store.handoff_load(self.review), handoff)
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V2")
+
+    def test_incomplete_legacy_receipt_cannot_overwrite_a_later_return(self):
+        self._receipt_for_decode_recovery()
+        store.video_decision(self.review, "n1", action="return", reason="字幕仍然偏低")
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review, seq=2)
+        handoff = store.handoff_load(self.review)
+        handoff["items"][0].pop("videoReceipts")
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        notes = store.load(self.review)
+        vr = next(n["videoReview"] for n in notes["notes"] if n["id"] == "n1")
+        for entry in [vr, *vr["history"]]:
+            if entry.get("receiptId") == "original":
+                entry.pop("batch")
+        (self.review / store.NOTES_FILE).write_text(json.dumps(notes))
+
+        # 只剩成片登记能证明是第 1 批。旧副本连这条批次号也缺失时同样须保留人工决定。
+        command = ["video-receipt", str(self.review), "--receipt-id", "original", "--movie", str(self.v1_path)]
+        for has_version_batch in (True, False):
+            if not has_version_batch:
+                manifest = ledger.read_manifest(self.review)
+                manifest["video"]["versions"][1].pop("batch")
+                (self.review / "review.json").write_text(json.dumps(manifest))
+            code, _, err = self.run_cli([*command, "--seq", "2"])
+            self.assertNotEqual(code, 0)
+            self.assertIn("--seq", err)
+            if not has_version_batch:
+                code, _, err = self.run_cli(command)
+                self.assertNotEqual(code, 0)
+                self.assertIn("--seq", err)
+        self.assertEqual(store.handoff_load(self.review), handoff)
+        self.assertEqual(store.load(self.review), notes)
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V2")
+
+    def test_legacy_receipt_key_shared_by_two_batches_requires_the_original_seq(self):
+        for seq, nid in enumerate(["n1", "n2"], start=1):
+            store.handoff_submit(self.review, note_ids=[nid])
+            store.handoff_claim(self.review, seq=seq)
+            store.video_receipt(self.review, seq=seq, receipt_id=f"part-{seq}")
+        handoff = store.handoff_load(self.review)
+        # 旧版允许两批显式使用相同的标识。
+        for item in handoff["items"]:
+            item["videoReceipts"][0]["receiptId"] = "same-key"
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        command = ["video-receipt", str(self.review), "--receipt-id", "same-key", "--json"]
+        code, _, err = self.run_cli(command)
+        self.assertNotEqual(code, 0)
+        self.assertIn("--seq", err)
+        for seq in (1, 2):
+            code, output, err = self.run_cli([*command, "--seq", str(seq)])
+            self.assertEqual(code, 0, err)
+            self.assertEqual((json.loads(output)["seq"], json.loads(output)["replayed"]), (seq, True))
+        self.assertEqual(store.handoff_load(self.review), handoff)
+
+    def test_partial_receipt_requires_a_retry_key_and_allows_a_second_delivery(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        command = ["video-receipt", str(self.review), "--movie", str(self.v1_path), "--receipt", "-", "--json"]
+        entry = {"noteId": "n1", "outcome": "fixed", "summary": "字幕上移", "target": {"frame": 108}}
+        initial = store.load(self.review)
+        batch = store.handoff_load(self.review)
+        code, _, err = self.run_cli([*command, "--no-finish"], stdin_text=json.dumps([entry]))
+        self.assertNotEqual(code, 0)
+        self.assertIn("--receipt-id", err)
+        self.assertEqual(store.load(self.review), initial)
+        self.assertEqual(store.handoff_load(self.review), batch)
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V1")
+
+        first = json.dumps({"receiptId": "part-one", "notes": [entry]})
+        # 第一次交回的输出未送达。接收会话只知道自己预先提供的标识。
+        self.assertEqual(self.run_cli([*command, "--no-finish"], stdin_text=first)[0], 0)
+        code, output, err = self.run_cli([*command, "--no-finish"], stdin_text=first)
+        self.assertEqual(code, 0, err)
+        replay = json.loads(output)
+        self.assertEqual((replay["replayed"], replay["status"], replay["currentVersionId"]), (True, "claimed", "V2"))
+        self.assertEqual(len(replay["batch"]["videoReceipts"]), 1)
+        self.assertEqual(len(replay["notes"][0]["videoReview"]["history"]), 1)
+
+        later = [{"noteId": "n2", "outcome": "question", "question": "音乐再轻一点吗？"}]
+        code, output, err = self.run_cli([*command, "--receipt-id", "part-two"], stdin_text=json.dumps(later))
+        self.assertEqual(code, 0, err)
+        finished = json.loads(output)
+        self.assertEqual(
+            (finished["replayed"], finished["status"], finished["currentVersionId"]), (False, "drafted", "V3")
+        )
+        self.assertEqual([r["receiptId"] for r in finished["batch"]["videoReceipts"]], ["part-one", "part-two"])
+
     def test_unbound_receiver_can_restore_only_its_own_decode_repair(self):
         failure = self._receipt_for_decode_recovery()
         with redirect_stdout(io.StringIO()):
