@@ -819,8 +819,9 @@ def cut_context_window(
     if has_cs:
         cs = _check_int(target.get("contextStart"), "contextStart")
         ce = _check_int(target.get("contextEnd"), "contextEnd")
-        if cs >= ce or ce > frames or not (cs <= cut_frame <= ce):
-            raise VideoError(f"剪口上下文 [{cs}, {ce}) 无效或未包含剪口 {cut_frame}")
+        # 半开区间须覆盖剪口前一帧和后一帧。片头、片尾各只有一侧在片内。
+        if cs > max(0, cut_frame - 1) or not min(frames, cut_frame + 1) <= ce <= frames:
+            raise VideoError(f"剪口上下文 [{cs}, {ce}) 须包含剪口 {cut_frame} 两侧在片内的帧")
         return cs, ce
     pad_sec = _check_number(pad_seconds, "padSeconds")
     if pad_sec <= 0:
@@ -970,21 +971,10 @@ def clean_receipt_target(raw_target: Any, version_meta: dict[str, Any]) -> dict[
         out["startFrame"] = start
         out["endFrame"] = end
     else:
-        frame = _check_int(raw_target.get("frame"), "frame")
-        if frame > frames:
-            raise VideoError(f"回执剪口 {frame} 超出 {version_id} 帧数范围 [0, {frames}]")
-        out["frame"] = frame
-        has_cs = "contextStart" in raw_target and raw_target["contextStart"] is not None
-        has_ce = "contextEnd" in raw_target and raw_target["contextEnd"] is not None
-        if has_cs != has_ce:
-            raise VideoError("剪口上下文须同时提供 contextStart 与 contextEnd")
-        if has_cs:
-            cs = _check_int(raw_target.get("contextStart"), "contextStart")
-            ce = _check_int(raw_target.get("contextEnd"), "contextEnd")
-            if cs >= ce or ce > frames or not (cs <= frame <= ce):
-                raise VideoError(f"剪口上下文 [{cs}, {ce}) 无效或未包含剪口 {frame}")
-            out["contextStart"] = cs
-            out["contextEnd"] = ce
+        start, end = cut_context_window(raw_target, version_meta)
+        out["frame"] = raw_target["frame"]
+        if raw_target.get("contextStart") is not None:
+            out.update(contextStart=start, contextEnd=end)
     if raw_target.get("mark") is not None:
         out["mark"] = clean_video_mark(raw_target["mark"])
     return out

@@ -616,6 +616,7 @@ HANDOFF_ERROR_KEYS: dict[str, str] = {
     "receipt-decode-failed": "cli.hand.error.receiptDecodeFailed",
     "receipt-batch-unknown": "cli.hand.error.receiptBatchUnknown",
     "partial-receipt-id-required": "cli.hand.error.partialReceiptIdRequired",
+    "incomplete-video-receipt": "cli.hand.error.incompleteVideoReceipt",
     "note-not-in-batch": "cli.hand.error.noteNotInBatch",
     "note-already-decided": "cli.hand.error.noteAlreadyDecided",
     "stale-receipt": "cli.hand.error.staleReceipt",

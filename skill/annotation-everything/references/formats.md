@@ -127,6 +127,38 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
   - `POST /api/handoff/finalize-all` 接收明确勾选的批次、批注 ID 和 `evidence` 映射（每个 ID 对应所见修订）。服务只通过仍就绪且修订匹配的条目。返回的 `skipped` 列出已变更或缺证据的项，供审阅人重新打开。文档审阅沿用整批定稿。
   - 选择性重交与防陈旧 / 防改写：返工交接弹窗若已有往轮回执则默认空选、提供「只选退回项」与状态标签，使只选退回条目的新批次仅在 `claim` / `wait` / `show --batch` 交付所选批注及上轮 `videoReview` 上下文（不混入已通过或未提交的答复条目）。重复确认、`approve` 后重放、`set_status("open")` 或陈旧回执（已 `approved` 一律拒绝 `note-already-decided`，已 `returned`/`replied` 于第 `k` 批则拒绝同批或更早批次 `<= k` 的陈旧回执 `stale-receipt`）均不能覆盖已记录的人工决定；新提交的第 `m > k` 返工批次在同一批注 ID 下交回 V3 回执时，保留完整 V1→V2→V3 历史。
 
+### 逐条视频回执示例
+
+把回执保存为 UTF-8 的 `receipt.json`，在 `notes.py video-receipt` 中用 `--receipt receipt.json` 提交。顶层 `notes` 是本次交回的条目清单。每条从领取结果的 `noteIds` 取一个原批注 ID，同一清单中的 ID 唯一。
+
+| 条目字段 | 何时填写 |
+|---|---|
+| `noteId`、`outcome` | 每条必填。处理结果可取 `fixed`（已改）、`deleted`（已删镜头）、`question`（待答复）、`needs_relocate`（待定位）或 `failed`（未能处理）。 |
+| `summary`、`target` | 已改和已删镜头要送回复核时，写清改动，并给出新版中的对应位置。CLI 会逐项列出本次回执中缺证据的 ID，JSON 输出为 `missingEvidenceIds`。 |
+| `versionId` | 可选，填写本批已登记的新版。省略时使用本次 `--movie` 登记的新版或本批最近登记的新版。 |
+| `question` | 结果为 `question` 时，写出审阅人要回答的问题。 |
+| `relocateReason` | 结果为 `needs_relocate` 时，说明为何无法确认新版位置。 |
+| `failure` | 结果为 `failed` 时，写明该项未能处理的原因。整次渲染失败可用 `--render-error` 提供共同原因，省略清单时只给本批仍可接收失败回执的未处理条目记账。 |
+
+`target` 的帧号从 0 开始。单帧写 `{"kind":"frame","frame":108}`，区间写 `{"kind":"range","startFrame":132,"endFrame":180}`，播放范围包含起点、排除终点。原批注是区间时，新位置也要能播放一段。删镜用 `kind: "cut"` 和剪口 `frame`。可一起省略 `contextStart`、`contextEnd`，由播放器按帧率取窗口。显式的半开窗口必须覆盖剪口两侧在片内的帧。片中满足 `contextStart < frame < contextEnd`，第 0 帧从 0 开始，总帧数处以总帧数结束。
+
+下例假设本批领取了 `n1` 至 `n5`，并用 `--movie` 交回新成片。实际使用时换成本批的 ID、改动说明与新版帧号，每次新的交回换一个 `receiptId`。
+
+```json
+{
+  "receiptId": "demo-cut-2",
+  "notes": [
+    {"noteId": "n1", "outcome": "fixed", "summary": "上移字幕，露出图标", "target": {"kind": "frame", "frame": 108}},
+    {"noteId": "n2", "outcome": "deleted", "summary": "删除重复镜头", "target": {"kind": "cut", "frame": 60, "contextStart": 45, "contextEnd": 75}},
+    {"noteId": "n3", "outcome": "question", "question": "片头保留几秒？"},
+    {"noteId": "n4", "outcome": "needs_relocate", "relocateReason": "原转场在新版拆成两段，请确认指哪一段"},
+    {"noteId": "n5", "outcome": "failed", "failure": "缺少片尾调色用的源素材"}
+  ]
+}
+```
+
+收尾时，接收端逐项核对本批所选批注、此前分次交回的回执和已有人工决定。若命令列出遗漏的 ID，把这些条目补进本次清单后重试。也可先用 `--no-finish` 和预先指定的回执标识交回已有结果，再换新标识补交其余条目。
+
 ## 从源工程直接开始（Remotion / HyperFrames）
 
 `--report` 也接受本地源工程目录（同样不接受讲稿输入），产出的审阅与 MP4 入口同一形态（同一 `format: video` 清单、V1 私有副本、SHA-256、批注与交接流程）：

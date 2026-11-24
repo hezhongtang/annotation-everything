@@ -375,6 +375,40 @@ class VideoReceiptStoreTests(unittest.TestCase):
         path.write_bytes(data if data is not None else self.v2_bytes)
         return path
 
+    def test_deleted_shot_receipt_requires_context_on_each_available_side_of_the_cut(self):
+        store.handoff_submit(self.review, note_ids=["n2"])
+        store.handoff_claim(self.review)
+        movie = self._v2_movie()
+
+        def deliver(key, frame, start, end):
+            target = {"kind": "cut", "frame": frame, "contextStart": start, "contextEnd": end}
+            return store.video_receipt(
+                self.review,
+                receipt_id=key,
+                finish=False,
+                movie=movie if key == "interior" else None,
+                receipt=[{"noteId": "n2", "outcome": "deleted", "summary": "移除合成镜头", "target": target}],
+            )
+
+        interior = deliver("interior", 60, 59, 61)
+        original = store.load(self.review)
+        for start, end in ((30, 60), (60, 90)):
+            with self.subTest(start=start, end=end):
+                with self.assertRaises(store.HandoffError) as invalid:
+                    deliver(f"one-side-{start}", 60, start, end)
+                self.assertEqual(invalid.exception.code, "invalid-receipt-target")
+                self.assertEqual(store.load(self.review), original)
+                with self.assertRaises(video_review.VideoError):
+                    video_review.temporal_window(
+                        {"kind": "cut", "frame": 60, "contextStart": start, "contextEnd": end}, interior["version"]
+                    )
+        for key, frame, start, end in (("head", 0, 0, 1), ("tail", 192, 191, 192)):
+            with self.subTest(key=key):
+                vr = deliver(key, frame, start, end)["notes"][0]["videoReview"]
+                self.assertEqual(vr["state"], "pending_review")
+                window = video_review.temporal_window(vr["target"], interior["version"])
+                self.assertEqual((window["contextStart"], window["contextEnd"]), (start, end))
+
     def test_partial_completion_5_notes_submit_3_fix_2_question_1(self):
         store.handoff_submit(self.review, "先修前三条", target="final", note_ids=["n1", "n2", "n3"])
         store.handoff_claim(self.review, by="claude", seq=1)
@@ -968,9 +1002,16 @@ class VideoReceiptStoreTests(unittest.TestCase):
         self.assertEqual(res["finalizedIds"], ["n1"])
         self.assertEqual({s["id"] for s in res["skipped"]}, {"n2", "n3", "n4"})
 
-        # 0 drafted 的批次可以用 handoff_done 结束为 done 且 resolvedCount = 0
+        # 已明确逐项提问且没有 drafted 的批次可以收尾，resolvedCount = 0。
         store.handoff_submit(self.review, "只问 n5", target="final", note_ids=["n5"])
         store.handoff_claim(self.review, by="claude", seq=2)
+        store.video_receipt(
+            self.review,
+            seq=2,
+            receipt_id="question",
+            finish=False,
+            receipt=[{"noteId": "n5", "outcome": "question", "question": "需要较亮的片尾吗？"}],
+        )
         done2 = store.handoff_done(self.review, seq=2, summary="无改动", by="claude")
         self.assertEqual(done2["status"], "done")
         self.assertEqual(done2["resolvedCount"], 0)
@@ -1110,6 +1151,256 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             reason="decoder rejected V2",
         )
 
+    def test_prior_approval_stays_in_the_finished_batch_when_legacy_receipt_details_are_absent(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="first-cut",
+            movie=self.v1_path,
+            finish=False,
+            receipt=[{"noteId": "n1", "outcome": "fixed", "summary": "字幕上移", "target": {"frame": 30}}],
+        )
+        store.video_decision(self.review, "n1", action="approve")
+        notes = store.load(self.review)
+        approved = next(n for n in notes["notes"] if n["id"] == "n1")
+        approved.pop("videoReview")
+        (self.review / store.NOTES_FILE).write_text(json.dumps(notes))
+        handoff = store.handoff_load(self.review)
+        handoff["items"][0].pop("videoReceipts")
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        result = store.video_receipt(
+            self.review,
+            receipt=[
+                {"noteId": "n3", "outcome": "fixed", "summary": "片头已缩短", "target": {"frame": 12}},
+            ],
+        )
+        self.assertEqual(result["status"], "drafted")
+        self.assertEqual(result["batch"]["resolvedIds"], ["n1"])
+        self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n1"), approved)
+
+    def test_finishing_legacy_partial_batch_counts_its_history_and_decision_only_for_that_batch(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2", "n3"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="partial",
+            finish=False,
+            receipt=[
+                {"noteId": "n1", "outcome": "question", "question": "字幕上移吗？"},
+                {"noteId": "n2", "outcome": "question", "question": "保留原音吗？"},
+            ],
+        )
+        store.video_decision(self.review, "n2", action="reply", reply="保留")
+        # 旧份本：n1 只有逐条历史，n2 只有人工决定，批次汇总未写入。
+        handoff = store.handoff_load(self.review)
+        del handoff["items"][0]["videoReceipts"]
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        notes = store.load(self.review)
+        for n in notes["notes"]:
+            if n["id"] in ("n1", "n2"):
+                vr = n["videoReview"]
+                vr.pop("receiptId")
+                if n["id"] == "n2":
+                    vr["history"] = [h for h in vr["history"] if h.get("decision")]
+        (self.review / store.NOTES_FILE).write_text(json.dumps(notes))
+        entry = {"noteId": "n3", "outcome": "failed", "failure": "缺少合成工程素材"}
+        final = store.video_receipt(self.review, receipt_id="last", receipt=[entry])
+        self.assertEqual(final["status"], "done")
+        self.assertEqual([n["id"] for n in final["notes"]], ["n3"])
+        store.handoff_submit(self.review, note_ids=["n1", "n2"])
+        store.handoff_claim(self.review)
+        with self.assertRaises(store.HandoffError) as missing:
+            store.video_receipt(
+                self.review, seq=2, receipt=[{"noteId": "n1", "outcome": "question", "question": "要改色吗？"}]
+            )
+        self.assertEqual(missing.exception.params["ids"], ["n2"])
+
+    def test_implicit_render_failure_preserves_reviewer_decisions_and_ready_cut(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2", "n3", "n4", "n5"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="partial",
+            finish=False,
+            movie=self.v1_path,
+            receipt=[
+                {"noteId": "n1", "outcome": "fixed", "summary": "字幕上移", "target": {"frame": 30}},
+                {
+                    "noteId": "n2",
+                    "outcome": "fixed",
+                    "summary": "降低音乐",
+                    "target": {"startFrame": 120, "endFrame": 180},
+                },
+                {"noteId": "n3", "outcome": "question", "question": "片头是否保留？"},
+                {
+                    "noteId": "n4",
+                    "outcome": "fixed",
+                    "summary": "转场变短",
+                    "target": {"startFrame": 60, "endFrame": 80},
+                },
+            ],
+        )
+        store.video_decision(self.review, "n1", action="approve")
+        store.video_decision(self.review, "n2", action="return", reason="还需调低")
+        store.video_decision(self.review, "n3", action="reply", reply="保留")
+        # 旧退回记录缺少批次号。原批次提交时尚无这个决定，后来显式重交才会携带它。
+        legacy = store.load(self.review)
+        returned = next(n["videoReview"] for n in legacy["notes"] if n["id"] == "n2")
+        returned.pop("decisionBatch")
+        returned.pop("batch")
+        (self.review / store.NOTES_FILE).write_text(json.dumps(legacy))
+        before = {n["id"]: n for n in store.load(self.review)["notes"]}
+        reason = "合成片尾渲染中断"
+        args = ["video-receipt", str(self.review), "--receipt-id", "render-error", "--render-error", reason, "--json"]
+        code, output, err = self.run_cli(args)
+        self.assertEqual(code, 0, err)
+        result = json.loads(output)
+        self.assertEqual((result["status"], result["currentVersionId"]), ("claimed", "V2"))
+        self.assertEqual([n["id"] for n in result["notes"]], ["n5"])
+        after = {n["id"]: n for n in store.load(self.review)["notes"]}
+        for nid in ("n1", "n2", "n3", "n4"):
+            self.assertEqual(after[nid], before[nid])
+        self.assertEqual(after["n5"]["videoReview"]["failure"], reason)
+        # 显式点名同批已退回项，仍须拒绝。
+        code, _, err = self.run_cli(
+            [*args, "--receipt-id", "explicit-error", "--receipt", "-"],
+            stdin_text=json.dumps([{"noteId": "n2", "outcome": "failed"}]),
+        )
+        self.assertNotEqual(code, 0)
+        self.assertIn("n2", err)
+        store.video_receipt(self.review, seq=1, receipt_id="finish")
+        store.handoff_submit(self.review, note_ids=["n2"])
+        store.handoff_claim(self.review, seq=2)
+        rework = store.video_receipt(
+            self.review,
+            seq=2,
+            receipt=[
+                {"noteId": "n2", "outcome": "question", "question": "音量再调低几分贝？"},
+            ],
+        )
+        self.assertEqual(rework["notes"][0]["videoReview"]["question"], "音量再调低几分贝？")
+
+    def test_finish_names_uncovered_ids_and_accepts_prior_delivery_and_reviewer_reply(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2", "n3", "n4"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="first",
+            finish=False,
+            movie=self.v1_path,
+            receipt=[
+                {"noteId": "n1", "outcome": "fixed", "summary": "字幕上移", "target": {"frame": 30}},
+                {"noteId": "n3", "outcome": "question", "question": "片头是否保留？"},
+            ],
+        )
+        store.video_decision(self.review, "n3", action="reply", reply="保留片头")
+        earlier_notes = store.load(self.review)
+        earlier_batch = store.handoff_load(self.review)
+        args = [
+            "video-receipt",
+            str(self.review),
+            "--receipt-id",
+            "last",
+            "--receipt",
+            "-",
+            "--movie",
+            str(self.v1_path),
+        ]
+        failed = {"noteId": "n2", "outcome": "failed", "failure": "合成配乐缺少独立音轨"}
+        for lang in ("zh-CN", "en"):
+            code, _, err = self.run_cli([*args, "--locale", lang], stdin_text=json.dumps([failed]))
+            self.assertNotEqual(code, 0)
+            self.assertIn("n4", err)
+            for covered in ("n1", "n2", "n3", "n5"):
+                self.assertNotIn(covered, err)
+        code, _, err = self.run_cli(["done", str(self.review)])
+        self.assertNotEqual(code, 0)
+        self.assertIn("n2", err)
+        self.assertIn("n4", err)
+        self.assertEqual(store.load(self.review), earlier_notes)
+        self.assertEqual(store.handoff_load(self.review), earlier_batch)
+        self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V2")
+        relocated = {"noteId": "n4", "outcome": "needs_relocate", "relocateReason": "转场分成两段"}
+        code, out, err = self.run_cli([*args, "--json"], stdin_text=json.dumps([failed, relocated]))
+        self.assertEqual(code, 0, err)
+        result = json.loads(out)
+        self.assertEqual((result["status"], result["currentVersionId"]), ("drafted", "V3"))
+        notes = {n["id"]: n for n in store.load(self.review)["notes"]}
+        self.assertEqual(notes["n3"], next(n for n in earlier_notes["notes"] if n["id"] == "n3"))
+        self.assertEqual(notes["n2"]["videoReview"]["failure"], failed["failure"])
+
+    def test_workflow_receipt_examples_can_be_submitted_to_the_cli(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2", "n3", "n4", "n5"])
+        store.handoff_claim(self.review)
+        references = SCRIPTS.parent / "references"
+        for lang, ref, heading in (
+            ("zh-CN", "formats.md", "逐条视频回执示例"),
+            ("en", "formats.en.md", "Per-annotation video receipt example"),
+        ):
+            with self.subTest(lang=lang):
+                anchor = heading.lower().replace(" ", "-")
+                workflow = (references / f"workflow.{lang}.md").read_text(encoding="utf-8")
+                self.assertTrue(f"({ref}#{anchor})" in workflow, f"{lang} 工作流缺少回执示例链接")
+                section = (references / ref).read_text(encoding="utf-8").split("### " + heading + "\n", 1)[1]
+                example = section.split("```json\n", 1)[1].split("\n```", 1)[0]
+                args = [
+                    "video-receipt",
+                    str(self.review),
+                    "--movie",
+                    str(self.v1_path),
+                    "--receipt",
+                    "-",
+                    "--json",
+                    "--receipt-id",
+                    f"example-{lang}",
+                ]
+                if lang == "zh-CN":
+                    args.append("--no-finish")
+                code, out, err = self.run_cli(args, stdin_text=example)
+                self.assertEqual(code, 0, err)
+                result = json.loads(out)
+                self.assertFalse(result["replayed"])
+                self.assertEqual(
+                    {n["id"]: n["videoReview"]["state"] for n in result["notes"]},
+                    {
+                        "n1": "pending_review",
+                        "n2": "pending_review",
+                        "n3": "needs_reply",
+                        "n4": "needs_relocate",
+                        "n5": "failed",
+                    },
+                )
+
+    def test_cli_lists_only_annotations_missing_evidence_in_this_receipt(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n2", "n3", "n4"])
+        store.handoff_claim(self.review)
+        command = ["video-receipt", str(self.review), "--receipt", "-"]
+        earlier = [{"noteId": "n3", "outcome": "fixed", "summary": "尚缺新版位置"}]
+        code, _, err = self.run_cli(
+            [*command, "--no-finish", "--receipt-id", "opening"], stdin_text=json.dumps(earlier)
+        )
+        self.assertEqual(code, 0, err)
+        final = [
+            {"noteId": "n1", "outcome": "fixed", "summary": "字幕已上移"},
+            {"noteId": "n2", "outcome": "fixed", "summary": "已调音量", "target": {"frame": 20}},
+            {
+                "noteId": "n4",
+                "outcome": "fixed",
+                "summary": "已缩短转场",
+                "target": {"kind": "range", "startFrame": 24, "endFrame": 48},
+            },
+        ]
+        args = [*command, "--movie", str(self.v1_path), "--receipt-id", "later"]
+        for lang, label in (("zh-CN", "缺证据"), ("en", "missing evidence")):
+            code, output, err = self.run_cli([*args, "--locale", lang], stdin_text=json.dumps(final))
+            self.assertEqual(code, 0, err)
+            self.assertIn(label, output.lower())
+            for note_id in ("n1", "n2"):
+                self.assertIn(note_id, output)
+            for note_id in ("n3", "n4"):
+                self.assertNotIn(note_id, output)
+
     def test_receipt_retry_with_a_new_claim_keeps_the_returned_note_and_original_batch(self):
         store.handoff_submit(self.review, note_ids=["n1"])
         self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
@@ -1182,11 +1473,16 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         for seq, nid in enumerate(["n1", "n2"], start=1):
             store.handoff_submit(self.review, note_ids=[nid])
             store.handoff_claim(self.review, seq=seq)
-            store.video_receipt(self.review, seq=seq, receipt_id=f"part-{seq}")
+            store.video_receipt(
+                self.review,
+                seq=seq,
+                receipt_id=f"part-{seq}",
+                receipt=[{"noteId": nid, "outcome": "question", "question": "是否保留？"}],
+            )
         handoff = store.handoff_load(self.review)
-        # 旧版允许两批显式使用相同的标识。
+        # 旧版允许空清单收尾，也允许两批显式使用相同的标识。
         for item in handoff["items"]:
-            item["videoReceipts"][0]["receiptId"] = "same-key"
+            item["videoReceipts"][0].update(receiptId="same-key", items=[])
         (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
         command = ["video-receipt", str(self.review), "--receipt-id", "same-key", "--json"]
         code, _, err = self.run_cli(command)

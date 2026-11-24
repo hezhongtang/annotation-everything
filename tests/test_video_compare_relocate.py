@@ -723,6 +723,36 @@ class VideoComparePageTests(unittest.TestCase):
             ],
         }
 
+    def test_compare_offers_a_cut_window_only_when_it_contains_each_in_movie_side(self):
+        comparison = interaction_program(
+            [(PURE_START, PURE_END)],
+            "let videoRangeEnd=null; const manifest=" + json.dumps(self._manifest()) + ";",
+            """
+            return [[60,30,60],[60,60,90],[60,59,61],[0,0,1],[192,191,192],[192],[0],[60]].map(
+              ([frame,contextStart,contextEnd])=>{
+                const note={id:"n2",status:"drafted",video:{versionId:"V1",startFrame:65,endFrame:80},
+                  videoReview:{state:"pending_review",outcome:"deleted",versionId:"V2",summary:"Removed shot",
+                    target:{kind:"cut",frame,contextStart,contextEnd}}};
+                const pair=videoComparePair(note,manifest);
+                const range=pair.after.spec?.playRange;
+                return [pair.ready, range?[range.startFrame,range.endFrame]:null];
+              });
+            """,
+        )
+        self.assertEqual(
+            comparison,
+            [
+                [False, None],
+                [False, None],
+                [True, [59, 61]],
+                [True, [0, 1]],
+                [True, [191, 192]],
+                [True, [162, 192]],
+                [True, [0, 30]],
+                [True, [30, 90]],
+            ],
+        )
+
     def test_pure_compare_helpers_use_per_version_timebase_and_format_deleted_and_relocated_cards(self):
         manifest = self._manifest()
         notes = [

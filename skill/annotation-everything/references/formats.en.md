@@ -119,6 +119,38 @@ python3 "$S/build_viewer.py" --report cut.mp4 --out cut-review --name "Synthetic
   - `POST /api/handoff/finalize-all` takes the selected batches and annotation IDs, with an `evidence` map from ID to the revision the reviewer saw. It approves the selected annotations that are still ready and match those revisions. The `skipped` entries identify changed or incomplete annotations for the reviewer to reopen. Document reviews keep their whole-batch finalization.
   - Selective rework and stale/immutability guards: the handoff modal defaults to an empty selection (with a "Returned only" quick pick and status tags) whenever prior receipts exist so resubmitting only returned notes carries only those chosen notes and their prior `videoReview` context (`returnReason`, V2 target, `history`) without dragging approved notes or unsubmitted replies. Duplicate confirms, replays, `set_status("open")`, or stale receipts never overwrite human decisions (`approved` rejects all receipts with `note-already-decided`; `returned`/`replied` at batch `k` reject receipts from batch `<= k` with `stale-receipt`), while an explicitly submitted rework batch `m > k` delivers V3 receipts under the same note ID preserving full V1→V2→V3 history.
 
+### Per-annotation video receipt example
+
+Save the receipt as UTF-8 `receipt.json` and pass it to `notes.py video-receipt` with `--receipt receipt.json`. The top-level `notes` array lists the annotations in this delivery. Use each original ID from the claim’s `noteIds` at most once in the array.
+
+| Entry fields | When to supply them |
+|---|---|
+| `noteId`, `outcome` | Required for every entry. Choose `fixed`, `deleted`, `question`, `needs_relocate` or `failed`. |
+| `summary`, `target` | For a fix or a deleted shot to enter review, describe the change and give its location in the new cut. The CLI lists the IDs with missing evidence in this receipt. JSON output includes them in `missingEvidenceIds`. |
+| `versionId` | Optional. Name a successful render registered to this batch. The default is the cut supplied with `--movie` or the latest render in this batch. |
+| `question` | For `question`, write the question the reviewer needs to answer. |
+| `relocateReason` | For `needs_relocate`, explain why the new location is uncertain. |
+| `failure` | For `failed`, explain why this annotation could not be addressed. Use `--render-error` for a shared render failure. Omitting the list applies that reason only to open annotations in this batch that can still receive a failure receipt. |
+
+Frame numbers start at zero. A frame target looks like `{"kind":"frame","frame":108}`. A range looks like `{"kind":"range","startFrame":132,"endFrame":180}` and plays from the first frame up to the exclusive end. An original range needs a playable interval in the new cut. For a deleted shot set `kind` to `cut` and give its `frame`. Omit both `contextStart` and `contextEnd` for an automatic window based on the frame rate. An explicit half-open window must show both sides of an interior cut, with `contextStart < frame < contextEnd`. A cut at frame zero needs a window starting at zero. A cut at the total frame count needs a window ending at that count.
+
+This synthetic batch contains `n1` through `n5` and receives a new cut with `--movie`. Replace the IDs, descriptions and target frames with those of your batch. Choose a fresh `receiptId` for each new delivery.
+
+```json
+{
+  "receiptId": "demo-cut-2",
+  "notes": [
+    {"noteId": "n1", "outcome": "fixed", "summary": "Raised the subtitle to uncover the icon", "target": {"kind": "frame", "frame": 108}},
+    {"noteId": "n2", "outcome": "deleted", "summary": "Removed the repeated shot", "target": {"kind": "cut", "frame": 60, "contextStart": 45, "contextEnd": 75}},
+    {"noteId": "n3", "outcome": "question", "question": "How long should the intro run?"},
+    {"noteId": "n4", "outcome": "needs_relocate", "relocateReason": "The transition became two sequences. Which one needs review?"},
+    {"noteId": "n5", "outcome": "failed", "failure": "The source footage for the closing color grade is missing"}
+  ]
+}
+```
+
+Finishing checks every selected ID against this batch’s receipts, including earlier partial deliveries, and existing reviewer decisions. If the command lists omitted IDs, add those entries to the current receipt and retry. To deliver a partial result first, use `--no-finish` with a receipt ID chosen in advance, then use a fresh ID for the remaining entries.
+
 ## Starting from a source project (Remotion / HyperFrames)
 
 `--report` also accepts a local source project directory (again no script input); the resulting review is the same shape as the MP4 entry (same `format: video` manifest, private V1 copy, SHA-256, annotation and handoff flow):

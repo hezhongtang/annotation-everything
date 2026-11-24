@@ -2515,6 +2515,7 @@ def handoff_done(
                         code="video-manual-approval-required",
                         seq=n_seq,
                     )
+                _require_video_receipt_coverage(item, notes or [])
                 if mine:
                     to = "drafted"
                 elif mode == "draft":
@@ -3064,6 +3065,58 @@ def _find_receipt_replay(item: dict[str, Any], receipt_id: str) -> dict[str, Any
     return None
 
 
+def _receipt_would_overwrite_feedback(note: dict, item: dict, vr: dict | None) -> bool:
+    if not vr or vr.get("decision") not in ("returned", "replied"):
+        return False
+    decision_batch = _video_batch_seq(note, vr)
+    if decision_batch is not None:
+        return item["seq"] <= decision_batch
+    # 旧决定缺批次号时，提交快照里已有同一决定，才可确认这是审阅人重交以后的返工。
+    submitted = (item.get("videoSubmission") or {}).get("notes") or []
+    return not any(n.get("id") == note["id"] and n.get("videoReview") == vr for n in submitted)
+
+
+def _require_video_receipt_coverage(item: dict, notes: list[dict]) -> None:
+    seq = item["seq"]
+    selected = item.get("openIds") or []
+    outstanding = set(selected)
+    outstanding.difference_update(
+        entry.get("noteId")
+        for receipt in item.get("videoReceipts") or []
+        if isinstance(receipt, dict)
+        for entry in receipt.get("items") or []
+        if isinstance(entry, dict) and entry.get("outcome") in VIDEO_RECEIPT_OUTCOMES
+    )
+    for note in notes:
+        if note["id"] not in outstanding:
+            continue
+        vr = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else {}
+        if (
+            note.get("status") == "resolved"
+            or vr.get("decision") == "approved"
+            or _receipt_would_overwrite_feedback(note, item, vr)
+        ):
+            outstanding.remove(note["id"])
+        # 旧写入方可能已保存逐条回执，尚未写入批次汇总。
+        elif any(
+            isinstance(row, dict)
+            and row.get("batch") == seq
+            and row.get("receiptId")
+            and row.get("outcome") in VIDEO_RECEIPT_OUTCOMES
+            for row in [vr, *(vr.get("history") or [])]
+        ):
+            outstanding.remove(note["id"])
+    if outstanding:
+        missing = [nid for nid in selected if nid in outstanding]
+        raise HandoffError(
+            f"第 {seq} 批还缺少以下批注的回执或人工决定：{'、'.join(missing)}。请补齐后收尾，"
+            "或用 --no-finish 分次交回。",
+            code="incomplete-video-receipt",
+            seq=seq,
+            ids=missing,
+        )
+
+
 def _saved_video_evidence(notes: list[dict], video: dict) -> Iterator[dict]:
     yield from video.get("versions", [])
     yield from video.get("failures", [])
@@ -3127,15 +3180,13 @@ def _validate_receipt_note(note: dict[str, Any], nid: str, item: dict[str, Any],
     vr = note.get("videoReview") if isinstance(note.get("videoReview"), dict) else None
     if note.get("status") == "resolved" or (vr and vr.get("decision") == "approved"):
         raise HandoffError(f"批注 {nid} 已有人工决定，不能被回执覆盖", code="note-already-decided", id=nid)
-    if vr and vr.get("decision") in ("returned", "replied"):
-        dec_batch = vr.get("decisionBatch") or vr.get("batch")
-        if isinstance(dec_batch, int) and not isinstance(dec_batch, bool) and n_seq <= dec_batch:
-            raise HandoffError(
-                f"批注 {nid} 已有人工决定，拒绝同批或更早批次的陈旧回执",
-                code="stale-receipt",
-                id=nid,
-                seq=n_seq,
-            )
+    if _receipt_would_overwrite_feedback(note, item, vr):
+        raise HandoffError(
+            f"批注 {nid} 已有人工决定，拒绝同批或更早批次的陈旧回执",
+            code="stale-receipt",
+            id=nid,
+            seq=n_seq,
+        )
     batches: list[Any] = [note.get("draftBatch"), note.get("resolvedBatch"), vr.get("batch") if vr else None]
     if vr:
         batches.extend(h.get("batch") for h in (vr.get("history") or []) if isinstance(h, dict))
@@ -3343,9 +3394,11 @@ def _recover_saved_receipt(review_dir, manifest, doc, item, notes, receipt_id, s
         stage = _stage_entry(item, "draft")
         stage.update(draftedIds=drafts)
         if finish:
+            _require_video_receipt_coverage(item, notes)
             stage.update(doneAt=at, doneBy=actor)
             if drafts:
-                item.update(status="drafted", leftOpen=len(set(item["openIds"]) & _open_ids(notes)))
+                item["status"] = "drafted"
+                item.update(_batch_stats(notes, item, None))
             else:
                 _finish(item, notes, doc["items"], actor, summary)
     item["videoStats"] = _video_batch_stats(notes, item, in_flight=_in_flight_ids(doc["items"], notes))
@@ -3557,6 +3610,12 @@ def video_receipt(
         finally:
             _settle_receipt_version(review_dir)
         result["currentVersionId"] = ledger.read_manifest(review_dir)["video"]["currentVersionId"]
+        receipt_record = _find_receipt_replay(result["batch"], result["receiptId"]) or {}
+        result["missingEvidenceIds"] = [
+            e["noteId"]
+            for e in receipt_record.get("items") or []
+            if isinstance(e, dict) and e.get("noteId") and e.get("state") == "missing_evidence"
+        ]
         return result
 
 
@@ -3752,7 +3811,12 @@ def _apply_receipt(review_dir, spec, actor, finish, authorize):
             touched_notes = []
             for entry in fail_entries:
                 note = by_id[entry["noteId"]]
-                _validate_receipt_note(note, entry["noteId"], item, n_seq)
+                try:
+                    _validate_receipt_note(note, entry["noteId"], item, n_seq)
+                except HandoffError as exc:
+                    if not entries and exc.code in ("note-already-decided", "stale-receipt"):
+                        continue
+                    raise
                 rec_entry = _apply_video_receipt_to_note(
                     note,
                     entry={**entry, "outcome": "failed", "failure": entry.get("failure") or fail_reason},
@@ -3878,12 +3942,11 @@ def _apply_receipt(review_dir, spec, actor, finish, authorize):
             stage_entry["summary"] = req_summary
 
         if finish:
+            _require_video_receipt_coverage(item, ndoc["notes"])
             stage_entry.update(doneAt=now, doneBy=actor)
             if mine:
                 item["status"] = "drafted"
-                item["resolvedIds"] = []
-                item["resolvedCount"] = 0
-                item["leftOpen"] = sum(1 for x in item.get("openIds") or [] if x in _open_ids(ndoc["notes"]))
+                item.update(_batch_stats(ndoc["notes"], item, None))
             else:
                 _finish(item, ndoc["notes"], doc["items"], actor, req_summary)
         in_flight_set = {x for it in doc["items"] if it.get("status") in IN_FLIGHT for x in (it.get("openIds") or [])}

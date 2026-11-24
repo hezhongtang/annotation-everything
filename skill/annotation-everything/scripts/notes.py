@@ -395,6 +395,8 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     params = dict(error.params)
     if error.code == "unreviewed":
         params.update(count=len(params["ids"]), ids=t("cli.hand.itemSep").join(params["ids"]))
+    elif error.code == "incomplete-video-receipt":
+        params["ids"] = t("cli.hand.itemSep").join(params["ids"])
     if error.code == "ambiguous-batches":
         params["batches"] = t("cli.hand.itemSep").join(
             t("cli.hand.error.batchState", seq=seq, status=label(t, STATUS_KEY.get(status, ""), status))
@@ -2174,6 +2176,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     count=len(result.get("notes") or []),
                 )
             )
+        if not a.json and result["missingEvidenceIds"]:
+            print(t("cli.videoReceipt.missingEvidence", ids=t("cli.hand.itemSep").join(result["missingEvidenceIds"])))
         return 0
     return 2
 

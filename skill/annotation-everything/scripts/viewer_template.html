@@ -1924,10 +1924,13 @@ function videoRangeTimes(temporal,source){const clk=videoVersionClock(source)||v
   return{startFrame,endFrame,startTime:videoFrameTime(startFrame,clk),endTime:videoFrameTime(endFrame,clk),fps:clk?clk.fps:null,timebase:clk?{num:clk.num,den:clk.den}:null}}
 function videoCutContext(target,version,padSeconds=1){
   const clk=videoVersionClock(version)||videoVersionClock(target);
-  const total=(version&&Number.isInteger(version.frames)&&version.frames>0)?version.frames:(target&&Number.isInteger(target.frames)&&target.frames>0?target.frames:Math.max(1,(target.frame||0)+1));
-  const cutFrame=Math.max(0,Math.min(total,Math.floor(target.frame||0)));
-  if(Number.isInteger(target.contextStart)&&Number.isInteger(target.contextEnd)&&target.contextStart>=0&&target.contextStart<target.contextEnd&&target.contextEnd<=total)
-    return{frame:cutFrame,contextStart:target.contextStart,contextEnd:target.contextEnd,time:videoFrameTime(cutFrame,clk),startTime:videoFrameTime(target.contextStart,clk),endTime:videoFrameTime(target.contextEnd,clk),explicit:true};
+  const total=version?.frames??target.frames,cutFrame=target.frame;
+  if(!Number.isInteger(total)||total<1||!Number.isInteger(cutFrame)||cutFrame<0||cutFrame>total)return null;
+  const startFrame=target.contextStart,endFrame=target.contextEnd;
+  if(startFrame!=null||endFrame!=null){
+    if(!Number.isInteger(startFrame)||!Number.isInteger(endFrame)||startFrame<0||endFrame>total||
+        startFrame>Math.max(0,cutFrame-1)||endFrame<Math.min(total,cutFrame+1))return null;
+    return{frame:cutFrame,contextStart:startFrame,contextEnd:endFrame,time:videoFrameTime(cutFrame,clk),startTime:videoFrameTime(startFrame,clk),endTime:videoFrameTime(endFrame,clk),explicit:true}}
   const pad=clk?Math.max(1,Math.round((padSeconds*clk.den)/clk.num)):30;
   const start=Math.max(0,Math.min(total-1,cutFrame-pad)),end=Math.min(total,Math.max(start+1,cutFrame+pad));
   return{frame:cutFrame,contextStart:start,contextEnd:end,time:videoFrameTime(cutFrame,clk),startTime:videoFrameTime(start,clk),endTime:videoFrameTime(end,clk),explicit:false}}
@@ -1989,11 +1992,7 @@ function videoTargetValid(target,version){
   if(!target||typeof target!=="object"||!version||!Number.isInteger(version.frames)||version.frames<1)return false;
   if(target.kind==="frame")return Number.isInteger(target.frame)&&target.frame>=0&&target.frame<version.frames;
   if(target.kind==="range")return Number.isInteger(target.startFrame)&&Number.isInteger(target.endFrame)&&target.startFrame>=0&&target.startFrame<target.endFrame&&target.endFrame<=version.frames;
-  if(target.kind==="cut"){if(!Number.isInteger(target.frame)||target.frame<0||target.frame>version.frames)return false;
-    const hasStart=target.contextStart!=null,hasEnd=target.contextEnd!=null;
-    if(hasStart!==hasEnd)return false;
-    if(hasStart&&(!Number.isInteger(target.contextStart)||!Number.isInteger(target.contextEnd)||target.contextStart<0||target.contextStart>=target.contextEnd||target.contextEnd>version.frames||target.frame<target.contextStart||target.frame>target.contextEnd))return false;
-    return true}
+  if(target.kind==="cut")return !!videoCutContext(target,version);
   return false}
 function videoEvidence(note){return note?.videoReview?.evidenceRevision||"legacy"}
 const videoEvidenceToReview=new Map();
@@ -2031,10 +2030,10 @@ function videoTargetPlaySpec(target,version){
   if(!clk)return null;
   const versionId=(version&&version.versionId)||target.versionId||null;
   if(target.kind==="cut"&&Number.isInteger(target.frame)){
-    const ctx=videoCutContext(target,src);
+    const ctx=videoCutContext(target,src);if(!ctx)return null;
     return{kind:"cut",versionId,seekFrame:ctx.contextStart,seekTime:ctx.startTime,cutFrame:ctx.frame,cutTime:ctx.time,
       playRange:{startFrame:ctx.contextStart,endFrame:ctx.contextEnd,startTime:ctx.startTime,endTime:ctx.endTime},
-      mark:target.mark||null,valid:version&&Number.isInteger(version.frames)?videoTargetValid(target,version):true}}
+      mark:target.mark||null,valid:true}}
   if(target.kind==="range"||(Number.isInteger(target.startFrame)&&Number.isInteger(target.endFrame))){
     const rt=videoRangeTimes(target,src);
     return{kind:"range",versionId,seekFrame:rt.startFrame,seekTime:rt.startTime,playRange:rt,

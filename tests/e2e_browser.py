@@ -10520,6 +10520,24 @@ def video_cut_and_relocate(page, review, identity, movies):
         all(s in cut_readout for s in ("42", "30", "60")) and video_play_segment(page, "After", 1, 2),
         "删镜显示 V2 剪口及 30–60 帧上下文，可带声播放并按区间停止",
     )
+    page.click("#videoCompareToggleRelocate")
+    page.fill("#videoRelocateContextEnd", "42")
+    page.click("#videoRelocateSave")
+    page.locator("#videoRelocateErr").wait_for()
+    page.click("#videoRelocateCancel")
+    for frame, start, end in ((0, 0, 30), (192, 162, 192)):
+        page.click("#videoCompareToggleRelocate")
+        page.fill("#videoRelocateFrame", str(frame))
+        page.fill("#videoRelocateContextStart", str(start))
+        page.fill("#videoRelocateContextEnd", str(end))
+        receipt = video_click_post(page, "#videoRelocateSave", f"/api/notes/{cut}/video-relocate")
+        page.locator("#videoCompareRelocate").wait_for(state="hidden")
+        target = receipt["note"]["videoReview"]["target"]
+        ok(
+            (target["frame"], target["contextStart"], target["contextEnd"]) == (frame, start, end)
+            and video_play_segment(page, "After", start / 30, end / 30),
+            f"第 {frame} 帧剪口播放片内的 [{start}, {end}) 帧上下文",
+        )
     page.click("#videoCompareClose")
     video_compare(page, relocate)
     ok(not page.locator("#videoCompareApprove").is_visible(), "待定位的镜头没有通过入口")
