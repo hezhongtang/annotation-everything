@@ -31,12 +31,13 @@ def interaction_program(parts, setup, expression, locale="en"):
     for start, end in parts:
         a, b = source.index(start), source.index(end, source.index(start))
         chunks.append(source[a:b])
-    messages = i18n.load_catalog(locale)["messages"]
+    catalogs = {lang: i18n.load_catalog(lang)["messages"] for lang in i18n.SUPPORTED}
+    runtime = source[source.index("const missingKeys=[];") : source.index("function targetLabel(")]
     program = "\n".join(
         [
-            "const M=" + json.dumps(messages, ensure_ascii=False) + ";",
+            "const CATALOGS=" + json.dumps(catalogs, ensure_ascii=False) + ";",
             "const uiLocale=" + json.dumps(locale) + ";",
-            "const tMsg=(k,p={})=>String(M[k]??k).replace(/\\{(\\w+)\\}/g,(_,n)=>String(p[n]??''));",
+            runtime,
             "const escH=s=>String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));",
             "const elements=new Map(); const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:'',setAttribute(){},classList:{contains(){return false},toggle(){},remove(){}}});return elements.get(id)};",
             setup,

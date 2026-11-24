@@ -1479,16 +1479,24 @@ function cleanItem(x){const n={id:okId(x.id)?x.id:newId(),page:+x.page,title:Str
     else delete n.edit}
   return n}
 function mergeLocal(items){const byId=new Map(notes.map(x=>[x.id,x])),keys=new Set(notes.map(dedupKey));let added=0,skipped=0,updated=0;
+  if(!VIDEO&&items.some(x=>x.video&&videoKey(x.video)!==videoKey(byId.get(x.id)?.video)))return{error:tMsg("cli.hand.error.videoLocationInDocument")};
   items.forEach(raw=>{const x=cleanItem(raw);const cur=byId.get(x.id);
     if(cur){if(cur.video&&videoKey(x.video)!==videoKey(cur.video)){skipped++;return}   // 原版本定位不可变：缺 video 或改定位都不覆盖
+      if(!VIDEO&&(cur.video||cur.videoReview)){
+        for(const key of ["videoReview","status","trail","hold","resolvedAt","resolvedBy","resolution","resolvedBatch","draftedAt","draftedBy","draftBatch"]){
+          if(key in cur)x[key]=cur[key];else delete x[key]}}
       if(stamp(x)>stamp(cur)){Object.keys(cur).forEach(k=>delete cur[k]);Object.assign(cur,x);updated++}else skipped++;return}
     if(keys.has(dedupKey(x))){skipped++;return}
     notes.push(x);byId.set(x.id,x);keys.add(dedupKey(x));added++});
   return{added,skipped,updated}}
 function applyLocal(op){
-  if(op.kind==="add"){if(!notes.some(x=>x.id===op.note.id))notes.push(op.note)}
+  if(op.kind==="add"){if(!notes.some(x=>x.id===op.note.id)){
+    if(op.note.video&&!VIDEO)return{error:tMsg("cli.hand.error.videoLocationInDocument")};
+    notes.push(op.note)}}
   else if(op.kind==="del")notes=notes.filter(x=>x.id!==op.id);
   else if(op.kind==="patch"){const x=notes.find(x=>x.id===op.id);if(x){
+    if(op.body.video&&!x.video&&!VIDEO)return{error:tMsg("cli.hand.error.videoLocationInDocument")};
+    if(op.body.status&&(x.video||x.videoReview)&&!VIDEO)return{error:tMsg("cli.hand.error.legacyVideoInDocument")};
     if(x.video&&op.body&&"video" in op.body&&videoKey(op.body.video)!==videoKey(x.video))throw new Error("video location is immutable");
     Object.assign(x,op.body);settleMarks(x,op.body);x.updatedAt=nowIso();
     if(op.body.status==="open"){["resolvedAt","resolvedBy","resolution","resolvedBatch","draftedAt","draftedBy","draftBatch"].forEach(k=>delete x[k])}
@@ -1524,9 +1532,11 @@ const failed={get(){if(queueSnap)return queueSnap.f;const v=LS.get(K.failed,[]);
 async function mutate(op){
   if(docxBlocked()||pptxBlocked()||videoBlocked()){docxBlocked()?docxBlockToast():pptxBlocked()?pptxBlockToast():videoBlockToast();return}   // 旧服务会丢掉 DOCX / PPT / 视频定位：不写入、不进队列
   op.opId=newId();
-  if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[];   // 先读最新再改：多个标签页不互相覆盖
-    const res=applyLocal(op);mirror();refreshList();return res}
-  const res=applyLocal(op);refreshList();
+  if(FILE){const cur=LS.get(K.notes,[]);notes=Array.isArray(cur)?cur:[]}   // 先读最新再改：多个标签页不互相覆盖
+  const res=applyLocal(op);
+  if(res?.error){toast(res.error,6000);return res}
+  if(FILE){mirror();refreshList();return res}
+  refreshList();
   pend.push(op);updateMode();
   if(mode==="server"&&(!stopServiceSupported||!stopSnapshot||stopSnapshot.state==="active"))flush();
   else if(op.kind==="handoff")toast(mode==="mismatch"?tMsg("viewer.hand.toast.queuedMismatch"):tMsg("viewer.hand.toast.queuedOffline"),4000);
@@ -3242,7 +3252,7 @@ function renderResume(){const el=$("resume");if(resumeOff||!resumeReady){if(el.c
     if(!L){if(notes.length)parts.push(tMsg("viewer.resume.none",{n:open}))}
     else if(L.status==="pending")parts.push(tMsg("viewer.resume.pending",{seq:L.seq}));
     else if(L.status==="claimed")parts.push(tMsg("viewer.resume.claimed",{seq:L.seq,time:fmtTime(Date.parse(L.claimedAt||L.at))}));
-    else if(L.status==="drafted")parts.push(tMsg("viewer.resume.drafted",{seq:L.seq,n:cc.d}));
+    else if(L.status==="drafted")parts.push(tMsg(VIDEO?"viewer.video.batchReviewGuidance":"viewer.resume.drafted",{seq:L.seq,n:VIDEO?+L.draftedCount||0:cc.d}));
     else if(L.status==="review")parts.push(tMsg("viewer.resume.review",{seq:L.seq}));
     else if(L.status==="reviewing")parts.push(tMsg("viewer.resume.reviewing",{seq:L.seq}));
     else parts.push(`<span class="ok">${tMsg("viewer.resume.doneMark",{seq:+L.seq||0,
@@ -3262,7 +3272,7 @@ const handUserMessage=h=>h.userMessage??h.message??"";
 function setHand(h,quiet){if(!h||h.error)return;const L=h.latest,prev=hand&&hand.latest;
   if(L&&prev&&prev.seq===L.seq&&prev.status!==L.status){
     if(L.status==="claimed")toast(tMsg("viewer.hand.toast.claimed"),3000);
-    if(L.status==="drafted")toast(tMsg("viewer.hand.toast.drafted",{seq:L.seq,n:+L.draftedCount||0}),8000);
+    if(L.status==="drafted")toast(tMsg(VIDEO?"viewer.video.batchReviewGuidance":"viewer.hand.toast.drafted",{seq:L.seq,n:+L.draftedCount||0}),8000);
     if(L.status==="reviewing")toast(tMsg("viewer.hand.toast.reviewing"),3000);
     if(L.status==="done")toast(tMsg("viewer.hand.toast.done",{seq:L.seq,n:+L.resolvedCount||0,
       summary:L.summary?tMsg("viewer.hand.toast.doneSummary",{summary:String(L.summary).slice(0,80)}):""}),7000)}
@@ -3378,15 +3388,24 @@ async function batchAction(path,body,okMsg){
   try{const r=await api("POST",path,body);if(r&&r.handoff)setHand(r.handoff);await resync();if($("batches").classList.contains("on"))loadBatches();toast(okMsg,3500)}
   catch(e){toast(e.code==="no-api"?tMsg("viewer.hand.toast.actionLegacy"):tMsg("viewer.hand.toast.actionFailed",{message:e.message}),6000)}}
 function requestReview(seq,message,sub){return batchAction("/api/handoff/review",{seq,message,allowSubagents:sub,receiverBindingId:handDestination&&handDestination.bindingId},tMsg("viewer.hand.toast.reviewRequested",{seq}))}
-function finalizeBatch(seq){const dn=notes.filter(x=>isDraft(x)&&x.draftBatch===seq).length;
-  if(!confirm(tMsg("viewer.hand.toast.confirmFinalize",{seq,n:dn})))return;
+function finalizeBatch(seq){const drafts=notes.filter(x=>isDraft(x)&&x.draftBatch===seq),n=drafts.filter(x=>!x.video&&!x.videoReview).length;
+  const legacy=n<drafts.length?tMsg("cli.hand.error.legacyVideoInDocument"):"";
+  if(!n&&legacy){toast(legacy,6000);return}
+  if(!confirm([tMsg("viewer.hand.toast.confirmFinalize",{seq,n}),legacy].filter(Boolean).join("\n")))return;
   return batchAction("/api/handoff/finalize",{seq},tMsg("viewer.hand.toast.finalized",{seq}))}
 const FINALIZE_SKIP={claimed:"claimed",reviewing:"reviewing",unavailable:"unavailable",changed:"changed",unconfirmed:"unconfirmed",unready:"unready"};
 let videoApproveSel=new Map(),videoReturnOpen=null,videoReturnBuf={},videoReplyBuf={};
 function videoSyncApproveSel(){
   if(!VIDEO){videoApproveSel.clear();return}
-  const readyIds=new Set(notes.filter(n=>videoBatchApprovable(n,videoManifest())).map(n=>n.id));
-  for(const [id,rev] of videoApproveSel)if(!readyIds.has(id)||videoEvidence(notes.find(n=>n.id===id))!==rev)videoApproveSel.delete(id)}
+  const byId=new Map(notes.map(n=>[n.id,n])),manifest=videoManifest();
+  for(const id of videoEvidenceToReview.keys()){
+    const note=byId.get(id);
+    if(!note||note.status==="resolved")videoEvidenceToReview.delete(id);
+    else if(note.status==="drafted")videoEvidenceToReview.set(id,videoEvidence(note))}
+  for(const [id,revision] of videoApproveSel){
+    const note=byId.get(id);
+    if(note?.status==="drafted"&&videoEvidence(note)!==revision)videoEvidenceToReview.set(id,videoEvidence(note));
+    if(!videoBatchApprovable(note,manifest))videoApproveSel.delete(id)}}
 function videoToggleApprovePick(id,checked){
   const x=notes.find(n=>n.id===id);
   if(!x||!videoBatchApprovable(x,videoManifest()))return false;
@@ -3410,14 +3429,19 @@ function finalizeSkipText(skipped){const counts={};
   return Object.entries(counts).map(([reason,count])=>tMsg("viewer.finalizeAll.skip."+reason,{count})).join(tMsg("viewer.finalizeAll.separator"))}
 function finalizeBlockedText(skipped){
   if(!Array.isArray(skipped)||!skipped.length)return"";
-  const counts={};
-  for(const e of skipped){const k=String((e&&(e.detail||e.reason))||"unavailable");counts[k]=(counts[k]||0)+1}
-  const detail=Object.entries(counts).map(([k,count])=>{
-    const skKey="viewer.video.state."+k,altKey="viewer.finalizeAll.skip."+(FINALIZE_SKIP[k]||"unavailable");
-    if(typeof M!=="undefined"&&Object.prototype.hasOwnProperty.call(M,skKey))return tMsg("viewer.video.batchBlockedItem",{label:tMsg(skKey),count});
-    return tMsg(altKey,{count})}).join(tMsg("viewer.finalizeAll.separator"));
+  const evidenceReasons={"media-unreadable":"viewer.video.skip.mediaUnreadable","unregistered-version":"viewer.video.skip.versionMissing",
+    "missing-summary":"viewer.video.skip.summaryMissing","missing-target":"viewer.video.skip.targetMissing","invalid-target":"viewer.video.skip.targetInvalid",
+    "missing-video-review":"viewer.video.state.missing_evidence","invalid-video-review":"viewer.video.state.missing_evidence"};
+  const detail=skipped.map(entry=>{
+    if(entry.detail==="evidence-changed")return tMsg("viewer.video.recheckEvidence",{id:entry.id});
+    const key=evidenceReasons[entry.detail]||"viewer.video.state."+entry.detail;
+    const label=Object.prototype.hasOwnProperty.call(CATALOGS[uiLocale],key)?tMsg(key)
+      :tMsg("viewer.finalizeAll.skip."+(FINALIZE_SKIP[entry.reason]||"unavailable"),{count:1});
+    return tMsg("viewer.video.batchBlockedItem",{id:entry.id,label})}).join("\n");
   return tMsg("viewer.video.batchBlockedSummary",{detail})}
-function finalizeResultText(result){return tMsg(result.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",
+function finalizeResultText(result){if(VIDEO)return tMsg("viewer.video.batchResult",{approved:result.finalizedCount,skipped:result.skippedCount})
+    +(result.skippedCount?"\n"+finalizeBlockedText(result.skipped):"");
+  return tMsg(result.finalizedCount?"viewer.finalizeAll.result":"viewer.finalizeAll.none",
   {count:result.finalizedCount,batches:result.batches.length,skipped:result.skippedCount})
   +(result.skippedCount?"\n"+finalizeSkipText(result.skipped):"")}
 function finalizeAllProblem(){return FILE?"file":mode!=="server"?"offline":!finalizeAllSupported?"legacy":""}
@@ -3439,7 +3463,8 @@ function renderFinalizeAll(){const bar=$("finalizeAllBar"),button=$("finalizeAll
     else if(finalizeAllError)message=tMsg("viewer.finalizeAll."+finalizeAllError);
     else if(finalizeAllResult)message=finalizeResultText(finalizeAllResult);
     info.textContent=message;
-    const bMsg=!problem&&plan&&Array.isArray(plan.skipped)&&plan.skipped.length?finalizeBlockedText(plan.skipped):"";
+    const stale=notes.filter(n=>isDraft(n)&&videoEvidenceNeedsReview(n)).map(n=>tMsg("viewer.video.recheckEvidence",{id:n.id}));
+    const bMsg=problem?"":[...stale,finalizeBlockedText(plan?.skipped)].filter(Boolean).join("\n");
     if(blockedEl){blockedEl.hidden=!bMsg;blockedEl.textContent=bMsg}
     bar.hidden=button.hidden&&!message&&(!toolsEl||toolsEl.hidden)&&(!blockedEl||blockedEl.hidden);return}
   if(toolsEl)toolsEl.hidden=true;if(blockedEl)blockedEl.hidden=true;
@@ -3464,11 +3489,11 @@ async function finalizeAll(){
     const plan=d.handoff&&d.handoff.finalizable;
     if(VIDEO){
       const picked=videoSelectedBatches(plan,preSel);
-      if(!picked.count){finalizeAllError="empty";return}
+      if(!picked.count){if(!notes.some(n=>preSel.has(n.id)&&videoEvidenceNeedsReview(n)))finalizeAllError="empty";return}
       const ids=new Set(picked.batches.flatMap(b=>b.ids));
       if(!await videoApprovalPlayable(notes.filter(n=>ids.has(n.id)),videoManifest())){toast(tMsg("viewer.video.playbackUnavailable"),7000);return}
       const batches=picked.batches.map(b=>tMsg("viewer.finalizeAll.batch",{seq:b.seq,count:b.ids.length})).join(tMsg("viewer.finalizeAll.separator"));
-      if(!confirm(tMsg("viewer.finalizeAll.confirm",{count:picked.count,batches,skipped:plan?plan.skipped.length:0})))return;
+      if(!confirm(tMsg("viewer.video.confirmApproval",{count:picked.count,batches})))return;
       const r=await api("POST","/api/handoff/finalize-all",{batches:picked.batches,evidence:Object.fromEntries(preSel)});
       if(!sameReview(r.doc)||!Number.isInteger(r.finalizedCount)||!Number.isInteger(r.skippedCount)
         ||!Array.isArray(r.finalizedIds)||r.finalizedIds.length!==r.finalizedCount
@@ -4130,6 +4155,7 @@ async function runImport(items,label){
   items=items.filter(x=>x&&+x.page>0&&String(x.text||"").trim()).map(cleanItem);   // 先定好 id，离线补传后与服务端一致
   if(!items.length){toast(tMsg("import.empty"));return}
   const r=await mutate({kind:"import",notes:items})||{};
+  if(r.error)return;
   if(FILE)toast(tMsg("import.complete",{label,added:r.added,updated:r.updated,skipped:r.skipped}),3500);
   else toast(mode==="server"?tMsg("import.running"):tMsg("import.held"),3000);
   invalidateExternal();   // 本页刚导入了批注：旧批注提示要按最新的本页批注重算

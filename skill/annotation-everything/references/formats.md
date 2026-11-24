@@ -127,7 +127,9 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
     - `return`（必填非空 `reason`）：仅保存在原批注与 `notes.json`（设 `status = "open"`、`videoReview.state = "returned"`、`decision = "returned"`、`returnReason`、`decisionBatch`、`decidedAt`、`decidedBy`，清 `draft*`/`resolved*` 与在途占用并写入历史与 `returned` 痕迹），**绝不自动创建待处理批次**。
     - `reply` 只接受仍为 `open`、当轮 `state = "needs_reply"` 且尚无人工决定的条目。保存非空答复时写入 `reply`、`repliedAt`、`repliedBy`、`decision = "replied"` 和 `decisionBatch`。相同答复可按原修订幂等重试，接收会话再次提问后可作新答复。
   - `videoReview.state` 保留七个存储值。卡片、统计、处理记录和重交窗口从 `decision = "replied"` 显示「已答复」，旧答复无需迁移。批次统计分别给出 `needsReplyIds` / `needsReplyCount` 和 `repliedIds` / `repliedCount`。新写入的回执、校正、退回和答复历史保存 `previousEvidenceRevision` 与 `evidenceRevision`，可沿原批注核对每次决定所用的证据。
-  - `POST /api/handoff/finalize-all` 接收明确勾选的批次、批注 ID 和 `evidence` 映射（每个 ID 对应所见修订）。服务只通过仍就绪且修订匹配的条目。返回的 `skipped` 列出已变更或缺证据的项，供审阅人重新打开。文档审阅沿用整批定稿。
+  - `POST /api/handoff/finalize-all` 接收明确勾选的批次、批注 ID 和 `evidence` 映射（每个 ID 对应所见修订）。服务只通过仍就绪且修订匹配的条目。通过后不可撤销。返回的 `skipped` 按批注 ID 给出待答复、已答复、待定位、缺证据或媒体不可读等原因。修订不匹配时返回 `reason: "changed"` 和 `detail: "evidence-changed"`，请重新打开相应批注核对。
+  - 视频批次由接收会话提交回执后交回审阅人。分次交齐后可用 `notes.py done` 收尾。使用 `--draft` 也遵守这一路径。有初改等待人工复核时停在 `drafted`，其余已交回的批次结束。视频批次的 `POST /api/handoff/review` 提示在页面核对证据。
+  - HTML、DOCX、PPTX 审阅会拒绝新增、导入或补写视频定位。历史批注已有的视频定位与人工决定继续保留。同批普通批注可按文档规则定稿。
   - 选择性重交与防陈旧 / 防改写：返工交接弹窗若已有往轮回执则默认空选、提供「只选退回项」与状态标签，使只选退回条目的新批次仅在 `claim` / `wait` / `show --batch` 交付所选批注及上轮 `videoReview` 上下文（不混入已通过或未提交的答复条目）。重复确认、`approve` 后重放、`set_status("open")` 或陈旧回执（已 `approved` 一律拒绝 `note-already-decided`，已 `returned`/`replied` 于第 `k` 批则拒绝同批或更早批次 `<= k` 的陈旧回执 `stale-receipt`）均不能覆盖已记录的人工决定；新提交的第 `m > k` 返工批次在同一批注 ID 下交回 V3 回执时，保留完整 V1→V2→V3 历史。
 
 ### 逐条视频回执示例
@@ -376,7 +378,7 @@ One line per paragraph.
 
 全部定稿仅供审阅人在页面确认，不提供 Agent 或 CLI 入口。服务功能列表中的 `finalize-all` 声明支持；不支持时页面隐藏按钮并提示更新技能、重启服务和刷新。`GET /api/notes` 的 `handoff.finalizable` 与 `GET /api/handoff` 的顶层 `finalizable` 提供 `{count, batches: [{seq, ids}], skipped: [{id, batch, reason}]}`：只把 `drafted` 批注且批次为 `drafted` / `review` 的条目列为可定稿，`claimed` / `reviewing` 的初改列为跳过。
 
-`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属：非视频审阅保持整批通过语义（同批新增或漏选即整批跳过）；**视频审阅**则只对本次显式选定且仍满足 `review_readiness` 的 `pending_review` 条目记为人工通过（`decision: "approved"`、`decidedAt`、`decidedBy`、`history`），同批未勾选的就绪条目留在 `drafted`，非完备条目按实际状态列入 `skipped`。确认后新出现的批次不顺带定稿。响应包含 `finalizedCount`、`finalizedIds`、完成批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围、`unready` 视频批注缺少有效回执证据或处于未待复核状态。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
+`POST /api/handoff/finalize-all` 的 JSON 请求为 `{batches: [{seq, ids}]}`，使用审阅人确认的快照；批次号为正整数，批注 ID 与批次不能重复，空列表不写入。服务在同一把 `.notes.lock` 内重读并核对批次、状态与归属：非视频审阅保持整批通过语义（同批新增或漏选即整批跳过）；**视频审阅**则只对本次显式选定且仍满足 `review_readiness` 的 `pending_review` 条目记为人工通过（`decision: "approved"`、`decidedAt`、`decidedBy`、`history`），同批未勾选的就绪条目留在 `drafted`，非完备条目按实际状态列入 `skipped`。确认后新出现的批次不顺带定稿。响应包含 `finalizedCount`、`finalizedIds`、本次有批注定稿的批次号列表 `batches`、`skippedCount` 和 `skipped`，另带更新后的 `doc` 与 `handoff`。跳过原因：`claimed` 正在初改、`reviewing` 正在复核、`unavailable` 批次不可定稿或不存在、`changed` 状态或批次归属变化、`unconfirmed` 不在本次确认范围、`unready` 视频批注缺少有效回执证据或处于未待复核状态。页面以实际结果显示部分成功；取消确认不发写请求，断线时不暂存或乐观定稿。
 
 新增摘要和响应字段可被旧页面忽略，磁盘格式与批次状态机不变；批注沿用 `accepted` 痕迹，批次沿用 `accept` 阶段、`done` 状态及既有逐批日志。旧页面连接新服务仍可用原入口；新页面连接旧服务时先做功能协商。写接口与其他写操作共用 Host 校验、同源 Origin、JSON Content-Type、无 CORS 头的安全门。
 

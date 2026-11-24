@@ -10745,9 +10745,25 @@ def video_mp4_rework(page, review, identity, movies):
         "服务拒绝陈旧的批量通过范围，分别指出已退回与已答复状态",
     )
     page.check(f"[data-act='video-batch-pick'][data-id='{subtitle}']")
-    page.once("dialog", lambda dialog: dialog.accept())
+    ok(
+        wait_dom(
+            page,
+            r"""([audio,question])=>{
+              const rows=document.getElementById('videoBatchBlocked').textContent.split('\n');
+              return rows.some(row=>row.includes(audio)&&row.includes('Returned'))
+                &&rows.some(row=>row.includes(question)&&row.includes('Replied'));
+            }""",
+            6,
+            [audio, question],
+            condition="批量通过面板按原批注更新跳过原因",
+        ),
+        "批量通过面板逐条显示已退回和已答复的批注",
+    )
+    confirmations = []
+    page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
     approved = video_click_post(page, "#finalizeAllBtn", "/api/handoff/finalize-all")
     ok(approved["finalizedIds"] == [subtitle], "实际批量通过只定稿有证据且已选中的字幕批注")
+    ok("cannot be undone" in confirmations[0], "确认视频批量通过前明确显示通过后不可撤销")
     page.click("#handBtn")
     ok(
         page.locator("#handPick input:checked").count() == 0

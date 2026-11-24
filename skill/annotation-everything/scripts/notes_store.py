@@ -1112,7 +1112,13 @@ def _clean_video(value: Any) -> dict[str, Any] | None:
 
 
 def _check_registered_anchor(anchor: Any, manifest: dict) -> None:
-    if not isinstance(anchor, dict) or anchor.get("v") != 1 or not _is_video_review(manifest):
+    if not isinstance(anchor, dict):
+        return
+    if not _is_video_review(manifest):
+        raise HandoffError(
+            "视频定位只能写入视频审阅，请在对应成片的审阅中添加批注。", code="video-location-in-document"
+        )
+    if anchor.get("v") != 1:
         return
     try:
         version = video_review.registered_version(manifest, anchor["versionId"])
@@ -1346,6 +1352,8 @@ def update(
             fields.pop("video", None)
             if "page" in fields and fields["page"] != 1:
                 raise NoteError("视频批注不能移出兼容 page=1")
+        elif fields.get("video"):
+            _check_registered_anchor(fields["video"], ledger.read_manifest(review_dir))
         note.update(fields)
         _settle_marks(note, fields)
         if note.get("edit") is None:
@@ -1637,6 +1645,12 @@ def set_status(
                 id=note_id,
             )
         is_video = _is_video_review(manifest, note)
+        if is_video and not _is_video_review(manifest):
+            raise HandoffError(
+                "文档里保留了旧视频批注，请在对应视频审阅中核对并决定。",
+                code="legacy-video-in-document",
+                id=note_id,
+            )
         if status == "resolved" and is_video:
             if not reviewer:
                 raise HandoffError(
@@ -1919,8 +1933,9 @@ def import_notes(
                 raise NoteError("导入项须为对象")
             _reconcile_edit(raw)
             fields = _clean_fields(raw, partial=False)
-            _check_registered_anchor(fields.get("video"), manifest)
             nid = raw.get("id") if valid_id(raw.get("id")) else None
+            if fields.get("video") and fields["video"] != by_id.get(nid, {}).get("video"):
+                _check_registered_anchor(fields["video"], manifest)
             if nid and nid in by_id:
                 cur = by_id[nid]
                 if "videoReview" in raw and raw["videoReview"] != cur.get("videoReview"):
@@ -2582,6 +2597,7 @@ def handoff_done(
         notes = ndoc["notes"] if ndoc else None
         n_seq = int(item["seq"])
         mine = [n for n in notes or [] if n.get("status") == "drafted" and n.get("draftBatch") == n_seq]
+        document_drafts = [n for n in mine if not _is_video_review(manifest, n)]
         changed = False
         if status in ("pending", "claimed"):
             target = item.get("target", "final")
@@ -2593,18 +2609,7 @@ def handoff_done(
                         seq=n_seq,
                     )
                 _require_video_receipt_coverage(item, notes or [])
-                if mine:
-                    to = "drafted"
-                elif mode == "draft":
-                    if not item.get("allowSubagents"):
-                        raise HandoffError(
-                            f"第 {n_seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done",
-                            code="subagents-forbidden",
-                            seq=n_seq,
-                        )
-                    to = "review"
-                else:
-                    to = "done"
+                to = "drafted" if mine else "done"
             elif target == "review":
                 if mode == "final":
                     raise HandoffError(
@@ -2628,11 +2633,10 @@ def handoff_done(
             if summary:
                 e["summary"] = summary
             if to == "done":
-                for n in mine:  # 单段流程（或允许子代理但直接定稿）：初改即定稿（视频审阅前面已保证 mine 为空）
+                for n in document_drafts:
                     _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=n_seq)
                     _trail(n, by=by, stage="draft", batch=n_seq, action="finalized")
                     changed = True
-                _finish(item, notes, items, by, summary)
             else:
                 item["status"] = to
                 if to == "review":
@@ -2650,9 +2654,9 @@ def handoff_done(
                     code="video-manual-approval-required",
                     seq=n_seq,
                 )
-            if mine and not accept_rest:
-                raise Unreviewed([n["id"] for n in mine], n_seq)
-            for n in mine:
+            if document_drafts and not accept_rest:
+                raise Unreviewed([n["id"] for n in document_drafts], n_seq)
+            for n in document_drafts:
                 _mark_resolved(n, by=by, resolution=n.get("resolution", ""), batch=n_seq)
                 _trail(n, by=by, stage="review", batch=n_seq, action="approved", note="复核收尾时一并通过")
                 changed = True
@@ -2660,8 +2664,10 @@ def handoff_done(
             e.update(doneAt=now_iso(), doneBy=by, **_review_counts(notes or [], n_seq))
             if summary:
                 e["summary"] = summary
-            _finish(item, notes, items, by, summary)
+            to = "done"
         elif status in ("drafted", "review"):
+            if is_video:
+                raise _video_review_guidance(n_seq)
             raise HandoffError(
                 f"第 {n_seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；"
                 "要直接定稿由用户在页面上点「直接定稿」",
@@ -2670,8 +2676,18 @@ def handoff_done(
             )
         else:
             raise HandoffError(f"第 {n_seq} 批已经定稿了", code="already-done", seq=n_seq)
+        if to == "done":
+            if len(document_drafts) == len(mine):
+                _finish(item, notes, items, by, summary)
+            else:
+                item["status"] = "drafted"
+                item.update(_batch_stats(notes, item, None))
+                if summary:
+                    item["summary"] = summary
         if changed:
-            _commit(review_dir, ndoc, {"op": "finalize", "by": by, "seq": n_seq, "ids": [n["id"] for n in mine]})
+            _commit(
+                review_dir, ndoc, {"op": "finalize", "by": by, "seq": n_seq, "ids": [n["id"] for n in document_drafts]}
+            )
         _handoff_commit(
             review_dir,
             doc,
@@ -2700,6 +2716,14 @@ def _review_counts(notes: list[dict[str, Any]], seq: int) -> dict[str, int]:
     return c
 
 
+def _video_review_guidance(seq: int, *, code: str = "video-review-on-page") -> HandoffError:
+    return HandoffError(
+        f"第 {seq} 批请在视频对照页核对证据后逐条通过、退回，或勾选已核对的条目批量通过。",
+        code=code,
+        seq=seq,
+    )
+
+
 def handoff_request_review(
     review_dir: Path,
     seq: int,
@@ -2715,6 +2739,8 @@ def handoff_request_review(
             authorize()
         doc = handoff_load(review_dir)
         item = _find_batch(doc["items"], seq)
+        if _is_video_review(ledger.read_manifest(review_dir)):
+            raise _video_review_guidance(seq)
         if item.get("status") not in ("drafted", "review"):
             raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
         if item["status"] != "review":
@@ -2744,9 +2770,18 @@ def _finalizable(
     batches = {item["seq"]: item for item in items}
     groups: dict[int, list[str]] = {}
     skipped = []
+    open_video_items = []
     manifest = manifest or {}
+    video = _is_video_review(manifest)
     for note in notes:
         if note.get("status") != "drafted":
+            vr = note.get("videoReview")
+            if video and note.get("status") == "open" and isinstance(vr, dict):
+                seq = vr.get("batch")
+                if type(seq) is int and batches.get(seq, {}).get("status") in ("drafted", "review"):
+                    ready, reason = video_review.review_readiness(note, manifest, review_dir=review_dir)
+                    if not ready:
+                        open_video_items.append({"id": note["id"], "batch": seq, "reason": "unready", "detail": reason})
             continue
         seq = note.get("draftBatch")
         status = batches.get(seq, {}).get("status")
@@ -2768,7 +2803,7 @@ def _finalizable(
     return {
         "count": sum(len(ids) for ids in groups.values()),
         "batches": [{"seq": seq, "ids": ids} for seq, ids in sorted(groups.items())],
-        "skipped": skipped,
+        "skipped": skipped + open_video_items,
     }
 
 
@@ -2852,7 +2887,9 @@ def handoff_finalize(review_dir: Path, seq: int, *, by: str = "page") -> dict[st
     """用户看过初改觉得可以，跳过复核直接定稿：这批的初改批注全部定为已处理。"""
     with locked(review_dir):
         manifest = ledger.read_manifest(review_dir)
-        if _is_video_review(manifest) and by != "page":
+        if _is_video_review(manifest):
+            if by == "page":
+                raise _video_review_guidance(seq, code="video-selection-required")
             raise HandoffError(
                 "视频批注只能由审阅人在页面复核通过，Agent 不能直接定稿",
                 code="video-manual-approval-required",
@@ -2864,18 +2901,12 @@ def handoff_finalize(review_dir: Path, seq: int, *, by: str = "page") -> dict[st
             raise NoteError(f"第 {seq} 批不在「已初改·待复核」状态")
         ndoc = load(review_dir)
         mine = [n for n in ndoc["notes"] if n.get("status") == "drafted" and n.get("draftBatch") == seq]
-        for note in mine:
-            if _is_video_review(manifest, note):
-                ready, reason = video_review.review_readiness(note, manifest, review_dir=review_dir)
-                if not ready:
-                    raise HandoffError(
-                        f"视频批注 {note['id']} 尚未满足人工复核通过条件（{reason}）",
-                        code="video-not-ready",
-                        id=note["id"],
-                        seq=seq,
-                        reason=reason,
-                    )
-        _finalize_batch(review_dir, doc, ndoc, item, mine, by, manifest=manifest)
+        document_drafts = [n for n in mine if not _is_video_review(note=n)]
+        if mine and not document_drafts:
+            raise HandoffError(
+                "文档里保留了旧视频批注，请在对应视频审阅中核对并决定。", code="legacy-video-in-document"
+            )
+        _finalize_batch(review_dir, doc, ndoc, item, document_drafts, by, manifest=manifest)
         return item
 
 
@@ -2903,7 +2934,7 @@ def handoff_finalize_all(
                             and evidence is not None
                             and evidence.get(nid) != _video_evidence(notes[nid])
                         ):
-                            skipped[nid] = {"id": nid, "batch": seq, "reason": "changed"}
+                            skipped[nid] = {"id": nid, "batch": seq, "reason": "changed", "detail": "evidence-changed"}
                         else:
                             picked.append(nid)
                 for nid in ids:

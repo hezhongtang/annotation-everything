@@ -397,6 +397,26 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
                 server.shutdown()
                 worker.join(2)
 
+    def test_request_review_leaves_video_batch_available_for_reviewer_decisions(self):
+        self._deliver_v2_mixed_batch()
+        with self.review_http() as (server, headers):
+            status, _, raw = serve._req(
+                server.port,
+                "POST",
+                "/api/handoff/review",
+                headers,
+                {"seq": 1, "receiverBindingId": wakeup.load_binding(self.review)["bindingId"]},
+            )
+            self.assertEqual(status, 400, raw)
+            self.assertIn("逐条通过", json.loads(raw)["error"])
+            status, _, raw = serve._req(server.port, "POST", "/api/handoff/finalize", headers, {"seq": 1})
+            self.assertEqual((status, json.loads(raw)["code"]), (400, "video-selection-required"))
+            self.assertIn("批量通过", json.loads(raw)["error"])
+            self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "drafted")
+            self.assertIsNone(store.handoff_claim(self.review, stage="review"))
+            store.video_decision(self.review, "n1", action="return", reason="保留原字幕高度")
+            self.assertEqual(self._note("n1")["videoReview"]["decision"], "returned")
+
     def assert_notes_reads_preserve_review(self, server, headers):
         before = self.review_files()
         for method in ("GET", "HEAD"):
@@ -758,6 +778,43 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(result["finalizedIds"], ["n2"])
         self.assertEqual(self._note("n1")["status"], "drafted")
 
+    def test_bulk_review_preview_and_results_keep_reasons_for_each_annotation(self):
+        self._deliver_v2_mixed_batch()
+        store.add(self.review, video_note("n7", "补充片尾用字", frame=165))
+        store.handoff_submit(self.review, note_ids=["n6", "n7"])
+        store.handoff_claim(self.review, seq=2)
+        store.video_receipt(
+            self.review,
+            seq=2,
+            receipt_id="unreadable-new-cut",
+            movie=self._movie(self.v3_bytes, "final.mp4"),
+            receipt=[
+                {"noteId": "n6", "outcome": "fixed", "summary": "加大字号", "target": {"frame": 150}},
+                {"noteId": "n7", "outcome": "question", "question": "使用哪种字体？"},
+            ],
+        )
+        store.video_decision(self.review, "n7", action="reply", reply="保留片头字体")
+        (self.review / "media" / "v3.mp4").unlink()
+        preview = store.handoff_state(self.review)["finalizable"]
+        self.assertEqual(preview["batches"], [{"seq": 1, "ids": ["n1", "n2"]}])
+        excluded = {
+            "n3": "needs_reply",
+            "n4": "needs_relocate",
+            "n5": "missing_evidence",
+            "n6": "media-unreadable",
+            "n7": "replied",
+        }
+        self.assertEqual({row["id"]: row.get("detail") for row in preview["skipped"]}, excluded)
+        result = store.handoff_finalize_all(
+            self.review,
+            {1: {"n1", "n2"}},
+            evidence={"n1": self._note("n1")["videoReview"]["evidenceRevision"], "n2": "earlier-evidence"},
+        )
+        self.assertEqual(result["finalizedIds"], ["n1"])
+        self.assertEqual(
+            {row["id"]: row.get("detail") for row in result["skipped"]}, {**excluded, "n2": "evidence-changed"}
+        )
+
     def test_selective_batch_finalize_approves_only_picked_ready_items_and_blocks_all_unready_states(self):
         self._deliver_v2_mixed_batch()
         # 额外提交 n6 并交回 failed 状态
@@ -1052,6 +1109,30 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         store.import_notes(self.review, [forged])
         self.assertEqual(self._note("fresh")["status"], "open")
         self.assertNotIn("resolvedBy", self._note("fresh"))
+
+    def test_document_cli_import_explains_a_cross_format_location(self):
+        document = self.root / "document"
+        build_viewer.build(ROOT / "fixtures/sample/report.html", None, document, no_scan_skills=True)
+        export = self.root / "foreign.json"
+        export.write_text(json.dumps([video_note("other", "move title", frame=1)]))
+        for lang, hint in (("en", "matching cut"), ("zh-CN", "对应成片")):
+            code, _, err = self._run_cli(["import", str(document), str(export), "--locale", lang])
+            self.assertNotEqual(code, 0)
+            self.assertIn(hint, err)
+            self.assertEqual(store.load(document)["notes"], [])
+
+    def test_cli_show_points_to_available_video_decisions(self):
+        self._deliver_v2_mixed_batch()
+        for lang, actions, absent in (
+            ("zh-CN", ("逐条通过", "退回", "批量通过"), "请求复核或直接定稿"),
+            ("en", ("approve or return", "selected"), "asks for the review"),
+        ):
+            with self.subTest(lang=lang):
+                code, out, err = self._run_cli(["show", str(self.review), "--locale", lang])
+                self.assertEqual(code, 0, err)
+                for action in actions:
+                    self.assertIn(action, out.lower())
+                self.assertNotIn(absent, out.lower())
 
     def test_cli_reopen_cannot_return_pending_video_even_with_page_display_name(self):
         self._deliver_v2_mixed_batch()
@@ -1575,6 +1656,128 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
 
 
 class VideoPageReworkUITests(unittest.TestCase):
+    def test_document_batch_confirmation_counts_only_ordinary_drafts(self):
+        result = interaction_program(
+            [("function finalizeBatch(seq)", "const FINALIZE_SKIP=")],
+            """const notes=[{id:'video',status:'drafted',draftBatch:3,video:{v:2}},
+              {id:'doc',status:'drafted',draftBatch:3}],isDraft=n=>n.status==='drafted';
+            const confirms=[],messages=[],posts=[];const confirm=s=>{confirms.push(s);return true},
+              batchAction=async(p,b)=>posts.push([p,b]),toast=s=>messages.push(s);""",
+            """await finalizeBatch(3);notes.pop();await finalizeBatch(3);return {confirms,messages,posts};""",
+            locale="zh-CN",
+        )
+        self.assertEqual(len(result["confirms"]), 1)
+        self.assertIn("1 条", result["confirms"][0])
+        self.assertIn("视频审阅", result["messages"][0])
+        self.assertEqual(result["posts"], [["/api/handoff/finalize", {"seq": 3}]])
+
+    def test_document_page_rejects_foreign_location_before_saving_or_queueing(self):
+        for file_mode in (True, False):
+            with self.subTest(file=file_mode):
+                result = interaction_program(
+                    [
+                        ("function mergeLocal(items)", "const FULL_CHECK_COMPAT="),
+                        ("async function mutate(op)", "function onSent("),
+                    ],
+                    "const FILE="
+                    + json.dumps(file_mode)
+                    + """,VIDEO=null,mode="offline",K={notes:"notes"};
+                    let notes=[{id:"doc",page:1,text:"document",status:"open"},
+                      {id:"old",page:1,video:{v:2},status:"resolved",videoReview:{decision:"approved"},resolvedBy:"page",at:"before"}];
+                    const saved=[],queued=[],messages=[],LS={get:()=>notes},pend={push:op=>queued.push(op)};
+                    const mirror=()=>saved.push(true),refreshList=()=>{},updateMode=()=>{},toast=msg=>messages.push(msg);
+                    const docxBlocked=()=>false,pptxBlocked=()=>false,videoBlocked=()=>false,newId=()=>"op";
+                    const cleanItem=x=>({...x}),stamp=x=>x.at==="later"?2:1,dedupKey=x=>x.text,videoKey=JSON.stringify,settleMarks=()=>{},nowIso=()=>"now";""",
+                    """const imported={id:"new",page:1,text:"video",video:{v:2}};
+                    await mutate({kind:"import",notes:[{id:"ordinary",page:1,text:"partial"},imported]});
+                    await mutate({kind:"add",note:imported});await mutate({kind:"patch",id:"doc",body:{video:{v:2}}});
+                    await mutate({kind:"patch",id:"old",body:{status:"open"}});
+                    const rejected={saved:saved.length,queued:queued.length,messages:[...messages]};
+                    await mutate({kind:"import",notes:[{id:"old",page:1,video:{v:2},text:"updated",status:"open",at:"later"}]});
+                    return {rejected,notes};""",
+                )
+                self.assertEqual((result["rejected"]["saved"], result["rejected"]["queued"]), (0, 0))
+                self.assertEqual(len(result["rejected"]["messages"]), 4)
+                doc, old = result["notes"]
+                self.assertNotIn("video", doc)
+                self.assertEqual(
+                    (old["text"], old["status"], old["resolvedBy"], old["videoReview"]["decision"]),
+                    ("updated", "resolved", "page", "approved"),
+                )
+
+    def test_bulk_panel_explains_each_skip_with_the_page_catalogs(self):
+        skipped = [
+            {"id": nid, "reason": "unready", "detail": detail}
+            for nid, detail in (
+                ("question", "needs_reply"),
+                ("location", "needs_relocate"),
+                ("evidence", "missing_evidence"),
+                ("cut", "media-unreadable"),
+                ("answer", "replied"),
+            )
+        ]
+        result = {
+            "finalizedCount": 1,
+            "batches": [1],
+            "skippedCount": len(skipped) + 1,
+            "skipped": [*skipped, {"id": "title", "reason": "changed", "detail": "evidence-changed"}],
+        }
+        for lang, labels, changed in (
+            ("zh-CN", ("待答复", "待定位", "缺证据", "媒体不可读", "已答复"), "重新打开"),
+            ("en", ("Needs reply", "Needs relocate", "Missing evidence", "Media unreadable", "Replied"), "reopen"),
+        ):
+            with self.subTest(locale=lang):
+                panel = interaction_program(
+                    [(self.PURE_START, self.PURE_END), (self.FINALIZE_START, self.FINALIZE_END)],
+                    "const notes=[],VIDEO={},FILE=false,mode='server',finalizeAllSupported=true,finalizingAll=false,finalizeAllError='';"
+                    "const videoManifest=()=>VIDEO,isDraft=x=>x.status==='drafted';let finalizeAllResult=null;"
+                    "const hand={finalizable:{count:1,batches:[{seq:1,ids:['ready']}],skipped:"
+                    + json.dumps(skipped)
+                    + "}};",
+                    """renderFinalizeAll();const preview=$('videoBatchBlocked').textContent;
+                    finalizeAllResult="""
+                    + json.dumps(result)
+                    + """;renderFinalizeAll();
+                    return {preview,result:$('finalizeAllInfo').textContent};""",
+                    locale=lang,
+                )
+                for nid, label in zip(("question", "location", "evidence", "cut", "answer"), labels):
+                    for text in panel.values():
+                        self.assertTrue(any(nid in line and label in line for line in text.splitlines()), text)
+                self.assertTrue(
+                    any("title" in line and changed in line.lower() for line in panel["result"].splitlines()), panel
+                )
+
+    def test_resume_banner_and_arrival_notice_guide_each_review_format(self):
+        for lang, video_action, batch_action, doc_action in (
+            ("zh-CN", "逐条通过", "批量通过", "请求复核或直接定稿"),
+            ("en", "approve or return", "selected", "ask for the review or finalize"),
+        ):
+            for video in (True, False):
+                with self.subTest(locale=lang, video=video):
+                    messages = interaction_program(
+                        [
+                            ("function renderResume(){", "function goLast(){"),
+                            ("function setHand(h,quiet)", 'let handSig=""'),
+                        ],
+                        "const VIDEO="
+                        + json.dumps(video)
+                        + """,FILE=false,notes=[],P=[{n:1}],i=0;
+                        let hand={latest:{seq:1,status:'claimed'}},handSig='',flightSig='',resumeOff=false,resumeReady=true;
+                        const lostNotes=()=>[],lastNote=()=>null,counts=()=>({o:0,d:2}),fit=()=>{},renderFinalizeAll=()=>{};
+                        const messages=[],toast=msg=>messages.push(msg);$('resumeGo').style={};$('resume').classList.add=()=>{};""",
+                        """setHand({latest:{seq:1,status:'drafted',draftedCount:2}},true);renderResume();
+                        return [messages[0],$('resumeText').innerHTML];""",
+                        locale=lang,
+                    )
+                    for msg in messages:
+                        if video:
+                            self.assertIn(video_action, msg.lower())
+                            self.assertIn(batch_action, msg.lower())
+                            self.assertNotIn(doc_action, msg.lower())
+                        else:
+                            self.assertIn(doc_action, msg.lower())
+
     def test_review_recovery_control_confirms_the_specific_record(self):
         self.assertTrue('id="videoRecoveryBtn"' in self.TEMPLATE.read_text())
         result = interaction_program(
@@ -1987,44 +2190,54 @@ class VideoPageReworkUITests(unittest.TestCase):
             "const getNotes=async()=>({notes,handoff:hand});"
             "const api=async(m,p,b)=>{apiCalls.push({m,p,b});return {doc:{notes,rev:2},handoff:{finalizable:{count:1,batches:[{seq:1,ids:['n2']}],skipped:[]}},finalizedCount:1,finalizedIds:['n1'],skippedCount:0,skipped:[],batches:[{seq:1,ids:['n1']}]}};"
         )
-        actual = interaction_program(
-            [(self.PURE_START, self.PURE_END), (self.FINALIZE_START, self.FINALIZE_END)],
-            setup,
-            """
-            videoSyncApproveSel();
-            renderFinalizeAll();
-            const initialDisabled = $("finalizeAllBtn").disabled;
-            const initialSelSize = videoApproveSel.size;
-            const infoText = $("finalizeAllInfo").textContent;
-            const blockedHtml = $("videoBatchBlocked") ? $("videoBatchBlocked").textContent : infoText;
+        for lang, warning, reopen in (("zh-CN", "不可撤销", "重新打开"), ("en", "cannot be undone", "reopen")):
+            with self.subTest(locale=lang):
+                actual = interaction_program(
+                    [(self.PURE_START, self.PURE_END), (self.FINALIZE_START, self.FINALIZE_END)],
+                    setup,
+                    """
+                    videoSyncApproveSel();
+                    renderFinalizeAll();
+                    const initialDisabled = $("finalizeAllBtn").disabled;
+                    const initialSelSize = videoApproveSel.size;
+                    const infoText = $("finalizeAllInfo").textContent;
+                    const blockedHtml = $("videoBatchBlocked") ? $("videoBatchBlocked").textContent : infoText;
 
-            // 试图直接勾选一个不可复核条目也不得生效，只勾选 n1
-            videoToggleApprovePick("n3", true);
-            videoToggleApprovePick("n1", true);
-            const selAfterPick = [...videoApproveSel.keys()];
-            renderFinalizeAll();
-            const btnAfterPick = $("finalizeAllBtn").textContent;
-            await finalizeAll();
-            const blockedCount=apiCalls.length;
-            playable=true;
-            await finalizeAll();
-            const postPicked = apiCalls[0] ? apiCalls[0].b : null;
+                    // 试图直接勾选一个不可复核条目也不得生效，只勾选 n1
+                    videoToggleApprovePick("n3", true);
+                    videoToggleApprovePick("n1", true);
+                    const selAfterPick = [...videoApproveSel.keys()];
+                    renderFinalizeAll();
+                    const btnAfterPick = $("finalizeAllBtn").textContent;
+                    await finalizeAll();
+                    const blockedCount=apiCalls.length;
+                    playable=true;
+                    await finalizeAll();
+                    const postPicked = apiCalls[0] ? apiCalls[0].b : null;
 
-            // 全选待复核只能选中 n1, n2（其余 n3..n7 全部排除）
-            videoSelectAllReady();
-            const selAll = [...videoApproveSel.keys()];
-            return { initialDisabled, initialSelSize, blockedHtml, selAfterPick, btnAfterPick, postPicked, selAll, blockedCount };
-            """,
-            locale="zh-CN",
-        )
-        self.assertTrue(actual["initialDisabled"])
-        self.assertEqual(actual["initialSelSize"], 0)
-        self.assertTrue(actual["blockedHtml"])
-        self.assertEqual(actual["blockedCount"], 0)
-        self.assertEqual(actual["selAfterPick"], ["n1"])
-        self.assertIn("1", actual["btnAfterPick"])
-        self.assertEqual(actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}], "evidence": {"n1": "legacy"}})
-        self.assertEqual(actual["selAll"], ["n1", "n2"])
+                    // 全选待复核只能选中 n1, n2（其余 n3..n7 全部排除）
+                    videoSelectAllReady();
+                    const selAll = [...videoApproveSel.keys()];
+                    notes[0].videoReview.evidenceRevision='new-revision'; renderFinalizeAll();
+                    return {initialDisabled,initialSelSize,blockedHtml,selAfterPick,btnAfterPick,postPicked,selAll,blockedCount,
+                      confirm:confirms[0], changed:$("videoBatchBlocked").textContent, pickedAfterChange:[...videoApproveSel.keys()]};
+                    """,
+                    locale=lang,
+                )
+                self.assertTrue(actual["initialDisabled"])
+                self.assertEqual(actual["initialSelSize"], 0)
+                self.assertTrue(actual["blockedHtml"])
+                self.assertEqual(actual["blockedCount"], 0)
+                self.assertEqual(actual["selAfterPick"], ["n1"])
+                self.assertIn("1", actual["btnAfterPick"])
+                self.assertEqual(
+                    actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}], "evidence": {"n1": "legacy"}}
+                )
+                self.assertEqual(actual["selAll"], ["n1", "n2"])
+                self.assertIn(warning, actual["confirm"].lower())
+                self.assertIn("n1", actual["changed"])
+                self.assertIn(reopen, actual["changed"].lower())
+                self.assertNotIn("n1", actual["pickedAfterChange"])
 
     def test_selective_rework_handpick_and_compare_decisions_wire_cleanly(self):
         manifest = self._manifest()

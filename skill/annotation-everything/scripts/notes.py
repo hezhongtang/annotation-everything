@@ -415,7 +415,7 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     return t(messages[error.code], **params)
 
 
-def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list[str]:
+def handoff_lines(state: dict[str, Any] | None, lang: str | None = None, *, video: bool = False) -> list[str]:
     """「交给 Agent」提交的摘要行（附言是用户在页面上写给代理的话）。"""
     t = cli_text(lang)
     if not state or not state.get("latest"):
@@ -450,14 +450,14 @@ def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list
             )
         )
     if state.get("drafted"):
-        out.append(t("cli.hand.drafted", count=state["drafted"]))
+        out.append(t("cli.hand.videoDrafted" if video else "cli.hand.drafted", count=state["drafted"]))
     for b in state.get("open") or []:
         out.append(
             t(
                 "cli.hand.open",
                 seq=b["seq"],
                 status=label(t, STATUS_KEY.get(b.get("status"), ""), b.get("status")),
-                target=target_text(b, lang),
+                target=target_text(b, lang, video=video),
             )
             + (t("cli.hand.unclaimed") if b.get("status") in ("pending", "review") else "")
         )
@@ -1134,7 +1134,7 @@ def to_markdown(
             head.append(t("cli.show.sources", list=t("cli.show.sourceSep").join(parts)))
     if always:
         head.append(_always_head(t, lang, always, scope_label))
-    head += handoff_lines(handoff, lang)
+    head += handoff_lines(handoff, lang, video=ledger.report_format(manifest)[0] == "video")
     out = ["\n".join(head)]
     last = None
     for n in notes:
@@ -1623,7 +1623,11 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 pass
             print(t("cli.notes.import.wrongReview", source=src_rid, path=d, target=mine, other=other), file=sys.stderr)
             return 2
-        _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
+        try:
+            _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
+        except store.NoteError as error:
+            print(t("cli.notes.error", reason=handoff_error_text(error, lang)), file=sys.stderr)
+            return 2
         print(t("cli.notes.import.complete", added=added, updated=updated, skipped=skipped, path=d / store.NOTES_FILE))
         if always is not None:
             try:
@@ -2067,6 +2071,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
+        if ledger.report_format(manifest)[0] == "video":
+            print(t("cli.hand.videoDone", seq=item["seq"]))
+            return 0
         if item["status"] in ("drafted", "review"):
             snapshot(d, item, "draft")
             print(

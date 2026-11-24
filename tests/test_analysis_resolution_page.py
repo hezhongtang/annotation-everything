@@ -92,7 +92,7 @@ class AnalysisResolutionPageTests(unittest.TestCase):
               const scope={querySelectorAll:selector=>nodes.filter(node=>Object.hasOwn(node.attrs,selector.slice(1,-1)))};
               const localize=new Function('CATALOGS','uiLocale','scope',runtime+'\n'+msgParams.toString()+'\n'+applyMessages.toString()+
                 '\napplyMessages(scope);return scope.querySelectorAll("[data-title]").map(node=>({text:node.textContent||node.attrs["aria-label"],title:node.title}));');
-              return localize({[uiLocale]:M},uiLocale,scope)[0];
+              return localize(CATALOGS,uiLocale,scope)[0];
             """,
                 locale,
             )

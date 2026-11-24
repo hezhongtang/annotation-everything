@@ -1687,10 +1687,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.log("info", f"handoff-review seq={seq}")
                 self.server.run_hook(item, False, event="review")
             else:
-                if self.server.manifest().get("format", {}).get("report") == "video":
-                    raise Reject(
-                        400, "video-selection-required", self._t("viewer.video.batchSelectionHint", selected=0, ready=0)
-                    )
                 item = store.handoff_finalize(d, seq, by="page")
                 self.server.log("info", f"handoff-finalize seq={seq}")
             self._json(

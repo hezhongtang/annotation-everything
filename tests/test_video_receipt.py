@@ -1281,6 +1281,21 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
         )
         self.assertEqual(rework["notes"][0]["videoReview"]["question"], "音量再调低几分贝？")
 
+    def test_cli_draft_finish_returns_questions_to_the_reviewer(self):
+        store.handoff_submit(self.review, note_ids=["n3"], allow_subagents=True)
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="clarify",
+            finish=False,
+            receipt=[{"noteId": "n3", "outcome": "question", "question": "保留片头吗？"}],
+        )
+        code, out, err = self.run_cli(["done", str(self.review), "--seq", "1", "--draft"])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "done")
+        self.assertIsNone(store.handoff_claim(self.review, stage="review"))
+        self.assertIn("答复", out)
+
     def test_finish_names_uncovered_ids_and_accepts_prior_delivery_and_reviewer_reply(self):
         store.handoff_submit(self.review, note_ids=["n1", "n2", "n3", "n4"])
         store.handoff_claim(self.review)
