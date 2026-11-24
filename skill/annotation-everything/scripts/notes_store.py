@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import json
 import math
 import os
@@ -160,22 +161,96 @@ def _require_dir(review_dir: Path) -> None:
         raise FileNotFoundError(f"审阅目录不存在：{review_dir}")
 
 
+class VideoCommitError(NoteError):
+    def __init__(self, part: str, confirmation: str):
+        self.part = part
+        self.confirmation = confirmation
+        self.code = "foreign-video-commit" if part == "owner" else "damaged-video-commit"
+        message = "待恢复的记录属于另一份审阅" if part == "owner" else f"待恢复的记录损坏（{part}）"
+        super().__init__(message + "。请在对照页选择「恢复视频审阅」核对原始记录。")
+
+
+def _invalid_commit_part(review_dir: Path, changes: Any) -> str | None:
+    if not isinstance(changes, dict) or not isinstance(changes.get("reviewId"), str) or not changes["reviewId"]:
+        return "reviewId"
+    manifest = ledger.read_manifest(review_dir)
+    if changes["reviewId"] != manifest.get("reviewId") or ledger.copied_from(review_dir, manifest):
+        return "owner"
+    notes, handoff, events = changes.get(NOTES_FILE), changes.get(HANDOFF_FILE), changes.get("events")
+    if (
+        not isinstance(notes, dict)
+        or type(notes.get("rev")) is not int
+        or notes["rev"] < 0
+        or not isinstance(notes.get("notes"), list)
+        or not all(isinstance(n, dict) and valid_id(n.get("id")) for n in notes["notes"])
+    ):
+        return NOTES_FILE
+    if (
+        not isinstance(handoff, dict)
+        or type(handoff.get("seq")) is not int
+        or handoff["seq"] < 0
+        or not isinstance(handoff.get("items"), list)
+        or not all(isinstance(i, dict) and type(i.get("seq")) is int for i in handoff["items"])
+    ):
+        return HANDOFF_FILE
+    if (
+        not isinstance(events, list)
+        or len(events) != 2
+        or not all(isinstance(e, dict) and isinstance(e.get("op"), str) for e in events)
+    ):
+        return "events"
+    # Check both snapshots and audit events before publishing either file, including UTF-8 and finite numbers.
+    _dumps(changes).encode("utf-8")
+    return None
+
+
+def _recover_video_commit(review_dir: Path, preserve: str | None = None) -> str | None:
+    """在批注锁内发布同一审阅的完整记录，或按审阅人核对的原件指纹保留损坏记录。"""
+    journal = review_dir / VIDEO_COMMIT_FILE
+    try:
+        raw = fsutil.read_private_bytes(journal, max_bytes=None)
+    except FileNotFoundError:
+        return None
+    except ValueError:
+        # A non-private file must not be opened. Its identity still permits moving the entry itself aside.
+        info = journal.lstat()
+        raw = repr((info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)).encode()
+        part = "private-file"
+    else:
+        try:
+            changes = json.loads(raw.decode("utf-8"))
+            part = _invalid_commit_part(review_dir, changes)
+        except (ValueError, RecursionError):
+            part = "JSON"
+        if part is None:
+            if preserve is not None:
+                raise NoteError("待恢复的记录已更换，请重新选择「恢复视频审阅」。")
+            _publish_video_commit(review_dir, journal, changes)
+            return None
+    error = VideoCommitError(part, hashlib.sha256(raw).hexdigest())
+    if preserve != error.confirmation:
+        raise error
+    backup = journal.with_name(f"{journal.name}.{secrets.token_hex(8)}.saved")
+    journal.rename(backup)
+    return backup.name
+
+
 @contextlib.contextmanager
 def locked(review_dir: Path, *, deadline: float | None = None) -> Iterator[None]:
     _require_dir(review_dir)
     with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True, deadline=deadline):
-        journal = review_dir / VIDEO_COMMIT_FILE
-        try:
-            # 事务包含两份完整状态，与 notes.json、handoff.json 同样允许随审阅增长。
-            raw_journal = fsutil.read_private_text(journal, max_bytes=None)
-        except FileNotFoundError:
-            raw_journal = None
-        if raw_journal is not None:
-            pending = json.loads(raw_journal)
-            if pending.get("reviewId") != ledger.read_manifest(review_dir).get("reviewId"):
-                raise NoteError("待恢复的批注与批次不属于本审阅")
-            _publish_video_commit(review_dir, journal, pending)
+        _recover_video_commit(review_dir)
         yield
+
+
+def recover_video_writes(review_dir: Path, review_id: str, preserve: str | None = None) -> str | None:
+    with fsutil.flocked(review_dir / LOCK_FILE, exclusive=True):
+        manifest = ledger.read_manifest(review_dir)
+        if not review_id or manifest.get("reviewId") != review_id:
+            raise HandoffError("审阅标识已更换", code="review-mismatch")
+        backup = _recover_video_commit(review_dir, preserve)
+    recover_video_decode_failures(review_dir, manifest)
+    return backup
 
 
 def load(review_dir: Path) -> dict[str, Any]:
@@ -3302,6 +3377,23 @@ def video_decode_failed(
     recover_video_decode_failures(review_dir, ledger.read_manifest(review_dir))
 
 
+def _pending_decode_failures(video: dict) -> list[dict]:
+    return [
+        v["playbackFailure"]
+        for v in video.get("versions", [])
+        if isinstance(v, dict) and isinstance(v.get("playbackFailure"), dict) and not v.get("playbackFailureSynced")
+    ]
+
+
+def video_recovery_pending(review_dir: Path, manifest: dict) -> bool:
+    if (review_dir / VIDEO_COMMIT_FILE).exists():
+        return True
+    video = manifest.get("video")
+    return isinstance(video, dict) and bool(
+        (review_dir / ".video-registration.json").exists() or _pending_decode_failures(video)
+    )
+
+
 def recover_video_decode_failures(review_dir: Path, manifest: dict) -> None:
     video = manifest.get("video")
     if not isinstance(video, dict):
@@ -3309,11 +3401,7 @@ def recover_video_decode_failures(review_dir: Path, manifest: dict) -> None:
     if (review_dir / ".video-registration.json").exists():
         with fsutil.flocked(review_dir / ".video-receipt.lock", exclusive=True):
             _settle_receipt_version(review_dir)
-    pending = [
-        v["playbackFailure"]
-        for v in video.get("versions", [])
-        if isinstance(v, dict) and isinstance(v.get("playbackFailure"), dict) and not v.get("playbackFailureSynced")
-    ]
+    pending = _pending_decode_failures(video)
     if not pending:
         return
     with locked(review_dir):
@@ -3431,6 +3519,7 @@ def _settle_receipt_version(review_dir: Path) -> None:
     except FileNotFoundError:
         return
     if not pending.get("awaitReceipt"):
+        video_review.finish_receipt_version(review_dir, pending, accepted=None)
         return
     failure = pending.get("failure")
     staged = failure or pending["version"]

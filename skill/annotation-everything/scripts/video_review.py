@@ -586,11 +586,15 @@ def register_version(
         return json.loads(json.dumps(version))
 
 
-def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool) -> None:
+def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool | None) -> None:
     """批次落盘后发布相应成片或失败记录，中断后以同一份回执重放。"""
     with ledger.metadata_lock(review_dir, exclusive=True):
         journal = review_dir / ".video-registration.json"
-        if json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024)) != pending:
+        try:
+            current = json.loads(fsutil.read_private_text(journal, max_bytes=32 * 1024))
+        except FileNotFoundError:
+            return  # 直接登记成片的写入方已在同一把元数据锁内完成。
+        if current != pending:
             raise VideoError("暂存的视频版本已改变")
         manifest_path, manifest = _read_video_manifest(review_dir, review_id=pending["reviewId"])
         video = manifest["video"]
@@ -605,7 +609,11 @@ def finish_receipt_version(review_dir: Path, pending: dict, *, accepted: bool) -
             number = _next_version_number(video)
             if version.get("versionId") != f"V{number}" or version.get("path") != f"media/v{number}.mp4":
                 raise VideoError("暂存的视频版本与版本清单不匹配")
-            if accepted or (review_dir / version["path"]).exists():
+            present = (review_dir / version["path"]).exists()
+            if accepted is None:
+                # 直接登记的有效成片只需核对已暂存的副本，无需等待批次回执。
+                accepted = present
+            if accepted or present:
                 candidate = {**manifest, "video": {**video, "versions": [*video["versions"], version]}}
                 staged = media_path(review_dir, candidate, version["versionId"])
                 if file_digest(staged) != version["sha256"]:

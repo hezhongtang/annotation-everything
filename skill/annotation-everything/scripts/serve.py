@@ -759,6 +759,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(404, "not-found", self._t("serve.err.notFound"))
         except Reject as e:
             self._reject(e)
+        except store.VideoCommitError as e:
+            message = (
+                self._t("serve.err.foreignVideoCommit")
+                if e.code == "foreign-video-commit"
+                else self._t("serve.err.damagedVideoCommit", part=e.part)
+            )
+            self._json(409, {"app": APP, "code": e.code, "error": message, "params": {"confirmation": e.confirmation}})
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
             detail: dict[str, Any] = {
                 "error": str(e) if isinstance(e, store.NoteError) else self._t("serve.err.badCharacters"),
@@ -1358,12 +1365,20 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/video/source-project/confirm" and cmd == "POST":
             body = self._expect_obj(self._body())
             self._confirm_source_project(body)
+        elif path == "/api/video/recover" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if (
+                not claimed
+                or set(body) - {"preserve"}
+                or ("preserve" in body and not isinstance(body["preserve"], str))
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.noApi"))
+            backup = store.recover_video_writes(d, claimed, body.get("preserve"))
+            self._json(200, {"preserved": backup, **self._ident()})
         elif path == "/api/notes" and cmd == "GET":
-            if (d / store.VIDEO_COMMIT_FILE).exists():
-                with store.locked(d):
-                    pass  # 服务重启后首次轮询即可读到已提交的批次与逐条记录。
-            store.recover_video_decode_failures(d, self.server.manifest())
             doc = self._notes_doc()
+            if store.video_recovery_pending(d, self.server.manifest()):
+                doc["videoRecoveryPending"] = True
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
             doc["handoff"] = self._handoff_state(full=False)  # 轮询只带最新一批；处理记录全量走 GET /api/handoff
@@ -3828,9 +3843,41 @@ def check(locale: str | None = None) -> int:
                 "Content-Type": "application/json",
                 "X-AE-Review": vrid,
             }
-            v_paths = [video_dir / MANIFEST, video_dir / store.NOTES_FILE]
+            journal = video_dir / store.VIDEO_COMMIT_FILE
+            fsutil.atomic_write(
+                journal,
+                json.dumps(
+                    {
+                        "reviewId": vrid,
+                        store.NOTES_FILE: {"rev": 1, "notes": [{"id": "pending", "page": 1, "text": "synthetic note"}]},
+                        store.HANDOFF_FILE: {"seq": 0, "items": []},
+                        "events": [{"op": "video-receipt"}, {"op": "handoff-draft"}],
+                    }
+                ),
+                prefix=".check-",
+            )
+            v_paths = [
+                video_dir / name
+                for name in (
+                    MANIFEST,
+                    store.NOTES_FILE,
+                    store.HANDOFF_FILE,
+                    store.LOG_FILE,
+                    store.VIDEO_COMMIT_FILE,
+                    "media/v1.mp4",
+                )
+            ]
             v_before = [p.read_bytes() if p.exists() else None for p in v_paths]
+            for method in ("GET", "HEAD"):
+                status, hdr, _ = _req(vport, method, "/api/notes", vg)
+                ok(
+                    status == 200
+                    and "access-control-allow-origin" not in hdr
+                    and [p.read_bytes() if p.exists() else None for p in v_paths] == v_before,
+                    T("serve.check.videoNotesReadOnly", method=method),
+                )
             v_write_routes = (
+                ("/api/video/recover", {}),
                 ("/api/video/source-project", {"engine": "remotion", "root": str(tmp), "entry": {"id": "Main"}}),
                 ("/api/video/source-project/confirm", {"proposalRevision": "0" * 64}),
                 (

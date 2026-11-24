@@ -27,12 +27,14 @@ class OperationBusy(Exception):
 
 
 @contextlib.contextmanager
-def operation(review, *, deadline=None):
+def operation(review, *, deadline=None, create=True):
     # Keep the state lock short so queries and hook registration can proceed during a stop.
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(
-                fsutil.flocked(Path(review) / OPERATION_LOCK, exclusive=True, nofollow=True, deadline=deadline)
+                fsutil.flocked(
+                    Path(review) / OPERATION_LOCK, exclusive=True, nofollow=True, deadline=deadline, create=create
+                )
             )
         except BlockingIOError:
             raise OperationBusy from None
@@ -135,13 +137,15 @@ def status(review, *, manifest=None):
     if value["state"] != "stopping":
         return value
     try:
-        with operation(review, deadline=time.monotonic()):
+        with operation(review, deadline=time.monotonic(), create=False):
             value = _read(review, manifest)
-            if value["state"] == "stopping":
-                value.update(state="incomplete", incompleteReasons={"request": STOP_INTERRUPTED})
-            return value
+    except FileNotFoundError:
+        pass  # No coordinator holds the missing lock. Status queries leave the directory untouched.
     except OperationBusy:
         return _read(review, manifest)
+    if value["state"] == "stopping":
+        value.update(state="incomplete", incompleteReasons={"request": STOP_INTERRUPTED})
+    return value
 
 
 def public_snapshot(value):

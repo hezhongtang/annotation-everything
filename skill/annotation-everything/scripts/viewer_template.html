@@ -604,7 +604,7 @@ body.focus-mode.analysis-mode #analysisPanel{display:none}
 <div class="row"><button id="repCancel"><span data-msg="viewer.cancel">取消</span><kbd>Esc</kbd></button><button class="primary" id="repOk"><span data-msg="viewer.repOk">确定</span><kbd>↵</kbd></button></div></div>
 </main>
 <footer id="statusbar" data-aria="viewer.layout.status">
-  <span id="mode" class="file"></span><span id="receiver" role="status" aria-live="polite"></span><button id="handState"></button><span id="agentDelivery" role="status" aria-live="polite"></span>
+  <span id="mode" class="file"></span><span id="receiver" role="status" aria-live="polite"></span><button id="handState"></button><button id="videoRecoveryBtn" type="button" data-msg="viewer.video.recovery.button" hidden></button><span id="agentDelivery" role="status" aria-live="polite"></span>
   <!-- 分析队列由 #111 接入，默认不显示。 -->
   <span id="analysisQueue" hidden></span>
   <button id="legacyBtn" data-title="viewer.legacyTitle" data-msg="viewer.legacy"></button><button id="strayBtn" data-title="viewer.strayTitle" data-msg="viewer.stray"></button>
@@ -1685,6 +1685,7 @@ function applyServer(d,quietHand){
   }
   finalizeAllSupported=hasFeature(d,"finalize-all")&&(!VIDEO||hasFeature(d,"video-evidence-revision"));srvNoDocx=!!DOCX&&!hasFeature(d,"docx");srvNoPptx=!!PPTX&&!hasFeature(d,"pptx");srvNoVideo=!!VIDEO&&!hasFeature(d,"video");updateMode();renderDocxBlock();renderPptxBlock();renderVideoBlock();
   srvNoSelect=!supportsVideoHandoff(d);srvNoVideoSource=!!VIDEO&&!hasFeature(d,"video-source");   // 选择性提交与源工程关联都按服务声明的能力走，旧服务不误发
+  if(typeof renderVideoRecovery==="function")renderVideoRecovery(d);
   if(typeof setVideoServerFeatures==="function")setVideoServerFeatures(d);
   if(VIDEO&&mode==="server"&&!videoSourceLoaded){videoSourceLoaded=true;loadVideoSource()}
   if(VIDEO&&d.video){const sig=JSON.stringify(d.video);liveVideo=d.video;const cur=d.video.currentVersionId||null;
@@ -1704,6 +1705,25 @@ function applyServer(d,quietHand){
   if(typeof videoSyncApproveSel==="function")videoSyncApproveSel();
   if(typeof videoCompareSync==="function")videoCompareSync();
   if(!resumeReady){resumeReady=true;renderResume()}}
+function renderVideoRecovery(doc){
+  const button=$("videoRecoveryBtn");
+  button.hidden=!doc.videoRecoveryPending;
+  button.disabled=!!doc.stop&&doc.stop.state!=="active";
+  button.onclick=recoverVideoReview;
+}
+async function recoverVideoReview(){
+  let result;
+  try{
+    try{result=await api("POST","/api/video/recover",{})}
+    catch(e){
+      if(!["foreign-video-commit","damaged-video-commit"].includes(e.code)||!e.params?.confirmation)throw e;
+      if(!confirm(e.message+"\n\n"+tMsg("viewer.video.recovery.confirm")))return;
+      result=await api("POST","/api/video/recover",{preserve:e.params.confirmation});
+    }
+    toast(result.preserved?tMsg("viewer.video.recovery.preserved",{file:result.preserved}):tMsg("viewer.video.recovery.done"),8000);
+    await resync();
+  }catch(e){toast(e.message,8000)}
+}
 async function poll(){
   if(FILE||document.hidden||busy)return;
   migrateLegacyQueue();

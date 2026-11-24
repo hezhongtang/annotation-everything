@@ -965,6 +965,7 @@ def build(
         _reject_unc_path(item)
     import i18n
     import ledger
+    import notes_store
 
     preview = ledger.read_manifest(out) if out.exists() else {}
     try:
@@ -974,6 +975,8 @@ def build(
         )
     except i18n.LocaleError as exc:
         raise SystemExit(f"错误：{exc}") from exc
+    if notes_store.video_recovery_pending(out, preview) and ledger.copied_from(out, preview):
+        raise BuildError(diag(locale_choice, "build.source.pendingRecovery"))
     # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
     warn_catalog = i18n.catalog(i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
     assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)

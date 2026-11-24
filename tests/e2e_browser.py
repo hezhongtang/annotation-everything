@@ -10676,6 +10676,23 @@ def video_browser_decode_repair(page, review, identity, movies):
     )
 
 
+def video_recover_pending_record(page, review):
+    journal = review / ".video-note-commit.json"
+    original = b"unfinished synthetic JSON"
+    journal.write_bytes(original)
+    journal.chmod(0o600)
+    button = page.get_by_role("button", name="Recover video review")
+    button.wait_for(state="visible")
+    page.once("dialog", lambda dialog: dialog.accept())
+    with page.expect_response(
+        lambda r: r.request.method == "POST" and r.url.endswith("/api/video/recover") and r.ok
+    ) as response:
+        button.click()
+    button.wait_for(state="hidden")
+    preserved = review / response.value.json()["preserved"]
+    ok(preserved.read_bytes() == original and not journal.exists(), "审阅人确认后保留原始记录并继续视频审阅")
+
+
 def video_review_checks(browser, tmp: Path):
     movies = video_demo_movies(browser, tmp / "video-fixtures")
     project = movies["V1"].parent.parent
@@ -10692,6 +10709,7 @@ def video_review_checks(browser, tmp: Path):
     video_cli(builder, *build_args, "--video-composition", "index.html", "--reuse-movie", movies["V1"])
     with video_review_page(browser, direct) as (page, identity):
         ok(page.locator("#videoPlayer").is_visible(), "指定合成与成片后，浏览器可以直接审阅 V1")
+        video_recover_pending_record(page, direct)
         video_cut_and_relocate(page, direct, identity, movies)
     review = tmp / "video-mp4-review"
     video_cli(builder, "--report", movies["V1"], "--out", review, "--no-scan-skills", "--locale", "en")

@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -368,19 +371,270 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             )
         self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
 
-    def test_poll_after_restart_recovers_decode_failure_without_another_browser_report(self):
-        self.interrupt_after_decode_failure_is_registered()
+    def review_files(self):
+        return {
+            p.relative_to(self.review): hashlib.sha256(p.read_bytes()).digest()
+            for p in self.review.rglob("*")
+            if p.is_file()
+        }
+
+    @contextlib.contextmanager
+    def review_http(self):
         with serve.ReviewServer(self.review, 0, log_to_file=False) as server:
-            worker = threading.Thread(target=server.handle_request, daemon=True)
+            worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
             worker.start()
-            code, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{server.port}"})
-            worker.join(2)
-        self.assertEqual(code, 200, raw)
-        response = json.loads(raw)
-        self.assertEqual(response["handoff"]["latest"]["status"], "claimed")
-        notes = {n["id"]: n for n in response["notes"]}
-        self.assertEqual(notes["n2"]["videoReview"]["state"], "failed")
-        self.assertEqual(notes["n1"]["videoReview"]["decision"], "approved")
+            try:
+                yield (
+                    server,
+                    {
+                        "Host": f"127.0.0.1:{server.port}",
+                        "Origin": f"http://127.0.0.1:{server.port}",
+                        "Content-Type": "application/json",
+                        "X-AE-Review": self.rid,
+                    },
+                )
+            finally:
+                server.shutdown()
+                worker.join(2)
+
+    def assert_notes_reads_preserve_review(self, server, headers):
+        before = self.review_files()
+        for method in ("GET", "HEAD"):
+            with self.subTest(method=method):
+                code, _, raw = serve._req(server.port, method, "/api/notes", {"Host": headers["Host"]})
+                self.assertEqual(code, 200, raw)
+                if method == "HEAD":
+                    self.assertEqual(raw, b"")
+                self.assertEqual(self.review_files(), before)
+
+    def pending_pair(self):
+        notes = store.load(self.review)
+        notes["rev"] += 1
+        notes["notes"][0]["text"] = "待恢复的合成意见"
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        journal.write_text(
+            json.dumps(
+                {
+                    "reviewId": self.rid,
+                    "notes.json": notes,
+                    "handoff.json": {"seq": 0, "items": []},
+                    "events": [{"op": "video-receipt"}, {"op": "handoff-draft"}],
+                }
+            )
+        )
+        journal.chmod(0o600)
+        return journal
+
+    def test_reading_notes_preserves_the_review_in_every_stop_state(self):
+        with self.review_http() as (server, headers):
+            self.assert_notes_reads_preserve_review(server, headers)
+            self.pending_pair()
+            store.video_review.register_version(
+                self.review,
+                self._movie(self.v2_bytes, "pending.mp4"),
+                batch=1,
+                by="agent",
+                receipt_id="pending-cut",
+                await_receipt=True,
+            )
+            for state in ("active", "stopping", "incomplete"):
+                with self.subTest(state=state), review_stop.operation(self.review, deadline=None):
+                    if state == "stopping":
+                        review_stop.begin(self.review)
+                    elif state == "incomplete":
+                        review_stop.mark(self.review, "http", "incomplete", "synthetic-interruption")
+                    self.assert_notes_reads_preserve_review(server, headers)
+
+    def test_reading_notes_during_an_interrupted_stop_leaves_file_set_intact(self):
+        review_stop.begin(self.review)
+        self.assertFalse((self.review / review_stop.OPERATION_LOCK).exists())
+        with self.review_http() as (server, headers):
+            self.assert_notes_reads_preserve_review(server, headers)
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(raw)["stop"]["state"], "incomplete")
+
+    def test_write_drain_waits_for_an_admitted_recovery(self):
+        self.pending_pair()
+        with self.review_http() as (server, headers):
+            answers = []
+            with store.fsutil.flocked(self.review / store.LOCK_FILE, exclusive=True):
+                worker = threading.Thread(
+                    target=lambda: answers.append(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0])
+                )
+                worker.start()
+                deadline = time.monotonic() + 2
+                while server.wait_for_writes(0) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertFalse(server.wait_for_writes(0.02))
+                review_stop.begin(self.review)
+                status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+                self.assertEqual((status, json.loads(raw)["code"]), (409, "review-stopped"))
+            worker.join(3)
+            self.assertEqual(answers, [200])
+            self.assertTrue(server.wait_for_writes(0))
+            self.assertEqual(self._note("n1")["text"], "待恢复的合成意见")
+
+    def test_poll_after_restart_leaves_decode_failure_for_write_recovery(self):
+        self.interrupt_after_decode_failure_is_registered()
+        with self.review_http() as (server, headers):
+            with review_stop.operation(self.review, deadline=None):
+                for state in ("active", "stopping", "incomplete"):
+                    if state == "stopping":
+                        review_stop.begin(self.review)
+                    elif state == "incomplete":
+                        review_stop.mark(self.review, "http", "incomplete", "synthetic-interruption")
+                    self.assert_notes_reads_preserve_review(server, headers)
+            self.assertEqual(self._note("n2")["videoReview"]["state"], "pending_review")
+            self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
+
+    def test_explicit_write_recovers_an_interrupted_decode_and_can_be_retried(self):
+        self.interrupt_after_decode_failure_is_registered()
+        with self.review_http() as (server, headers):
+
+            def read():
+                return json.loads(serve._req(server.port, "GET", "/api/notes", headers)[2])
+
+            self.assertTrue(read().get("videoRecoveryPending"))
+            before = self.review_files()
+            for changed, status in (
+                ({"Origin": None}, 403),
+                ({"Content-Type": "text/plain"}, 415),
+                ({"X-AE-Review": "0000000000000000"}, 409),
+            ):
+                request_headers = {k: v for k, v in {**headers, **changed}.items() if v is not None}
+                code, _, _ = serve._req(server.port, "POST", "/api/video/recover", request_headers, {})
+                self.assertEqual(code, status)
+                self.assertEqual(self.review_files(), before)
+            code, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+            self.assertEqual(code, 200, raw)
+            response = read()
+            self.assertFalse(response.get("videoRecoveryPending"))
+            self.assertEqual(response["handoff"]["latest"]["status"], "claimed")
+            notes = {n["id"]: n for n in response["notes"]}
+            self.assertEqual(notes["n2"]["videoReview"]["state"], "failed")
+            self.assertEqual(notes["n1"]["videoReview"]["decision"], "approved")
+            after = self.review_files()
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertEqual(self.review_files(), after)
+
+    def test_reviewer_preserves_damaged_or_foreign_transactions_before_writing(self):
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        other = {
+            "reviewId": "ab" * 8,
+            "notes.json": {"rev": 9, "notes": []},
+            "handoff.json": {"seq": 0, "items": []},
+            "events": [{"op": "video-receipt"}, {"op": "handoff-draft"}],
+        }
+        partial = {**other, "reviewId": self.rid, "handoff.json": {"items": 7}}
+        cases = (
+            (b"{", "damaged-video-commit"),
+            (b"[]", "damaged-video-commit"),
+            (json.dumps(partial).encode(), "damaged-video-commit"),
+            (json.dumps(other).encode(), "foreign-video-commit"),
+        )
+        with self.review_http() as (server, headers):
+
+            def post(body):
+                code, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, body)
+                return code, json.loads(raw)
+
+            for n, (raw, expected_code) in enumerate(cases):
+                with self.subTest(expected_code=expected_code, n=n):
+                    journal.write_bytes(raw)
+                    journal.chmod(0o600)
+                    before = self.review_files()
+                    code, issue = post({})
+                    self.assertEqual((code, issue.get("code")), (409, expected_code))
+                    self.assertTrue(issue["error"])
+                    self.assertEqual(self.review_files(), before)
+                    self.assert_notes_reads_preserve_review(server, headers)
+                    self.assertEqual(post({"preserve": "outdated"})[0], 409)
+                    self.assertEqual(self.review_files(), before)
+                    code, result = post({"preserve": issue["params"]["confirmation"]})
+                    self.assertEqual(code, 200, result)
+                    self.assertEqual((self.review / result["preserved"]).read_bytes(), raw)
+                    self.assertFalse(journal.exists())
+                    self.assertEqual(self._note("n1")["text"], "第96帧字幕遮挡图标")
+                    code, _, raw = serve._req(
+                        server.port,
+                        "POST",
+                        "/api/notes",
+                        headers,
+                        {"page": 1, "id": f"after{n}", "text": "恢复后继续写"},
+                    )
+                    self.assertIn(code, (200, 201), raw)
+                    self.assertEqual(self._note(f"after{n}")["text"], "恢复后继续写")
+
+            submit = {
+                "noteIds": ["n1"],
+                "submitId": "after-recovery",
+                "receiverBindingId": wakeup.load_binding(self.review)["bindingId"],
+            }
+            code, _, raw = serve._req(server.port, "POST", "/api/handoff", headers, submit)
+            self.assertEqual(code, 200, raw)
+            self.assertEqual(json.loads(raw)["seq"], 1)
+            self.assertEqual(store.handoff_load(self.review)["items"][0]["openIds"], ["n1"])
+
+    def test_copy_with_pending_writes_rebuilds_only_from_settled_source(self):
+        journal = self.pending_pair()
+        copied = self.root / "copy-before-recovery"
+        shutil.copytree(self.review, copied)
+        original = self.review_files()
+        with self.assertRaisesRegex(build_viewer.BuildError, "先在原审阅"):
+            build_viewer.main(["--rebuild", str(copied)])
+        self.assertEqual((copied / journal.name).read_bytes(), journal.read_bytes())
+        self.assertEqual(store.load(copied)["notes"][0]["text"], "第96帧字幕遮挡图标")
+        self.assertEqual(original, self.review_files())
+        with self.review_http() as (server, headers):
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertFalse(journal.exists())
+            committed = self.review_files()
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertEqual(self.review_files(), committed)
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(raw)["notes"][0]["text"], "待恢复的合成意见")
+        fresh = self.root / "settled-copy"
+        shutil.copytree(self.review, fresh)
+        build_viewer.main(["--rebuild", str(fresh)])
+        self.assertNotEqual(ledger.read_manifest(fresh)["reviewId"], self.rid)
+        store.add(fresh, {"id": "fresh", "page": 1, "text": "新审阅继续批注"})
+        self.assertFalse(any(n["id"] == "fresh" for n in store.load(self.review)["notes"]))
+
+    def test_staged_render_is_preserved_until_recovery_is_admitted(self):
+        from unittest.mock import patch
+
+        replace = os.replace
+
+        def interrupt(src, dest):
+            if Path(dest) == self.review / "review.json":
+                raise OSError("synthetic interruption before publishing V2")
+            return replace(src, dest)
+
+        with patch.object(os, "replace", side_effect=interrupt), self.assertRaises(OSError):
+            store.video_review.register_version(self.review, self._movie(self.v2_bytes, "new.mp4"), batch=1, by="agent")
+        stage = self.review / "media" / "v2.mp4"
+        journal = self.review / ".video-registration.json"
+        self.assertEqual(stage.read_bytes(), self.v2_bytes)
+        self.assertTrue(journal.is_file())
+        with self.review_http() as (server, headers):
+            self.assert_notes_reads_preserve_review(server, headers)
+            with review_stop.operation(self.review, deadline=None):
+                review_stop.begin(self.review)
+                for state in ("stopping", "incomplete"):
+                    if state == "incomplete":
+                        review_stop.mark(self.review, "http", "incomplete", "synthetic-interruption")
+                    before = self.review_files()
+                    self.assert_notes_reads_preserve_review(server, headers)
+                    status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+                    self.assertEqual((status, json.loads(raw)["code"]), (409, "review-stopped"))
+                    self.assertEqual(self.review_files(), before)
+                review_stop.start(self.review)
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertFalse(journal.exists())
+            self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V2")
+            self.assertEqual(stage.read_bytes(), self.v2_bytes)
 
     def test_same_receiver_can_replace_failed_cut_after_interruption_before_page_refresh(self):
         self.interrupt_after_decode_failure_is_registered()
@@ -1116,6 +1370,29 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
 
 
 class VideoPageReworkUITests(unittest.TestCase):
+    def test_review_recovery_control_confirms_the_specific_record(self):
+        self.assertTrue('id="videoRecoveryBtn"' in self.TEMPLATE.read_text())
+        result = interaction_program(
+            [("function renderVideoRecovery(", "async function poll(){")],
+            """let accepted=false; const prompts=[], posts=[], messages=[];
+            const confirm=msg=>{prompts.push(msg);return accepted}, toast=message=>messages.push(message), resync=async()=>{};
+            const api=async(method,path,body)=>{posts.push([method,path,body]);
+              if(body.preserve)return {preserved:'synthetic.saved'};
+              throw Object.assign(new Error('Different review'), {code:'foreign-video-commit',params:{confirmation:'record-1'}})};""",
+            """const button=$('videoRecoveryBtn'); renderVideoRecovery({}); const hidden=button.hidden;
+            renderVideoRecovery({videoRecoveryPending:true,stop:{state:'incomplete'}}); const disabled=button.disabled;
+            renderVideoRecovery({videoRecoveryPending:true,stop:{state:'active'}}); await button.onclick();
+            const afterCancel=posts.length; accepted=true; await button.onclick();
+            return {hidden,disabled,visible:!button.hidden,afterCancel,posts,prompts,messages};""",
+        )
+        self.assertTrue(result["hidden"] and result["disabled"] and result["visible"])
+        self.assertEqual(result["afterCancel"], 1)
+        self.assertEqual(
+            result["posts"], [["POST", "/api/video/recover", body] for body in ({}, {}, {"preserve": "record-1"})]
+        )
+        self.assertIn("Different review", result["prompts"][-1])
+        self.assertIn("synthetic.saved", result["messages"][-1])
+
     TEMPLATE = ROOT / "skill" / "annotation-everything" / "scripts" / "viewer_template.html"
     PURE_START = "// ---------- 视频审阅纯函数 ----------"
     PURE_END = "// ---------- 视频审阅 DOM ----------"
