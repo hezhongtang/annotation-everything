@@ -141,7 +141,7 @@ class VideoCompareEvidenceTests(unittest.TestCase):
         result = compare_ui(
             """
             videoCompareClose();
-            notes[0].videoReview={state:'needs_reply',question:'Which frame?',evidenceRevision:'question'};
+            notes[0].status='open';notes[0].videoReview={state:'needs_reply',question:'Which frame?',evidenceRevision:'question'};
             videoCompareOpen(notes[0]);
             get('videoCompareReplyInput').value='Keep frame six 请保留';
             VIDEO.versions.push(version('V3'));VIDEO.currentVersionId='V3';
@@ -513,6 +513,52 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertEqual(actual["three"], ["n1", "n4", "n5"])
         self.assertEqual(actual["none"], [])
 
+    def test_reply_updates_the_visible_page_counts_as_soon_as_notes_refresh(self):
+        actual = interaction_program(
+            [
+                (START, END),
+                ("function refreshList(force){", "let pageTreeHtml="),
+                ("function updateCounts(){", "function markBtnLabel(){"),
+                ("function updatePageStat(){", "function render(){"),
+            ],
+            """const VIDEO=true,videoManifest=()=>({currentVersionId:"V2"}),P=[{n:1}],N=1,i=0,total=0;
+               let notes=[{page:1,id:"n1",status:"open",videoReview:{state:"needs_reply"}}];
+               let listStale=false,editingId=null,composing=false,hideDone=false;
+               const allStats={o:1,f:0,d:0},isDone=()=>false,noteHtml=n=>videoReceiptCardHtml(n);
+               const noop=()=>{},stashEdit=noop,indexNotes=noop,drawPins=noop,renderPageTree=noop,
+                 updateLegacy=noop,renderResume=noop,renderFinalizeAll=noop;
+               $("nflight").dataset={};$("ndraft").dataset={};$("jump").options=[];""",
+            """updatePageStat();const before=$("stat").textContent;
+               notes[0].videoReview={state:"needs_reply", decision:"replied",reply:"Keep the title"};
+               refreshList();return {before,after:$("stat").textContent,card:$("nlist").innerHTML};""",
+        )
+        self.assertIn("Needs reply 1 · Replied 0", actual["before"])
+        self.assertIn("Needs reply 0 · Replied 1", actual["after"])
+        self.assertIn("Keep the title", actual["card"])
+
+    def test_fresh_and_legacy_cards_and_compare_use_the_same_relocation_eligibility(self):
+        result = interaction_program(
+            [(START, END)],
+            "let videoRangeEnd=null;const hand={videoRelocationBatches:{submitted:1,processed:null}};",
+            """
+            const manifest={currentVersionId:"V3",versions:[{versionId:"V1",frames:60,fps:30},
+                                                            {versionId:"V2",frames:60,fps:30,batch:1},
+                                                            {versionId:"V3",frames:60,fps:30,batch:2}]};
+            return ["fresh","submitted","processed"].map(id=>{
+              const note={id,status:"open",video:{versionId:"V1",frame:3}};
+              const pair=videoComparePair(note,manifest);
+              return [videoReceiptCardHtml(note,manifest).includes('data-act="video-relocate"'),pair.canRelocate,pair.batch,pair.after.versionId,pair.state]});
+            """,
+        )
+        self.assertEqual(
+            result,
+            [
+                [False, False, None, "V3", "unsubmitted"],
+                [True, True, 1, "V2", "missing_evidence"],
+                [True, True, None, "V3", "missing_evidence"],
+            ],
+        )
+
     def test_video_receipt_state_readiness_targets_counts_and_card_html(self):
         manifest = {
             "currentVersionId": "V2",
@@ -586,17 +632,35 @@ class VideoPagePureTests(unittest.TestCase):
                 },
             },
         ]
+        notes.extend(
+            [
+                {
+                    **notes[1],
+                    "id": "answered",
+                    "videoReview": {
+                        "state": "needs_reply",
+                        "decision": "replied",
+                        "reply": "保留原配乐",
+                    },
+                },
+                {**notes[1], "id": "returned", "videoReview": {"state": "returned", "decision": "returned"}},
+            ]
+        )
         for lang in ("zh-CN", "en"):
             actual = interaction_program(
-                [(START, END)],
-                "let videoRangeEnd=null;",
+                [
+                    (START, END),
+                    ("function handPickNoteTag(", "function renderHandPick("),
+                    ("function updatePageStat(){", "function render(){"),
+                ],
+                "let videoRangeEnd=null;const P=[{n:1}],N=1,i=0,total=0,VIDEO=true,clip=(s,n)=>s.slice(0,n);"
                 "const manifest="
                 + json.dumps(manifest, ensure_ascii=False)
                 + ",notes="
                 + json.dumps(notes, ensure_ascii=False)
-                + ";"
-                "return {"
-                "states:notes.map(videoNoteState),"
+                + ";const videoManifest=()=>manifest;",
+                "updatePageStat();return {"
+                "states:notes.map(videoNoteState),stat:$('stat').textContent,tags:notes.map(handPickNoteTag),"
                 "ready:notes.map(n=>videoReceiptReady(n,manifest)),"
                 "rangeWithFrame:videoReceiptReady({...notes[0],video:{startFrame:120,endFrame:180,versionId:'V1'}},manifest),"
                 "oobReady:videoReceiptReady({...notes[0],videoReview:{...notes[0].videoReview,target:{kind:'frame',versionId:'V2',frame:192}}},manifest),"
@@ -618,9 +682,11 @@ class VideoPagePureTests(unittest.TestCase):
                     "unsubmitted",
                     "approved",
                     "pending_review",
+                    "replied",
+                    "returned",
                 ],
             )
-            self.assertEqual(actual["ready"], [True, False, False, False, False, False, False, True])
+            self.assertEqual(actual["ready"], [True, False, False, False, False, False, False, True, False, False])
             self.assertFalse(actual["oobReady"])
             self.assertFalse(actual["rangeWithFrame"])
             self.assertFalse(actual["noVerReady"])
@@ -632,11 +698,24 @@ class VideoPagePureTests(unittest.TestCase):
                     "needs_relocate": 1,
                     "missing_evidence": 1,
                     "failed": 1,
-                    "returned": 0,
+                    "replied": 1,
+                    "returned": 1,
                     "unsubmitted": 1,
                     "approved": 1,
                 },
             )
+            self.assertEqual(sum(actual["counts"].values()), len(notes))
+            reply_label, waiting_label, returned_label = (
+                ("已答复", "待答复", "已退回") if lang == "zh-CN" else ("Replied", "Needs reply", "Returned")
+            )
+            for label in (reply_label, waiting_label, returned_label):
+                self.assertIn(label + " 1", actual["stat"])
+            self.assertIn(reply_label, actual["cards"][8])
+            self.assertIn(reply_label, actual["tags"][8])
+            self.assertIn(waiting_label, actual["cards"][1])
+            self.assertIn(waiting_label, actual["tags"][1])
+            self.assertNotIn("data-vid-reply=", actual["cards"][8])
+            self.assertIn("data-vid-reply=", actual["cards"][1])
             self.assertIn("120", actual["cutText"])
             self.assertIn("108", actual["cutText"])
             self.assertIn("132", actual["cutText"])

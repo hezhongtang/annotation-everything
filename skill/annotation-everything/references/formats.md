@@ -120,11 +120,13 @@ python3 $S/build_viewer.py --report 成片.mp4 --out 成片-review --name "合�
 - 前后对照、删镜剪口与人工重定位（#196）：
   - 对照页提供并排的原版 / 改后独立 `<video>` 对照舞台（`video-compare` 特性）：按各自登记版本的 `timebase`（`num/den`）与 `fps` 换算帧与半开区间，画面意见各自停到对应帧并叠加对应 `mark`，时序/声音意见可分别点击播放各自不静音（`muted = false`）的区间且互不抢音轨，删除镜头（`outcome: "deleted"`，`target.kind: "cut"`）展示删除说明与剪口并按显式或有界上下文窗口播放新版上下文，同时保留原片可回看。
   - 审阅人可在未定稿条目的对照舞台或卡片打开人工重定位（`POST /api/notes/<id>/video-relocate`，声明 `video-relocate` 特性；沿用 Host、同源 `Origin`、JSON `Content-Type`、`X-AE-Review` 与停审门禁）：从 `needs_relocate`、`missing_evidence`、`pending_review` 或已有未补全位置的新版条目补齐或校正 `versionId`、`target`（严格校界，越界/未登记版本拒绝）与可选 `summary`/`reason`，将此前位置/原因归档进 `videoReview.relocatedFrom` 并追加 `videoReview.history[]` 与 `trail`（不改原 `video` 与正文，后续 `video-receipt` 也不抹除重定位追溯）；缺改动说明时仍保持 `missing_evidence`，不能进入可验收。
+  - 旧记录可以凭该批注自己的依据补定位，包括已初改状态、原批注上的处理批次、已登记成片的批次中点名的 ID、逐条初改或定位痕迹，以及该条回执或目标中保存的新版标识。服务在交接摘要的 `videoRelocationBatches` 中列出可校正的 ID 和批次，缺少可核对批次时值为 `null`。这类条目可补录新版位置，继续标为缺证据。只登记了其他条目的新版时，新批注仍显示为未提交。已有人工决定的批注保留决定、决定批次、答复、退回理由及其证据。
 - 人工逐条 / 选择性批量通过、退回与原 ID 下再交（#197）：
   - 服务声明 `video-decisions`，页面使用 `POST /api/notes/<id>/video-decision` 发出 `approve`、`return` 或 `reply`。请求可以带 `expectedBatch`、`expectedVersion`。退回与答复需要服务支持 `video-feedback-revision`。三种决定都要带与页面所见 `videoReview.evidenceRevision` 对应的 `expectedEvidence`。没有修订标识的旧回执使用 `legacy`。新回执、位置校正、退回和答复都会更新修订标识。提交位置校正同样需要所见修订和服务的 `video-relocate-revision` 能力。
     - `approve` 将符合条件的条目标为 `approved`，记录决定者、时间、批次和历史，同时更新批次统计。
     - `return`（必填非空 `reason`）：仅保存在原批注与 `notes.json`（设 `status = "open"`、`videoReview.state = "returned"`、`decision = "returned"`、`returnReason`、`decisionBatch`、`decidedAt`、`decidedBy`，清 `draft*`/`resolved*` 与在途占用并写入历史与 `returned` 痕迹），**绝不自动创建待处理批次**。
-    - `reply`（必填非空 `reply`，且非 `drafted`/`pending_review`）：在原批注保存 `reply`、`repliedAt`、`repliedBy`、`decision = "replied"`、`decisionBatch` 与 `replied` 痕迹，同样不自动提交。
+    - `reply` 只接受仍为 `open`、当轮 `state = "needs_reply"` 且尚无人工决定的条目。保存非空答复时写入 `reply`、`repliedAt`、`repliedBy`、`decision = "replied"` 和 `decisionBatch`。相同答复可按原修订幂等重试，接收会话再次提问后可作新答复。
+  - `videoReview.state` 保留七个存储值。卡片、统计、处理记录和重交窗口从 `decision = "replied"` 显示「已答复」，旧答复无需迁移。批次统计分别给出 `needsReplyIds` / `needsReplyCount` 和 `repliedIds` / `repliedCount`。新写入的回执、校正、退回和答复历史保存 `previousEvidenceRevision` 与 `evidenceRevision`，可沿原批注核对每次决定所用的证据。
   - `POST /api/handoff/finalize-all` 接收明确勾选的批次、批注 ID 和 `evidence` 映射（每个 ID 对应所见修订）。服务只通过仍就绪且修订匹配的条目。返回的 `skipped` 列出已变更或缺证据的项，供审阅人重新打开。文档审阅沿用整批定稿。
   - 选择性重交与防陈旧 / 防改写：返工交接弹窗若已有往轮回执则默认空选、提供「只选退回项」与状态标签，使只选退回条目的新批次仅在 `claim` / `wait` / `show --batch` 交付所选批注及上轮 `videoReview` 上下文（不混入已通过或未提交的答复条目）。重复确认、`approve` 后重放、`set_status("open")` 或陈旧回执（已 `approved` 一律拒绝 `note-already-decided`，已 `returned`/`replied` 于第 `k` 批则拒绝同批或更早批次 `<= k` 的陈旧回执 `stale-receipt`）均不能覆盖已记录的人工决定；新提交的第 `m > k` 返工批次在同一批注 ID 下交回 V3 回执时，保留完整 V1→V2→V3 历史。
 

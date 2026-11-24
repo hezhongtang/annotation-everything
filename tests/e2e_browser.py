@@ -10615,9 +10615,10 @@ def video_mp4_rework(page, review, identity, movies):
     subtitle, audio = video_mark_and_range(page)
     video_seek(page, 16)
     question = video_save_note(page, "Which opening title?")["id"]
+    fresh = []
     for frame, text in ((65, "Review the palette later"), (155, "Check end credits later")):
         video_seek(page, frame)
-        video_save_note(page, text)
+        fresh.append(video_save_note(page, text)["id"])
     page.click("#videoSourceBtn")
     page.select_option("#vsrcEngine", "hyperframes")
     page.fill("#vsrcRoot", str(movies["V1"].parent.parent))
@@ -10678,6 +10679,13 @@ def video_mp4_rework(page, review, identity, movies):
         ],
         "V2",
     )
+    video_compare(page, fresh[0])
+    ok(
+        page.locator("#videoCompareToggleRelocate").is_hidden()
+        and all(not page.locator(f"[data-act='video-relocate'][data-id='{nid}']").count() for nid in fresh),
+        "本批已有 V2 时，两条未提交批注的卡片和对照视图仍不提供重定位",
+    )
+    page.click("#videoCompareClose")
     video_compare(page, subtitle)
     video_check_frame_pair(page)
     video_artifact(page, review, "subtitle-v1-v2", data=claim)
@@ -10703,6 +10711,9 @@ def video_mp4_rework(page, review, identity, movies):
     reply = "Keep the first title 保留片头"
     video_type_feedback(page, "#videoCompareReplyInput", reply)
     replied = video_click_post(page, "#videoCompareReplySave", f"/api/notes/{question}/video-decision")
+    page.locator("#videoCompareState").filter(has_text="Replied").wait_for()
+    page.locator("#stat").filter(has_text="Needs reply 0 · Replied 1").wait_for(state="attached")
+    ok(page.locator("#videoCompareReplyBox").is_hidden(), "保存答复后对照视图显示已答复并收起输入框")
     saved = {
         n["id"]: n["videoReview"]
         for n in page.request.get("/api/notes").json()["notes"]
@@ -10717,8 +10728,9 @@ def video_mp4_rework(page, review, identity, movies):
     page.click("#videoCompareClose")
     ok(
         not page.locator(f"[data-act='video-batch-pick'][data-id='{question}']").count()
-        and not page.locator(f"[data-act='video-batch-pick'][data-id='{audio}']").count(),
-        "待答复和已退回条目不可在批量通过中勾选",
+        and not page.locator(f"[data-act='video-batch-pick'][data-id='{audio}']").count()
+        and page.locator(f"#nlist [data-note='{question}'] .vr-chip").inner_text().startswith("Replied"),
+        "已答复卡片和已退回条目均不可在批量通过中勾选",
     )
     # 模拟另一标签页仍持有旧的勾选快照；服务须按提交时的证据重新检查。
     stale = page.request.post(
@@ -10729,10 +10741,8 @@ def video_mp4_rework(page, review, identity, movies):
     assert stale.ok, stale.text()
     skipped = {item["id"]: item.get("detail") for item in stale.json()["skipped"]}
     ok(
-        stale.json()["finalizedCount"] == 0
-        and skipped.get(audio) == "returned"
-        and skipped.get(question) == "needs_reply",
-        "服务拒绝陈旧的批量通过范围，分别指出退回与待答复状态",
+        stale.json()["finalizedCount"] == 0 and skipped.get(audio) == "returned" and skipped.get(question) == "replied",
+        "服务拒绝陈旧的批量通过范围，分别指出已退回与已答复状态",
     )
     page.check(f"[data-act='video-batch-pick'][data-id='{subtitle}']")
     page.once("dialog", lambda dialog: dialog.accept())
@@ -10741,8 +10751,9 @@ def video_mp4_rework(page, review, identity, movies):
     page.click("#handBtn")
     ok(
         page.locator("#handPick input:checked").count() == 0
-        and not page.locator(f"#handPick input[data-noteid='{subtitle}']").count(),
-        "返工提交打开时没有预选项，已通过字幕离开候选",
+        and not page.locator(f"#handPick input[data-noteid='{subtitle}']").count()
+        and "Replied" in page.locator("#handPick .hp-item").filter(has_text=reply).inner_text(),
+        "重交窗口展示已答复及原文，初始空选，已通过字幕离开候选",
     )
     page.click("#handPick [data-pick='returned']")
     claim = video_claim(page, review, identity, 2)

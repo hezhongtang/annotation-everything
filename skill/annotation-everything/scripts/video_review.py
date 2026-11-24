@@ -1047,6 +1047,13 @@ def target_covers_interval(note: dict, target: dict) -> bool:
     return "startFrame" not in (note.get("video") or {}) or target["kind"] in ("range", "cut")
 
 
+def display_state(review: dict[str, Any]) -> str:
+    """从本条人工决定派生显示标签，保留原回执的存储状态。"""
+    if review.get("decision") in ("replied", "returned", "approved"):
+        return review["decision"]
+    return str(review.get("state") or "")
+
+
 def review_readiness(
     note: dict[str, Any], manifest: dict[str, Any], *, review_dir: Path | None = None
 ) -> tuple[bool, str]:
@@ -1062,7 +1069,7 @@ def review_readiness(
         return True, "ok"
     if not isinstance(vr, dict):
         return False, "invalid-video-review"
-    state = vr.get("state")
+    state = display_state(vr)
     if state != "pending_review":
         return False, str(state) if isinstance(state, str) and state else "not-pending-review"
     summary = vr.get("summary")

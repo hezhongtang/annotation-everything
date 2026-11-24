@@ -1985,9 +1985,11 @@ function videoNoteState(note){
   if(!note||typeof note!=="object")return"unsubmitted";
   if(note.status==="resolved")return"approved";
   const vr=note.videoReview;
-  if(vr&&typeof vr==="object")return String(vr.state||(note.status==="drafted"?"pending_review":"unsubmitted"));
-  if(note.status==="drafted")return"missing_evidence";
+  if(["replied","returned","approved"].includes(vr?.decision))return vr.decision;
+  if(vr?.state)return String(vr.state);
+  if(note.status==="drafted"||videoRelocation(note))return"missing_evidence";
   return"unsubmitted"}
+function videoCanReply(note){return !!note&&(note.status??"open")==="open"&&note.videoReview?.state==="needs_reply"&&!note.videoReview.decision}
 function videoTargetValid(target,version){
   if(!target||typeof target!=="object"||!version||!Number.isInteger(version.frames)||version.frames<1)return false;
   if(target.kind==="frame")return Number.isInteger(target.frame)&&target.frame>=0&&target.frame<version.frames;
@@ -2002,7 +2004,7 @@ function videoReceiptReady(note,manifest){
   const vr=note.videoReview;
   if(!vr)return false;
   if(typeof videoFailedVersions!=="undefined"&&(videoFailedVersions.has(vr.versionId)||videoFailedVersions.has(note.video?.versionId)))return false;
-  if(typeof vr!=="object"||vr.state!=="pending_review"||vr.outcome==="deleted"&&vr.target?.kind!=="cut")return false;
+  if(typeof vr!=="object"||videoNoteState(note)!=="pending_review"||vr.outcome==="deleted"&&vr.target?.kind!=="cut")return false;
   if(Number.isInteger(note.video?.startFrame)&&!["range","cut"].includes(vr.target?.kind))return false;
   if(typeof vr.summary!=="string"||!vr.summary.trim())return false;
   const verId=vr.versionId;if(typeof verId!=="string"||!/^V[1-9][0-9]*$/.test(verId))return false;
@@ -2021,7 +2023,7 @@ function videoTargetText(target,fallbackVersionId){
     return tMsg("viewer.video.targetCut",{version:ver,frame:target.frame})}
   return""}
 function videoStatusCounts(list){
-  const out={pending_review:0,needs_reply:0,needs_relocate:0,missing_evidence:0,failed:0,returned:0,unsubmitted:0,approved:0};
+  const out={pending_review:0,needs_reply:0,replied:0,needs_relocate:0,missing_evidence:0,failed:0,returned:0,unsubmitted:0,approved:0};
   (list||[]).forEach(n=>{const s=videoNoteState(n);if(Object.prototype.hasOwnProperty.call(out,s))out[s]++});
   return out}
 function videoTargetPlaySpec(target,version){
@@ -2065,6 +2067,14 @@ function videoTimelineHistory(note){
     const detail=[tgt,e.summary||e.question||e.relocateReason||e.failure||""].filter(Boolean).join(" · ");
     const text=detail?tMsg("viewer.video.historyReceiptDetail",{version:ver,state:st,detail}):tMsg("viewer.video.historyReceipt",{version:ver,state:st});
     return{...e,text}})}
+function videoRelocation(note){
+  const vr=note.videoReview;
+  if(["held","resolved"].includes(note.status)||["approved","returned","replied"].includes(vr?.decision)
+    ||["approved","needs_reply","returned","failed"].includes(vr?.state))return null;
+  const batches=typeof hand!=="undefined"&&hand?.videoRelocationBatches;
+  if(batches)return Object.prototype.hasOwnProperty.call(batches,note.id)?{batch:batches[note.id]}:null;
+  return note.status==="drafted"||["pending_review","needs_relocate","missing_evidence"].includes(vr?.state)
+    ?{batch:vr?.batch??note.draftBatch??null}:null}
 function videoComparePair(note,manifest,fallbackVersionId){
   if(!note||typeof note!=="object")return null;
   const m=manifest||null,vers=m&&Array.isArray(m.versions)?m.versions:[];
@@ -2073,13 +2083,13 @@ function videoComparePair(note,manifest,fallbackVersionId){
   const beforeVer=orig?(findVer(orig.versionId)||{versionId:orig.versionId,fps:orig.fps,timebase:orig.timebase,frames:orig.frames,width:orig.videoWidth,height:orig.videoHeight,url:null}):null;
   const beforeSpec=orig?videoTargetPlaySpec(orig,beforeVer):null;
   const vr=note.videoReview&&typeof note.videoReview==="object"?note.videoReview:null;
-  const afterVerId=(vr&&vr.target&&vr.target.versionId)||(vr&&vr.versionId)||fallbackVersionId||(m&&m.currentVersionId)||(beforeVer&&beforeVer.versionId)||null;
+  const relocation=videoRelocation(note),batch=vr?.batch??note.draftBatch??relocation?.batch??null;
+  const batchCut=relocation&&batch!=null?vers.slice().reverse().find(v=>v.batch===batch&&!v.playbackFailure):null;
+  const afterVerId=vr?.target?.versionId||vr?.versionId||fallbackVersionId||batchCut?.versionId||m?.currentVersionId||beforeVer?.versionId||null;
   const afterVer=findVer(afterVerId);
   const afterSpec=vr&&vr.target?videoTargetPlaySpec(vr.target,afterVer||vr.target):null;
-  const approved=note.status==="resolved"||(vr&&vr.decision==="approved");
-  const canRelocate=!!(!approved&&!["needs_reply","returned","failed"].includes(vr?.state)&&(vr||note.status==="drafted"||vers.length>1));
-  return{noteId:note.id||"",evidence:videoEvidence(note),text:note.text||"",state:videoNoteState(note),ready:videoReceiptReady(note,m),canRelocate,
-    batch:vr&&vr.batch!=null?vr.batch:(note.draftBatch!=null?note.draftBatch:null),
+  return{noteId:note.id||"",evidence:videoEvidence(note),text:note.text||"",state:videoNoteState(note),ready:videoReceiptReady(note,m),canRelocate:!!relocation,
+    batch,
     versionId:vr&&vr.versionId||null,
     before:{version:beforeVer,versionId:beforeVer&&beforeVer.versionId||null,url:beforeVer&&beforeVer.url||null,anchor:orig,spec:beforeSpec,mark:orig&&orig.mark||null},
     after:{version:afterVer,versionId:afterVer&&afterVer.versionId||afterVerId||null,url:afterVer&&afterVer.url||null,target:vr&&vr.target||null,spec:afterSpec,mark:vr&&vr.target&&vr.target.mark||null,
@@ -2119,11 +2129,11 @@ function videoReceiptCardHtml(note,manifest,opts){
     if(st==="approved"&&vr.decision==="approved"){
       parts.push(`<div class="vr-ok">${escH(tMsg("viewer.video.approvedInfo",{version:vr.versionId||"—",batch:vr.decisionBatch!=null?vr.decisionBatch:(vr.batch!=null?vr.batch:"—"),by:vr.decidedBy||"page"}))}</div>`)}
     if(st==="missing_evidence")parts.push(`<div class="vr-err">${escH(tMsg("viewer.video.missingEvidenceHint"))}</div>`);
-    if(st==="needs_reply"&&note.status!=="resolved"){
+    if(videoCanReply(note)){
       const saved=typeof videoReplyBuf!=="undefined"&&videoReplyBuf[note.id];
       const rDraft=saved&&saved.evidence===videoEvidence(note)?saved.text:(vr.reply||"");
       parts.push(`<div class="vr-form"><textarea data-vid-reply="${eid}" data-evidence="${escH(videoEvidence(note))}" placeholder="${escH(tMsg("viewer.video.replyPlaceholder"))}">${escH(rDraft)}</textarea><div class="vr-acts"><button type="button" class="vr-jump" data-act="video-reply-save" data-id="${eid}">${escH(tMsg("viewer.video.replySaveBtn"))}</button></div></div>`)}
-    const isRetOpen=typeof videoReturnOpen!=="undefined"&&videoReturnOpen===note.id&&st!=="approved";
+    const isRetOpen=typeof videoReturnOpen!=="undefined"&&videoReturnOpen===note.id&&!["approved","replied"].includes(st);
     if(isRetOpen){
       const saved=typeof videoReturnBuf!=="undefined"&&videoReturnBuf[note.id];
       const retDraft=saved&&saved.evidence===videoEvidence(note)?saved.text:(vr.returnReason||"");
@@ -2132,8 +2142,7 @@ function videoReceiptCardHtml(note,manifest,opts){
     if(hist.length>1||(hist.length>0&&(vr.relocatedFrom||st==="returned"||st==="approved"||!!vr.reply||hist.some(h=>h.source==="decision"||h.source==="relocate"))))
       parts.push(`<details class="vr-hist"><summary>${escH(tMsg("viewer.video.historyToggle",{count:hist.length}))}</summary><ul>${hist.map(h=>`<li>${escH(h.text)}</li>`).join("")}</ul></details>`)}
   const vers=m&&Array.isArray(m.versions)?m.versions:[];
-  const approvedDone=st==="approved";
-  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!(!approvedDone&&note.status!=="resolved"&&!["needs_reply","returned","failed"].includes(st)&&(vr||note.status==="drafted"||vers.length>1));
+  const canCompare=!!(note.video&&(vr||vers.length>1)),canRelocate=!!videoRelocation(note);
   if(canCompare||canRelocate)
     parts.push(`<div class="vr-acts">${canCompare?`<button type="button" class="vr-jump" data-act="video-compare" data-id="${eid}">${escH(tMsg("viewer.video.compareBtn"))}</button>`:""}${canRelocate?`<button type="button" class="vr-jump" data-act="video-relocate" data-id="${eid}">${escH(tMsg("viewer.video.relocateBtn"))}</button>`:""}</div>`);
   parts.push("</div>");return parts.join("")}
@@ -2478,7 +2487,7 @@ function videoCompareOpen(note,openRelocate=false){
   const approvedDone=note.status==="resolved"||pair.state==="approved";
   const appBtn=sr.getElementById("videoCompareApprove");if(appBtn)appBtn.hidden=!(!approvedDone&&pair.ready);
   const retBtn=sr.getElementById("videoCompareReturnBtn");
-  if(retBtn){retBtn.hidden=!(!approvedDone&&note.videoReview&&pair.state!=="needs_reply");
+  if(retBtn){retBtn.hidden=!(!approvedDone&&note.videoReview&&!["needs_reply","replied"].includes(pair.state));
     retBtn.textContent=tMsg(pair.state==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn")}
   const retBox=sr.getElementById("videoCompareReturnBox"),retIn=sr.getElementById("videoCompareReturnReason"),retLbl=sr.getElementById("videoCompareReturnLbl");
   if(retLbl)retLbl.textContent=tMsg("viewer.video.returnBtn");
@@ -2487,7 +2496,7 @@ function videoCompareOpen(note,openRelocate=false){
   const repBox=sr.getElementById("videoCompareReplyBox"),repIn=sr.getElementById("videoCompareReplyInput"),repLbl=sr.getElementById("videoCompareReplyLbl");
   if(repLbl)repLbl.textContent=tMsg("viewer.video.replySaveBtn");
   if(repIn){repIn.placeholder=tMsg("viewer.video.replyPlaceholder");repIn.value=pair.after.reply||""}
-  if(repBox)repBox.hidden=!(!approvedDone&&pair.state==="needs_reply");
+  if(repBox)repBox.hidden=!videoCanReply(note);
   const decErr=sr.getElementById("videoCompareDecisionErr");if(decErr){decErr.hidden=true;decErr.textContent=""}
   const relBtn=sr.getElementById("videoCompareToggleRelocate");if(relBtn)relBtn.hidden=!pair.canRelocate;
   const bInfo=sr.getElementById("videoCompareBeforeInfo"),bTime=sr.getElementById("videoCompareBeforeTime"),bPlay=sr.getElementById("videoComparePlayBefore");
@@ -2722,7 +2731,7 @@ function noteHtml(x){
   const vrReady=!isVid||(!videoEvidenceNeedsReview(x)&&videoReceiptReady(x,videoManifest()));
   const acts=changed?(editingId===x.id?`<button data-act="cancel">${tMsg("viewer.cancel")}</button>`:""):ed?`<button data-act="save" data-id="${id}">${tMsg("viewer.save")}</button><button data-act="remark" data-id="${id}" title="${escH(tMsg("viewer.remarkTitle"))}">${tMsg(hasMark(x)?"viewer.remarkAgain":"viewer.remark")}</button>${hasMark(x)?`<button data-act="unpin" data-id="${id}">${tMsg("viewer.unpin")}</button>`:""}<button data-act="cancel">${tMsg("viewer.cancel")}</button>`
     :vidApproved?`<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`
-    :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${isVid?(dr?`${vrReady?`<button data-act="video-approve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.video.approveBtn")}</button>`:""}<button data-act="video-return-open" data-id="${id}">${tMsg("viewer.video.returnBtn")}</button>`:held?"":vr?`<button data-act="video-return-open" data-id="${id}">${tMsg(vidState==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn")}</button>`:(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`)):(dr?`${vrReady?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button>`:""}<button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`:held?"":(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`))}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
+    :`<button data-act="edit" data-id="${id}">${tMsg("viewer.edit")}</button>${isVid?(dr?`${vrReady?`<button data-act="video-approve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.video.approveBtn")}</button>`:""}<button data-act="video-return-open" data-id="${id}">${tMsg("viewer.video.returnBtn")}</button>`:held||vidState==="replied"?"":vr?`<button data-act="video-return-open" data-id="${id}">${tMsg(vidState==="returned"?"viewer.video.editReturnBtn":"viewer.video.returnBtn")}</button>`:(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`)):(dr?`${vrReady?`<button data-act="resolve" data-id="${id}" title="${escH(tMsg("viewer.finalizeTitle"))}">${tMsg("viewer.finalize")}</button>`:""}<button data-act="reopen" data-id="${id}">${tMsg("viewer.returnForRedo")}</button>`:held?"":(!done&&!vrReady?"":`<button data-act="${done?"reopen":"resolve"}" data-id="${id}">${tMsg(done?"viewer.reopen":"viewer.resolve")}</button>`))}<button data-act="del" data-id="${id}">${tMsg("viewer.delete")}</button>`;
   const analysisLink=x.heldBy||x.analysisId||x.fromAnalysis;
   const analysisActs=analysisSupported&&!FILE?(analysisLink?`<button data-act="analysis-open" data-analysis="${escH(analysisLink)}">${tMsg("viewer.analysis.open")}</button>`:!done&&!held&&!dr?`<button data-act="analysis-start" data-id="${id}">${tMsg("viewer.analysis.start")}</button>`:""):"";
   const sk=Array.isArray(x.skills)?x.skills:[];
@@ -2780,6 +2789,7 @@ $("pageTree").onclick=e=>{const pick=e.target.closest("[data-pick]");
 // 「批注」按钮：红 = 还没交给 Agent 的未处理，蓝 = 处理中（已交给 Agent），琥珀 = 已初改·待复核
 function counts(list){let o=0,f=0,d=0;list.forEach(x=>{if(isDraft(x))d++;else if(inFlight(x))f++;else if(!isDone(x))o++});return{o,f,d}}
 function updateCounts(){const c=allStats,b=$("ncount");
+  if(VIDEO)updatePageStat();
   b.textContent=c.o||(c.f||c.d?"":"0");b.classList.toggle("zero",!c.o);
   b.title=tMsg("viewer.count.open",{open:c.o,total:notes.length});
   $("nflight").textContent=c.f?tMsg("viewer.jumpInFlight",{count:c.f}):"";$("nflight").title=tMsg("viewer.count.inFlight");
@@ -3259,9 +3269,9 @@ function setHand(h,quiet){if(!h||h.error)return;const L=h.latest,prev=hand&&hand
   const sig=L?[L.seq,L.status,L.resolvedCount,h.total].join("/"):"";
   hand={...h,history:sig===handSig?hand&&hand.history:undefined};   // 状态变了：旧的完整历史作废，需要时再取
   renderFinalizeAll();
-  const fl=Array.isArray(h.inFlightIds)?h.inFlightIds:[],fsig=fl.join(",");
+  const fl=Array.isArray(h.inFlightIds)?h.inFlightIds:[],fsig=fl.join(",")+(h.videoRelocationBatches?JSON.stringify(h.videoRelocationBatches):"");
   if(!quiet){renderHand();renderResume()}   // 轮询数据没变：跳过这两次重画，其余照旧
-  if(fsig!==flightSig){flightSig=fsig;flight=new Set(fl);refreshList()}   // 「处理中」的批注变了才重绘列表
+  if(fsig!==flightSig){flightSig=fsig;flight=new Set(fl);refreshList()}   // 在途范围或可补定位的条目变化时更新卡片
   if($("batches").classList.contains("on")&&sig!==handSig)loadBatches();handSig=sig}
 let handSig="", flightSig="", batchOpen=null;   // 处理记录弹窗：上次的状态签名、用户展开的批次
 let currentTaskSeq=null, currentTaskOpen=false;
@@ -3763,7 +3773,8 @@ function submittableNotes(){return VIDEO?notes.filter(x=>x.status==="open"&&!fli
 function handPickNoteTag(x){
   const vr=x&&x.videoReview&&typeof x.videoReview==="object"?x.videoReview:null,st=videoNoteState(x);
   if(st==="returned")return vr&&vr.returnReason?tMsg("viewer.video.pickTag.returnedReason",{reason:clip(vr.returnReason,36)}):tMsg("viewer.video.pickTag.returned");
-  if(st==="needs_reply")return vr&&vr.reply?tMsg("viewer.video.pickTag.replied",{reply:clip(vr.reply,36)}):tMsg("viewer.video.pickTag.unanswered");
+  if(st==="replied")return vr.reply?tMsg("viewer.video.pickTag.replied",{reply:clip(vr.reply,36)}):tMsg("viewer.video.state.replied");
+  if(st==="needs_reply")return tMsg("viewer.video.pickTag.unanswered");
   if(st==="failed")return tMsg("viewer.video.pickTag.failed");
   if(st==="missing_evidence")return tMsg("viewer.video.pickTag.missingEvidence");
   if(st==="needs_relocate")return tMsg("viewer.video.pickTag.needsRelocate");
@@ -4181,7 +4192,7 @@ function loadDraft(){const d=drafts[P[i].n]||{};$("ntext").value=d.text||"";$("n
 function updatePageStat(){if(!P.length)return;const p=P[i];
   let extra=total?` · ${tMsg("viewer.timeStat",{at:mmss(cum[i]),total:mmss(total)})}`:"";
   if(VIDEO){const m=videoManifest(),vc=videoStatusCounts(notes);
-    extra+=` · ${tMsg("viewer.video.statLine",{version:m&&m.currentVersionId||"V1",pending:vc.pending_review,reply:vc.needs_reply,relocate:vc.needs_relocate,missing:vc.missing_evidence,failed:vc.failed,unsubmitted:vc.unsubmitted,approved:vc.approved})}`}
+    extra+=` · ${tMsg("viewer.video.statLine",{version:m&&m.currentVersionId||"V1",pending:vc.pending_review,reply:vc.needs_reply,replied:vc.replied,returned:vc.returned,relocate:vc.needs_relocate,missing:vc.missing_evidence,failed:vc.failed,unsubmitted:vc.unsubmitted,approved:vc.approved})}`}
   $("stat").textContent=tMsg("viewer.pageStat",{page:p.n,total:P[N-1].n})+extra}
 function render(){
   const p=P[i], s=secOf(p.n);

@@ -567,6 +567,7 @@ def batches_text(
                     "cli.batch.videoStats",
                     pending=vs.get("pendingReviewCount", 0),
                     reply=vs.get("needsReplyCount", 0),
+                    replied=vs.get("repliedCount", 0),
                     relocate=vs.get("needsRelocateCount", 0),
                     missing=vs.get("missingEvidenceCount", 0),
                     failed=vs.get("failedCount", 0),
@@ -865,7 +866,7 @@ def _format_vr_history_entry(entry: dict[str, Any], t: Any) -> str:
         return t(
             "cli.show.videoReview.historyEntry", version=ver, state=t("cli.batch.trail.action.relocated"), detail=detail
         )
-    state = str(entry.get("state") or entry.get("decision") or "pending_review")
+    state = video_review.display_state(entry) or "pending_review"
     state_label = label(t, f"cli.show.videoReview.state.{state}", state)
     tgt = entry.get("target") if isinstance(entry.get("target"), dict) else None
     parts = [
@@ -883,7 +884,7 @@ def _format_vr_history_entry(entry: dict[str, Any], t: Any) -> str:
 
 def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
     out: list[str] = []
-    state = str(vr.get("state") or "")
+    state = video_review.display_state(vr)
     state_label = label(t, f"cli.show.videoReview.state.{state}", state)
     if vr.get("versionId"):
         out.append(t("cli.show.videoReview.statusVersion", state=state_label, version=vr["versionId"]))

@@ -862,6 +862,133 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
 
 
 class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
+    def test_existing_reply_is_reported_by_the_cli_and_batch_review(self):
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n3", action="reply", reply="保留原配乐")
+        doc = store.load(self.review)
+        vr = next(n["videoReview"] for n in doc["notes"] if n["id"] == "n3")
+        vr.pop("batch")  # 旧记录只留下决定批次
+        vr.pop("evidenceRevision")
+        vr.pop("decisionInputRevision")
+        (self.review / store.NOTES_FILE).write_text(json.dumps(doc))
+        for lang, summary, status in (
+            ("zh-CN", "待答复 0，已答复 1", "回执状态：已答复"),
+            ("en", "needs reply 0, replied 1", "Receipt status: Replied"),
+        ):
+            with self.subTest(locale=lang):
+                rc, out, err = self._run_cli(["batches", str(self.review), "--locale", lang])
+                self.assertEqual(rc, 0, err)
+                self.assertIn(summary, out)
+                rc, out, err = self._run_cli(["show", str(self.review), "--all", "--locale", lang])
+                self.assertEqual(rc, 0, err)
+                self.assertIn(status, out)
+        skipped = store.handoff_finalize_all(self.review, {1: {"n3"}}, evidence={"n3": "legacy"})["skipped"]
+        self.assertEqual(next(row["detail"] for row in skipped if row["id"] == "n3"), "replied")
+        self.assertEqual(store.load(self.review), doc)
+
+    def test_evidence_history_links_receipt_relocation_return_and_reply(self):
+        self._deliver_v2_mixed_batch()
+        first = self._note("n4")["videoReview"]["evidenceRevision"]
+        _, moved, _ = store.relocate_video_note(
+            self.review,
+            "n4",
+            version_id="V2",
+            target={"kind": "range", "startFrame": 66, "endFrame": 96},
+            summary="调整转场",
+            expected_evidence=first,
+        )
+        second = moved["videoReview"]["evidenceRevision"]
+        returned = store.video_decision(self.review, "n4", action="return", reason="还需延长", expected_evidence=second)
+        review = returned["note"]["videoReview"]
+        self.assertEqual(
+            [entry["evidenceRevision"] for entry in review["history"]], [first, second, review["evidenceRevision"]]
+        )
+        self.assertEqual([entry["previousEvidenceRevision"] for entry in review["history"][1:]], [first, second])
+        self.assertEqual(len({first, second, review["evidenceRevision"]}), 3)
+        self.assertEqual(
+            [entry["action"] for entry in returned["note"]["trail"]], ["relocate", "relocated", "returned"]
+        )
+
+        original = self._note("n3")["videoReview"]["evidenceRevision"]
+        reply = store.video_decision(self.review, "n3", action="reply", reply="保留", expected_evidence=original)[
+            "note"
+        ]["videoReview"]
+        self.assertEqual(
+            (reply["history"][-1]["previousEvidenceRevision"], reply["history"][-1]["evidenceRevision"]),
+            (original, reply["evidenceRevision"]),
+        )
+        self.assertNotEqual(original, reply["evidenceRevision"])
+
+    def test_legacy_decisions_survive_relocation_attempts_and_stale_receipts(self):
+        store.handoff_submit(self.review, note_ids=["n3", "n4"])
+        store.handoff_claim(self.review, seq=1)
+        store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="partial",
+            finish=False,
+            movie=self._movie(self.v2_bytes, "v2.mp4"),
+            receipt=[
+                {"noteId": "n3", "outcome": "question", "question": "保留片头吗？"},
+                {"noteId": "n4", "outcome": "fixed", "summary": "旧版只有改动说明"},
+            ],
+        )
+        store.video_decision(self.review, "n3", action="reply", reply="保留")
+        store.video_decision(self.review, "n4", action="return", reason="调整字幕")
+        legacy = store.load(self.review)
+        # 旧写入方允许人工决定与待补定位的状态共存。
+        for note in legacy["notes"]:
+            if note["id"] in ("n3", "n4"):
+                note["videoReview"]["state"] = "missing_evidence"
+        (self.review / store.NOTES_FILE).write_text(json.dumps(legacy))
+        for nid, target in (
+            ("n3", {"kind": "frame", "frame": 16}),
+            ("n4", {"kind": "range", "startFrame": 60, "endFrame": 70}),
+        ):
+            with self.subTest(nid=nid):
+                before = self._note(nid)
+                revision = before["videoReview"]["evidenceRevision"]
+                with self.assertRaises(store.HandoffError) as protected:
+                    store.relocate_video_note(
+                        self.review, nid, version_id="V2", target=target, expected_evidence=revision
+                    )
+                self.assertEqual(protected.exception.code, "note-already-decided")
+                with self.assertRaises(store.HandoffError) as stale:
+                    store.video_receipt(
+                        self.review,
+                        seq=1,
+                        receipt_id="late-" + nid,
+                        finish=False,
+                        receipt=[{"noteId": nid, "outcome": "question", "question": "迟到的问题"}],
+                    )
+                self.assertEqual(stale.exception.code, "stale-receipt")
+                self.assertEqual(self._note(nid), before)
+        self.assertEqual(store.load(self.review), legacy)
+
+    def test_only_an_open_unanswered_question_accepts_a_reply(self):
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n1", action="return", reason="字幕需要再上移")
+        store.video_decision(self.review, "n2", action="approve")
+        for nid in ("n1", "n2", "n4", "n5", "n6"):
+            with self.subTest(nid=nid):
+                before = self._note(nid)
+                with self.assertRaises(store.HandoffError):
+                    store.video_decision(self.review, nid, action="reply", reply="保留片头")
+                self.assertEqual(self._note(nid), before)
+        first = {
+            "action": "reply",
+            "reply": "保留片头",
+            "expected_evidence": self._note("n3")["videoReview"]["evidenceRevision"],
+        }
+        saved = store.video_decision(self.review, "n3", **first)["note"]
+        self.assertTrue(store.video_decision(self.review, "n3", **first)["replayed"])
+        for request in ({"action": "reply", "reply": "改为动画"}, {"action": "return", "reason": "改为动画"}):
+            with self.subTest(action=request["action"]), self.assertRaises(store.HandoffError):
+                store.video_decision(
+                    self.review, "n3", expected_evidence=saved["videoReview"]["evidenceRevision"], **request
+                )
+            self.assertEqual(self._note("n3"), saved)
+
     def test_late_return_or_reply_cannot_restore_an_older_decision(self):
         self._deliver_v2_mixed_batch()
         for nid, action, field in (("n2", "return", "reason"), ("n3", "reply", "reply")):
@@ -872,6 +999,16 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
                 current = result["note"]["videoReview"]["evidenceRevision"]
                 self.assertNotEqual(current, original)
                 self.assertTrue(store.video_decision(self.review, nid, **first)["replayed"])
+                if action == "reply":
+                    store.handoff_submit(self.review, note_ids=[nid])
+                    store.handoff_claim(self.review, seq=2)
+                    store.video_receipt(
+                        self.review,
+                        seq=2,
+                        receipt_id="another-question",
+                        receipt=[{"noteId": nid, "outcome": "question", "question": "需要保留几帧？"}],
+                    )
+                    current = self._note(nid)["videoReview"]["evidenceRevision"]
                 store.video_decision(
                     self.review, nid, **{"action": action, field: "第二稿", "expected_evidence": current}
                 )
@@ -931,6 +1068,9 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         before_batches = len(store.handoff_load(self.review)["items"])
         self.assertEqual(before_batches, 1)
 
+        initial_stats = store.handoff_state(self.review)["latest"]["videoStats"]
+        self.assertEqual(initial_stats["needsReplyIds"], ["n3"])
+
         # V2 上：通过 n1（字幕），退回 n2（音量），答复 n3（待答复）
         store.video_decision(self.review, "n1", action="approve", expected_batch=1, expected_version="V2", by="page")
         ret = store.video_decision(
@@ -963,7 +1103,12 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         self.assertEqual(state["inFlightIds"], [])
         self.assertEqual(state["history"][0]["videoStats"]["approvedIds"], ["n1"])
         self.assertEqual(state["history"][0]["videoStats"]["returnedIds"], ["n2"])
-        self.assertEqual(state["history"][0]["videoStats"]["needsReplyIds"], ["n3"])
+        stats = state["history"][0]["videoStats"]
+        self.assertEqual((stats["needsReplyCount"], stats["needsReplyIds"]), (0, []))
+        self.assertEqual((stats["repliedCount"], stats["repliedIds"]), (1, ["n3"]))
+        self.assertEqual(sum(value for key, value in stats.items() if key.endswith("Count")), 6)
+        self.assertEqual(rep["handoff"]["latest"]["videoStats"], stats)
+        self.assertEqual(hdoc["items"][0]["videoStats"], stats)
 
         n2 = self._note("n2")
         self.assertEqual(n2["status"], "open")
@@ -1364,6 +1509,21 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
             )
             self.assertEqual(c3, 200, raw3)
             self.assertEqual(json.loads(raw3)["note"]["videoReview"]["reply"], "保留原片头并渐隐")
+            for nid in ("n2", "n3", "n4", "n5"):
+                record = self._note(nid)
+                code, _, raw = serve._req(
+                    server.port,
+                    "POST",
+                    f"/api/notes/{nid}/video-decision",
+                    headers,
+                    {
+                        "action": "reply",
+                        "reply": "覆盖旧决定",
+                        "expectedEvidence": record["videoReview"]["evidenceRevision"],
+                    },
+                )
+                self.assertEqual((code, json.loads(raw)["code"]), (400, "video-not-awaiting-reply"))
+                self.assertEqual(self._note(nid), record)
         finally:
             store.locked, ledger.metadata_lock = orig_store_locked, orig_meta_lock
 
@@ -1691,12 +1851,12 @@ class VideoPageReworkUITests(unittest.TestCase):
             self.assertIn('data-act="video-approve"', actual["noteCards"][0])
             self.assertIn('data-act="video-return-open"', actual["noteCards"][0])
             self.assertNotIn('data-act="reopen"', actual["noteCards"][0])
-            # n2 needs_reply has no batch pick, has escaped reply + inline reply form, no approve button
+            # The saved reply is escaped and read only.
             self.assertNotIn('data-act="video-batch-pick"', actual["vrCards"][1])
             self.assertNotIn("<script>alert(1)</script>", actual["vrCards"][1])
             self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", actual["vrCards"][1])
-            self.assertIn('data-vid-reply="n2"', actual["vrCards"][1])
-            self.assertIn('data-act="video-reply-save"', actual["vrCards"][1])
+            self.assertNotIn('data-vid-reply="n2"', actual["vrCards"][1])
+            self.assertNotIn('data-act="video-reply-save"', actual["vrCards"][1])
             self.assertNotIn('data-act="video-approve"', actual["noteCards"][1])
             self.assertNotIn('data-act="resolve"', actual["noteCards"][1])
             # n3 approved is immutable in card UI: no batch pick, no edit, no reopen, no approve
