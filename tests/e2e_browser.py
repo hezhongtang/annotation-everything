@@ -10542,14 +10542,26 @@ def video_cut_and_relocate(page, review, identity, movies):
     video_compare(page, relocate)
     ok(not page.locator("#videoCompareApprove").is_visible(), "待定位的镜头没有通过入口")
     kind = page.locator("#videoRelocateKind")
-    kind.press("Space")
+    kind.evaluate(
+        "el => { window.__aeSelectKeys = []; el.addEventListener('keydown', e => window.__aeSelectKeys.push([e.key, e.defaultPrevented])); }"
+    )
+    kind.press("p")
     kind.press("ArrowDown")
-    kind.press("Enter")
-    assert kind.input_value() == "range"
-    kind.press("Space")
-    kind.press("ArrowUp")
-    kind.press("Enter")
-    assert kind.input_value() == "frame"
+    kind.press("ArrowLeft")
+    kind.press("ArrowRight")
+    assert page.locator("#videoCompareStage").is_visible() and not page.locator("#pinBtn.on").is_visible()
+    assert page.evaluate("window.__aeSelectKeys") == [
+        ["p", False],
+        ["ArrowDown", False],
+        ["ArrowLeft", False],
+        ["ArrowRight", False],
+    ]
+    kind.evaluate("el => { el.blur(); el.focus(); }")
+    kind.press("c")
+    assert kind.input_value() == "cut"
+    kind.evaluate("el => { el.blur(); el.focus(); }")
+    kind.press("f")
+    assert kind.input_value() == "frame" and page.locator("#videoCompareStage").is_visible()
     page.fill("#videoRelocateFrame", "67")
     summary = "Found original frame 55 after intro 片头"
     reason = "Matched the first shot after the cut 剪口"

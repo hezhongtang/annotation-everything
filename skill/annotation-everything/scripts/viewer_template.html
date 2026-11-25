@@ -2643,7 +2643,7 @@ async function videoRelocateSave(){
   try{
     const res=await api("POST","/api/notes/"+encodeURIComponent(videoCompareNoteId)+"/video-relocate",body);
     videoEvidenceToReview.delete(videoCompareNoteId);
-    videoApproveSel.delete(videoCompareNoteId);
+    if(typeof videoApproveSel!=="undefined")videoApproveSel.delete(videoCompareNoteId);
     if(res&&res.doc)applyServer({...res.doc,...(res.handoff?{handoff:res.handoff}:{})},true);
     if(res&&res.note){videoRelocateOpen=false;videoCompareOpen(res.note,false)}
     toast(tMsg("viewer.video.relocate.saved"));
