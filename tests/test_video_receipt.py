@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -1720,6 +1721,59 @@ class VideoReceiptCliAndServerTests(unittest.TestCase):
             (finished["replayed"], finished["status"], finished["currentVersionId"]), (False, "drafted", "V3")
         )
         self.assertEqual([r["receiptId"] for r in finished["batch"]["videoReceipts"]], ["part-one", "part-two"])
+
+    def test_receipt_batch_mismatch_uses_locale_separator_and_render_error_prints_generated_id(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        code, output, err = self.run_cli(["video-receipt", str(self.review), "--render-error", "synthetic failure"])
+        self.assertEqual(code, 0, err)
+        generated = re.search(r"\b(vr-[a-z0-9]+)\b", output)
+        self.assertIsNotNone(generated, output)
+        rid = generated.group(1)
+        code, replay_out, err = self.run_cli(
+            ["video-receipt", str(self.review), "--render-error", "synthetic failure", "--receipt-id", rid, "--json"]
+        )
+        self.assertEqual(code, 0, err)
+        replay = json.loads(replay_out)
+        self.assertTrue(replay["replayed"])
+        self.assertEqual(len(replay["batch"]["videoReceipts"]), 1)
+
+        store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="shared-id",
+            receipt=[{"noteId": "n1", "outcome": "question", "question": "确认第 1 批？"}],
+        )
+        store.handoff_submit(self.review, note_ids=["n2"])
+        self.assertEqual(self.run_cli(["claim", str(self.review)])[0], 0)
+        store.video_receipt(
+            self.review,
+            seq=2,
+            receipt_id="batch-two",
+            receipt=[{"noteId": "n2", "outcome": "question", "question": "确认第 2 批？"}],
+        )
+        handoff = store.handoff_load(self.review)
+        handoff["items"][1].setdefault("videoReceipts", []).append({"receiptId": "shared-id", "items": []})
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff, ensure_ascii=False))
+        store.handoff_submit(self.review, note_ids=["n3"])
+        self.assertEqual(self.run_cli(["claim", str(self.review), "--seq", "3"])[0], 0)
+        for lang, expected in (("zh-CN", "1、2"), ("en", "1, 2")):
+            code, _, err = self.run_cli(
+                [
+                    "video-receipt",
+                    str(self.review),
+                    "--seq",
+                    "3",
+                    "--receipt-id",
+                    "shared-id",
+                    "--render-error",
+                    "again",
+                    "--locale",
+                    lang,
+                ]
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIn(expected, err)
 
     def test_repairing_a_decode_failure_requires_a_new_receipt_id(self):
         store.handoff_submit(self.review, note_ids=["n1", "n3"])

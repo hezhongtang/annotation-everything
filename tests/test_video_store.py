@@ -253,6 +253,7 @@ class VideoStoreTests(unittest.TestCase):
                             self.assertEqual(store.load(d)["notes"][1:], protected)
 
     def test_newer_location_version_survives_without_being_used_as_v1(self):
+        self.addCleanup(i18n.set_locale, i18n.current_locale())
         future = {"v": 2, "versionId": "V9", "future": {"opaque": [1, 2, 3]}}
         _doc, note = store.add(review_dir(), {"page": 1, "text": "未来格式", "video": future})
         self.assertEqual(note["video"], future)
@@ -264,6 +265,7 @@ class VideoStoreTests(unittest.TestCase):
                 self.assertIn("v1", " ".join(shown))
 
     def test_cli_show_describes_registered_frame_and_range_in_both_languages(self):
+        self.addCleanup(i18n.set_locale, i18n.current_locale())
         manifest = {"video": {"currentVersionId": "V1"}}
         for locale in ("zh-CN", "en"):
             i18n.set_locale(locale)

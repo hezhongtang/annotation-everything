@@ -465,7 +465,7 @@ def _is_review_directory(directory: Path) -> bool:
     try:
         for name in ("review.json", "index.html"):
             info = (directory / name).lstat()
-            if not stat.S_ISREG(info.st_mode) or fsutil._is_reparse_or_symlink(info):
+            if not stat.S_ISREG(info.st_mode) or fsutil.is_reparse_or_symlink(info):
                 return False
     except OSError:
         return False
@@ -603,19 +603,13 @@ def _private_evidence_directory(directory, *, create):
         if create:
             ledger._ensure_home()
             directory.mkdir(mode=0o700, exist_ok=True)
-        info = directory.lstat()
+        fsutil.check_private_dir(directory, exact_mode=0o700)
     except OSError as exc:
         if not create and isinstance(exc, FileNotFoundError):
             return False
         raise EngineError("renderEvidenceDirectory", f"{directory}: {exc}") from exc
-    if not stat.S_ISDIR(info.st_mode) or fsutil._is_reparse_or_symlink(info):
-        raise EngineError("renderEvidenceDirectory", str(directory))
-    if fsutil.is_windows():
-        private = fsutil._win_same_owner(directory)
-    else:
-        private = info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700
-    if not private:
-        raise EngineError("renderEvidenceDirectory", str(directory))
+    except ValueError as exc:
+        raise EngineError("renderEvidenceDirectory", str(directory)) from exc
     return True
 
 

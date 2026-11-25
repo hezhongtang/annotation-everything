@@ -10564,7 +10564,9 @@ def video_cut_and_relocate(page, review, identity, movies):
         and note["videoReview"]["summary"] == summary
         and note["videoReview"]["relocatedReason"] == reason
         and note["videoReview"]["state"] == "pending_review"
-        and page.locator("#videoCompareApprove").is_visible(),
+        and page.locator("#videoCompareApprove").is_visible()
+        and page.locator("#videoCompareApprove").is_enabled()
+        and not page.locator("#videoCompareEvidenceNotice").is_visible(),
         "人工重定位保留 V1 第 55 帧，并将 V2 第 67 帧送回复核",
     )
     page.locator("#videoCompareClose").press("p")

@@ -168,10 +168,13 @@ def unlock_fd(fd: int) -> None:
     raise RuntimeError("当前平台缺少可用的文件锁实现")
 
 
-def _is_reparse_or_symlink(info: os.stat_result) -> bool:
+def is_reparse_or_symlink(info: os.stat_result) -> bool:
     if stat.S_ISLNK(info.st_mode):
         return True
     return bool((getattr(info, "st_file_attributes", 0) or 0) & _WIN_REPARSE_POINT_ATTR)
+
+
+_is_reparse_or_symlink = is_reparse_or_symlink
 
 
 def _win_same_owner(path: Path) -> bool:
@@ -284,6 +287,28 @@ def check_private_regular_file(
             raise ValueError(priv_msg)
     if max_bytes is not None and info.st_size > max_bytes:
         raise ValueError(size_msg)
+    return info
+
+
+def check_private_dir(
+    path: Path,
+    *,
+    exact_mode: int | None = None,
+    error_prefix: str = "dir",
+    private_error: str | None = None,
+) -> os.stat_result:
+    """校验 path 为当前用户私有的真实目录（非符号链接/重解析点）。"""
+    info = path.lstat()
+    priv_msg = private_error or f"private-{error_prefix}-required"
+    if not stat.S_ISDIR(info.st_mode) or is_reparse_or_symlink(info):
+        raise ValueError(priv_msg)
+    if is_windows():
+        if not _win_same_owner(path):
+            raise ValueError(priv_msg)
+    else:
+        bad_mode = stat.S_IMODE(info.st_mode) != exact_mode if exact_mode is not None else bool(info.st_mode & 0o077)
+        if info.st_uid != os.getuid() or bad_mode:
+            raise ValueError(priv_msg)
     return info
 
 

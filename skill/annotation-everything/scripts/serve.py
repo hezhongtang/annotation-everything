@@ -773,12 +773,10 @@ class Handler(BaseHTTPRequestHandler):
         except Reject as e:
             self._reject(e)
         except store.VideoCommitError as e:
-            message = (
-                self._t("serve.err.foreignVideoCommit")
-                if e.code == "foreign-video-commit"
-                else self._t("serve.err.damagedVideoCommit", part=e.part)
+            self._json(
+                409,
+                {"app": APP, "code": e.code, "error": e.detail(self._t), "params": {"confirmation": e.confirmation}},
             )
-            self._json(409, {"app": APP, "code": e.code, "error": message, "params": {"confirmation": e.confirmation}})
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
             detail: dict[str, Any] = {
                 "error": str(e) if isinstance(e, store.NoteError) else self._t("serve.err.badCharacters"),
@@ -1018,7 +1016,12 @@ class Handler(BaseHTTPRequestHandler):
     def _handoff_error_text(self, error: store.HandoffError) -> str:
         if self.server.locale == "en" and error.code in i18n.HANDOFF_ERROR_KEYS:
             try:
-                return self._t(i18n.HANDOFF_ERROR_KEYS[error.code], **error.params)
+                params = dict(error.params)
+                if error.code == "receipt-batch-mismatch" and isinstance(params.get("batches"), list):
+                    params["batches"] = self._t("cli.hand.itemSep").join(str(n) for n in params["batches"])
+                elif error.code == "incomplete-video-receipt" and isinstance(params.get("ids"), list):
+                    params["ids"] = self._t("cli.hand.itemSep").join(str(x) for x in params["ids"])
+                return self._t(i18n.HANDOFF_ERROR_KEYS[error.code], **params)
             except (KeyError, i18n.MissingMessageError):
                 pass
         return str(error)

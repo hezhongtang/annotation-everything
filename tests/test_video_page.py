@@ -50,7 +50,9 @@ def compare_ui(expression):
         const makeNote=id=>({id,status:'drafted',text:id,video:{versionId:'V1',frame:6},
           videoReview:{state:'pending_review',batch:1,versionId:'V2',summary:'First receipt',target:{kind:'frame',frame:15}}});
         let notes=[makeNote('caption'),makeNote('music')],mode='server';
-        const calls=[],api=async (method,path,body)=>{calls.push({path,body});return {}},toast=()=>{},renderFinalizeAll=()=>{};
+        const calls=[],toast=()=>{},renderFinalizeAll=()=>{};
+        let api=async (method,path,body)=>{calls.push({path,body});return {}};
+        let applyServer=doc=>{if(doc?.notes)notes=doc.notes;videoSyncApproveSel();videoCompareSync()};
         class Control extends EventTarget {
           constructor(){super();this.style={};this.value='';this.textContent='';this.readyState=2;this.paused=true}
           click(){if(!this.disabled&&!this.hidden)return this.onclick?.()}
@@ -251,6 +253,89 @@ class VideoCompareEvidenceTests(unittest.TestCase):
                     },
                 }
             ],
+        )
+
+    def test_relocation_keeps_approval_ready_without_stale_evidence_lock(self):
+        result = compare_ui(
+            """
+            setVideoServerFeatures({features:['video-decisions','video-evidence-revision','video-relocate','video-relocate-revision']});
+            videoCompareClose();
+            notes[0]={id:'caption',status:'open',text:'caption',video:{versionId:'V1',frame:6},
+              videoReview:{state:'needs_relocate',batch:1,versionId:'V2',evidenceRevision:'reloc-1',relocateReason:'Check cut'}};
+            videoCompareOpen(notes[0]);
+            get('videoRelocateKind').value='frame';
+            get('videoRelocateFrame').value='24';
+            get('videoRelocateSummary').value='Confirmed new frame';
+            get('videoRelocateReason').value='Matched cut';
+            api=async (method,path,body)=>{
+              calls.push({path,body});
+              const updated={...notes[0],status:'drafted',draftBatch:1,videoReview:{
+                ...notes[0].videoReview,state:'pending_review',summary:body.summary,
+                relocatedReason:body.reason,target:body.target,
+                decisionInputRevision:body.expectedEvidence,evidenceRevision:'reloc-2'}};
+              notes=[updated,notes[1]];
+              return {note:updated,doc:{notes}};
+            };
+            const saved=await videoRelocateSave();
+            const approve=get('videoCompareApprove'),notice=get('videoCompareEvidenceNotice');
+            videoSelectAllReady();
+            const picked=videoSelectedBatches({batches:[{seq:1,ids:['caption','music']}]}).batches[0]?.ids;
+            return {
+              saved:!!saved,
+              notice:!notice.hidden,
+              canApprove:!approve.hidden&&!approve.disabled,
+              needsReview:videoEvidenceNeedsReview(notes[0]),
+              picked,
+            };
+            """,
+        )
+        self.assertEqual(
+            result,
+            {"saved": True, "notice": False, "canApprove": True, "needsReview": False, "picked": ["caption", "music"]},
+        )
+
+    def test_return_clears_evidence_lock_before_next_batch(self):
+        result = compare_ui(
+            """
+            setVideoServerFeatures({features:['video-decisions','video-evidence-revision','video-feedback-revision']});
+            replace('late-1',24);
+            const lockedBefore=videoEvidenceNeedsReview(notes[0]);
+            api=async (method,path,body)=>{
+              calls.push({path,body});
+              const returned={...notes[0],status:'open',videoReview:{
+                ...notes[0].videoReview,state:'returned',decision:'returned',
+                decisionInputRevision:body.expectedEvidence,evidenceRevision:'ret-1',returnReason:body.reason}};
+              notes=[returned,notes[1]];
+              return {note:returned,doc:{notes}};
+            };
+            const returnedRes=await submitVideoDecision('caption','return',{reason:'Shift again'});
+            videoCompareClose();
+            notes[0]={...makeNote('caption'),videoReview:{...makeNote('caption').videoReview,batch:2,evidenceRevision:'next-batch-1'}};
+            videoSyncApproveSel();
+            videoSelectAllReady();
+            const picked=videoSelectedBatches({batches:[{seq:2,ids:['caption']}]}).batches[0]?.ids;
+            videoCompareOpen(notes[0]);
+            const approve=get('videoCompareApprove'),notice=get('videoCompareEvidenceNotice');
+            return {
+              returned:!!returnedRes,
+              lockedBefore,
+              lockedAfter:videoEvidenceNeedsReview(notes[0]),
+              picked,
+              notice:!notice.hidden,
+              canApprove:!approve.hidden&&!approve.disabled,
+            };
+            """,
+        )
+        self.assertEqual(
+            result,
+            {
+                "returned": True,
+                "lockedBefore": True,
+                "lockedAfter": False,
+                "picked": ["caption"],
+                "notice": False,
+                "canApprove": True,
+            },
         )
 
 
@@ -1028,6 +1113,40 @@ class VideoPlaybackTests(unittest.TestCase):
             self.assertEqual(
                 result["comparison"][side], {"reopened": [True, start, True], "played": [True, start, False]}
             )
+
+    def test_compare_locale_refresh_updates_frame_readout_and_media_notices(self):
+        result = playback_page(
+            """
+            videoCompareOpen(range);
+            before.metadata(320,240);after.metadata(320,240);
+            before.readyState=2;after.readyState=2;
+            videoCompareLayout();
+            const english={
+              beforeFrame:get('videoCompareBeforeFrame').textContent,
+              afterFrame:get('videoCompareAfterFrame').textContent,
+              beforeNotice:get('videoCompareBeforeMediaNotice').textContent,
+              afterNotice:get('videoCompareAfterMediaNotice').textContent,
+            };
+            uiLocale='zh-CN';
+            videoCompareRefreshLocale();
+            const chinese={
+              beforeFrame:get('videoCompareBeforeFrame').textContent,
+              afterFrame:get('videoCompareAfterFrame').textContent,
+              beforeNotice:get('videoCompareBeforeMediaNotice').textContent,
+              afterNotice:get('videoCompareAfterMediaNotice').textContent,
+            };
+            return {english,chinese};
+            """,
+            locale="en",
+        )
+        self.assertIn("Current frame", result["english"]["beforeFrame"])
+        self.assertIn("Current frame", result["english"]["afterFrame"])
+        self.assertIn("decoded", result["english"]["beforeNotice"])
+        self.assertIn("decoded", result["english"]["afterNotice"])
+        self.assertIn("当前帧", result["chinese"]["beforeFrame"])
+        self.assertIn("当前帧", result["chinese"]["afterFrame"])
+        self.assertIn("解码", result["chinese"]["beforeNotice"])
+        self.assertIn("解码", result["chinese"]["afterNotice"])
 
 
 if __name__ == "__main__":

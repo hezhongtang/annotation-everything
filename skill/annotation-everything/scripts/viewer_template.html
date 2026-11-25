@@ -2288,6 +2288,7 @@ async function submitVideoDecision(noteId,action,opts={}){
   try{
     if(action==="approve"&&!await videoApprovalPlayable([note],videoManifest())){onErr(tMsg("viewer.video.playbackUnavailable"));return null}
     const res=await api("POST","/api/notes/"+encodeURIComponent(noteId)+"/video-decision",body);
+    videoEvidenceToReview.delete(noteId);
     if(action==="return"&&typeof videoReturnOpen!=="undefined"&&videoReturnOpen===noteId){
       videoReturnOpen=null;if(typeof videoReturnBuf!=="undefined")delete videoReturnBuf[noteId]}
     if(action==="reply"&&typeof videoReplyBuf!=="undefined")delete videoReplyBuf[noteId];
@@ -2482,9 +2483,10 @@ function videoCompareOpen(note,openRelocate=false){
   if(!VIDEO||!note)return;
   const pair=videoCompareCurrentPair(note);if(!pair)return;
   const wasPending=videoEvidenceNeedsReview(note);
-  if(note.status==="resolved"||pair.state==="approved")videoEvidenceToReview.delete(note.id);
-  else if(videoCompareNoteId===note.id&&videoComparePairState.evidence!==pair.evidence
-    &&note.videoReview?.decisionInputRevision!==videoComparePairState.evidence)videoEvidenceToReview.set(note.id,pair.evidence);
+  if(note.status==="resolved"||["approved","returned","replied"].includes(pair.state))videoEvidenceToReview.delete(note.id);
+  else if(videoCompareNoteId===note.id&&videoComparePairState.evidence!==pair.evidence){
+    if(note.videoReview?.decisionInputRevision===videoComparePairState.evidence)videoEvidenceToReview.delete(note.id);
+    else videoEvidenceToReview.set(note.id,pair.evidence)}
   if(videoCompareNoteId!==note.id||videoComparePairState?.evidence!==pair.evidence)videoCompareReturnOpen=false;
   videoCompareNoteId=note.id;videoComparePairState=pair;videoCompareSig=videoKey(pair);
   const vp=sr.getElementById("videoViewport"),ctrl=sr.getElementById("videoControls"),cs=sr.getElementById("videoCompareStage"),mainPlayer=typeof videoEl==="function"?videoEl():sr.getElementById("videoPlayer");
@@ -2588,7 +2590,8 @@ function videoCompareRefreshLocale(){
       notesOut.push(tMsg("viewer.video.approvedInfo",{version:pair.after.versionId||"—",batch:pair.after.decisionBatch!=null?pair.after.decisionBatch:(pair.batch!=null?pair.batch:"—"),by:pair.after.decidedBy||"page"}));
     reasonEl.hidden=!notesOut.length;reasonEl.textContent=notesOut.join(" · ")}
   const histEl=sr.getElementById("videoCompareHistory");
-  if(histEl){const items=pair.after.history||[];histEl.hidden=!items.length;histEl.textContent=items.map(h=>h.text).join(" | ")}}
+  if(histEl){const items=pair.after.history||[];histEl.hidden=!items.length;histEl.textContent=items.map(h=>h.text).join(" | ")}
+  videoCompareLayout()}
 function videoCompareSync(){
   if(!videoCompareNoteId)return;
   const found=notes.find(n=>n.id===videoCompareNoteId);
@@ -2639,6 +2642,8 @@ async function videoRelocateSave(){
   if(reason)body.reason=reason;
   try{
     const res=await api("POST","/api/notes/"+encodeURIComponent(videoCompareNoteId)+"/video-relocate",body);
+    videoEvidenceToReview.delete(videoCompareNoteId);
+    videoApproveSel.delete(videoCompareNoteId);
     if(res&&res.doc)applyServer({...res.doc,...(res.handoff?{handoff:res.handoff}:{})},true);
     if(res&&res.note){videoRelocateOpen=false;videoCompareOpen(res.note,false)}
     toast(tMsg("viewer.video.relocate.saved"));
@@ -3398,13 +3403,17 @@ let videoApproveSel=new Map(),videoReturnOpen=null,videoReturnBuf={},videoReplyB
 function videoSyncApproveSel(){
   if(!VIDEO){videoApproveSel.clear();return}
   const byId=new Map(notes.map(n=>[n.id,n])),manifest=videoManifest();
-  for(const id of videoEvidenceToReview.keys()){
+  for(const [id,revision] of [...videoEvidenceToReview.entries()]){
+    const note=byId.get(id),st=note?videoNoteState(note):"";
+    if(!note||note.status==="resolved"||["approved","returned","replied"].includes(st))videoEvidenceToReview.delete(id);
+    else if(note.status==="drafted"){
+      if(note.videoReview?.decisionInputRevision===revision)videoEvidenceToReview.delete(id);
+      else videoEvidenceToReview.set(id,videoEvidence(note))}
+    else if(videoCompareNoteId!==id)videoEvidenceToReview.delete(id)}
+  for(const [id,revision] of [...videoApproveSel.entries()]){
     const note=byId.get(id);
-    if(!note||note.status==="resolved")videoEvidenceToReview.delete(id);
-    else if(note.status==="drafted")videoEvidenceToReview.set(id,videoEvidence(note))}
-  for(const [id,revision] of videoApproveSel){
-    const note=byId.get(id);
-    if(note?.status==="drafted"&&videoEvidence(note)!==revision)videoEvidenceToReview.set(id,videoEvidence(note));
+    if(note?.status==="drafted"&&videoEvidence(note)!==revision&&note.videoReview?.decisionInputRevision!==revision)
+      videoEvidenceToReview.set(id,videoEvidence(note));
     if(!videoBatchApprovable(note,manifest))videoApproveSel.delete(id)}}
 function videoToggleApprovePick(id,checked){
   const x=notes.find(n=>n.id===id);

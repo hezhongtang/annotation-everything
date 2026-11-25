@@ -634,6 +634,16 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             status, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": headers["Host"]})
             self.assertFalse(json.loads(raw).get("videoRecoveryPending"))
 
+    def test_recovery_conflict_uses_localized_handoff_error(self):
+        self.pending_pair()
+        with self.review_http() as (server, headers):
+            server.locale = "en"
+            status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {"preserve": "stale-token"})
+            payload = json.loads(raw)
+            self.assertEqual((status, payload["code"]), (400, "video-commit-changed"))
+            self.assertIn("Recover video review", payload["error"])
+            self.assertNotIn("恢复视频审阅", payload["error"])
+
     def test_recovery_resumes_each_interrupted_audit_append_exactly_once(self):
         from unittest.mock import patch
 

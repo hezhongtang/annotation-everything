@@ -36,7 +36,7 @@ def interaction_program(parts, setup, expression, locale="en"):
     program = "\n".join(
         [
             "const CATALOGS=" + json.dumps(catalogs, ensure_ascii=False) + ";",
-            "const uiLocale=" + json.dumps(locale) + ";",
+            "let uiLocale=" + json.dumps(locale) + ";",
             runtime,
             "const escH=s=>String(s??'').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));",
             "const elements=new Map(); const $=id=>{if(!elements.has(id))elements.set(id,{innerHTML:'',textContent:'',setAttribute(){},classList:{contains(){return false},toggle(){},remove(){}}});return elements.get(id)};",

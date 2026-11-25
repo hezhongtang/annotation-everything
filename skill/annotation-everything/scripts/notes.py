@@ -399,6 +399,8 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
         params.update(count=len(params["ids"]), ids=t("cli.hand.itemSep").join(params["ids"]))
     elif error.code == "incomplete-video-receipt":
         params["ids"] = t("cli.hand.itemSep").join(params["ids"])
+    elif error.code == "receipt-batch-mismatch" and isinstance(params.get("batches"), list):
+        params["batches"] = t("cli.hand.itemSep").join(str(n) for n in params["batches"])
     if error.code == "ambiguous-batches":
         params["batches"] = t("cli.hand.itemSep").join(
             t("cli.hand.error.batchState", seq=seq, status=label(t, STATUS_KEY.get(status, ""), status))
@@ -2178,6 +2180,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     "cli.videoReceipt.failureRecorded",
                     seq=result["seq"],
                     reason=result["failure"].get("reason") or "",
+                    receiptId=result["receiptId"],
                     version=result["currentVersionId"],
                 )
             )

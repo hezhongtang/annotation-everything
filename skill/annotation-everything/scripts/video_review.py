@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
@@ -15,7 +16,6 @@ import os
 import re
 import struct
 import sys
-import stat
 from datetime import datetime, timezone
 from fractions import Fraction
 from functools import lru_cache
@@ -408,24 +408,22 @@ def _staging_slot(review_dir: Path, *, create: bool = False) -> Path | None:
         media_info = media.lstat()
     except FileNotFoundError:
         return None
-    if fsutil._is_reparse_or_symlink(media_info):
+    if fsutil.is_reparse_or_symlink(media_info):
         raise MediaError("directorySymlink")
     directory = media / ".ae-staging"
     owner = directory / ".ae-staged-mp4-v1"
     try:
-        info = directory.lstat()
+        fsutil.check_private_dir(directory)
     except FileNotFoundError:
         if not create:
             return None
         directory.mkdir(mode=0o700)
-        info = directory.lstat()
-    if (
-        not stat.S_ISDIR(info.st_mode)
-        or fsutil._is_reparse_or_symlink(info)
-        or (not fsutil.is_windows() and (info.st_uid != os.getuid() or info.st_mode & 0o077))
-        or (fsutil.is_windows() and not fsutil._win_same_owner(directory))
-    ):
-        raise MediaError("unregisteredCopy", path="media/.ae-staging")
+        try:
+            fsutil.check_private_dir(directory)
+        except ValueError as exc:
+            raise MediaError("unregisteredCopy", path="media/.ae-staging") from exc
+    except ValueError as exc:
+        raise MediaError("unregisteredCopy", path="media/.ae-staging") from exc
     try:
         fsutil.check_private_regular_file(owner, max_bytes=0)
     except FileNotFoundError:
@@ -440,12 +438,32 @@ def _staging_slot(review_dir: Path, *, create: bool = False) -> Path | None:
     return directory / "copy.tmp"
 
 
+def _release_staging_slot(slot: Path) -> None:
+    """在元数据锁内删除本次暂存副本；私有槽为空时一并回收归属标记与目录。"""
+    with contextlib.suppress(FileNotFoundError):
+        slot.unlink()
+    directory = slot.parent
+    owner = directory / ".ae-staged-mp4-v1"
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    if entries == [owner]:
+        with contextlib.suppress(OSError):
+            owner.unlink()
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+    elif not entries:
+        with contextlib.suppress(OSError):
+            directory.rmdir()
+
+
 def _remove_abandoned_staging(review_dir: Path, source: Path | None = None) -> None:
     slot = _staging_slot(review_dir)
     if slot is not None:
         if source is not None and Path(source).resolve() == slot.resolve():
             raise MediaError("unregisteredCopy", path="media/.ae-staging/copy.tmp")
-        slot.unlink(missing_ok=True)
+        _release_staging_slot(slot)
 
 
 def _stage_and_probe_mp4(
@@ -485,10 +503,7 @@ def _stage_and_probe_mp4(
             before_publish(version)
         os.link(temporary, target)
     finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        _release_staging_slot(temporary)
     return version
 
 

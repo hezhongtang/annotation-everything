@@ -169,13 +169,15 @@ class VideoCommitError(NoteError):
         self.code = "foreign-video-commit" if part == "owner" else "damaged-video-commit"
         super().__init__(self.localized(i18n.Translator(i18n.current_locale())))
 
-    def localized(self, t) -> str:
-        detail = (
+    def detail(self, t) -> str:
+        return (
             t("serve.err.foreignVideoCommit")
             if self.part == "owner"
             else t("serve.err.damagedVideoCommit", part=self.part)
         )
-        return t("cli.hand.recoverVideoCommit", detail=detail, action=t("viewer.video.recovery.button"))
+
+    def localized(self, t) -> str:
+        return t("cli.hand.recoverVideoCommit", detail=self.detail(t), action=t("viewer.video.recovery.button"))
 
 
 def _invalid_commit_part(review_dir: Path, changes: Any) -> str | None:
@@ -263,7 +265,7 @@ def _recover_video_commit(review_dir: Path, preserve: str | None = None) -> str 
             part = "JSON"
         if part is None:
             if preserve is not None:
-                raise NoteError("待恢复的记录已更换，请重新选择「恢复视频审阅」。")
+                raise HandoffError("待恢复的记录已更换，请重新选择「恢复视频审阅」。", code="video-commit-changed")
             _publish_video_commit(review_dir, journal, changes)
             return None
     error = VideoCommitError(part, hashlib.sha256(raw).hexdigest())
@@ -1910,7 +1912,11 @@ def delete(review_dir: Path, note_id: str, *, by: str = "page") -> dict[str, Any
             handoff = handoff_load(review_dir)
             batches = []
             for item in handoff["items"]:
-                if item.get("status") in IN_FLIGHT + ("drafted",) and note_id in (item.get("openIds") or []):
+                if (
+                    item.get("status") in IN_FLIGHT + ("drafted",)
+                    and note_id in (item.get("openIds") or [])
+                    and note_id not in (item.get("videoWithdrawals") or {})
+                ):
                     _withdraw_video_note(item, note_id, {"by": by, "at": now_iso()})
                     batches.append(item["seq"])
             if batches:
@@ -2292,7 +2298,12 @@ def _in_flight_ids(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> 
         t = [e for e in (by_id.get(nid) or {}).get("trail") or [] if isinstance(e, dict)]
         return bool(t) and t[-1].get("action") == "returned" and t[-1].get("batch") == seq
 
-    return {x for i in flight for x in (i.get("openIds") or []) if not returned(x, int(i.get("seq", 0)))}
+    return {
+        x
+        for i in flight
+        for x in (i.get("openIds") or [])
+        if x not in (i.get("videoWithdrawals") or {}) and not returned(x, int(i.get("seq", 0)))
+    }
 
 
 def handoff_state(
@@ -3328,18 +3339,19 @@ def _receipt_would_overwrite_feedback(note: dict, item: dict, vr: dict | None) -
 
 
 def _withdraw_video_note(item: dict, note_id: str, record: dict) -> None:
-    item.setdefault("videoWithdrawals", {})[note_id] = record
-    item["openIds"] = [nid for nid in item["openIds"] if nid != note_id]
+    item.setdefault("videoWithdrawals", {}).setdefault(note_id, record)
 
 
 def _missing_video_receipt_ids(item: dict, notes: list[dict]) -> list[str]:
     seq = item["seq"]
     present = {note["id"] for note in notes}
+    withdrawn = item.get("videoWithdrawals") if isinstance(item.get("videoWithdrawals"), dict) else {}
     for nid in item.get("openIds") or []:
-        if nid not in present:
+        if nid not in present and nid not in withdrawn:
             # 旧删除只改了批注文件。明确记录缺失，不推断操作者或删除时间。
             _withdraw_video_note(item, nid, {"source": "missing-note"})
-    selected = item.get("openIds") or []
+    withdrawn = item.get("videoWithdrawals") if isinstance(item.get("videoWithdrawals"), dict) else {}
+    selected = [nid for nid in (item.get("openIds") or []) if nid not in withdrawn]
     outstanding = set(selected)
     outstanding.difference_update(
         entry.get("noteId")
@@ -3420,11 +3432,12 @@ def _find_receipt_batch(items: list[dict], notes: list[dict], video: dict, seq: 
     if seq is None and len(owners) == 1:
         seq = next(iter(owners))
     if owners and seq not in owners:
-        batches = ", ".join(str(n) for n in sorted(owners))
+        owner_batches = sorted(owners)
+        batches = "、".join(str(n) for n in owner_batches)
         raise HandoffError(
             f"这份回执已登记在批次 {batches}。请用 --seq 指定原批次重试，新的交回请换用新的 --receipt-id。",
             code="receipt-batch-mismatch",
-            batches=batches,
+            batches=owner_batches,
         )
     item = _find_claimed_batch(items, seq)
     versions = {version for batch, version in recorded if batch == item["seq"] and isinstance(version, str)}
@@ -4724,10 +4737,11 @@ def relocate_video_note(
         next_state = "pending_review" if final_summary and batch_seq is not None else "missing_evidence"
 
         history = list(prev_vr.get("history") or []) if prev_vr and isinstance(prev_vr.get("history"), list) else []
+        prev_evidence = _video_evidence(note)
         evidence = secrets.token_hex(12)
         hist_entry: dict[str, Any] = {
             "evidenceRevision": evidence,
-            "previousEvidenceRevision": _video_evidence(note),
+            "previousEvidenceRevision": prev_evidence,
             "source": "relocate",
             "action": "relocate",
             "at": now,
@@ -4803,6 +4817,7 @@ def relocate_video_note(
                 note.pop(k, None)
 
         new_vr["evidenceRevision"] = evidence
+        new_vr["decisionInputRevision"] = prev_evidence
         note["videoReview"] = new_vr
         note["updatedAt"] = now
         trail_note = clean_reason or final_summary or None

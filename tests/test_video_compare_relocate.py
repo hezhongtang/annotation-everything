@@ -452,11 +452,14 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
 
     def _run_cli(self, argv):
         out, err = io.StringIO(), io.StringIO()
+        previous_locale = notes_cli.i18n.current_locale()
         with redirect_stdout(out), redirect_stderr(err):
             try:
                 code = notes_cli.main(argv)
             except SystemExit as exc:
                 code = int(exc.code) if isinstance(exc.code, int) else 2
+            finally:
+                notes_cli.i18n.set_locale(previous_locale)
         return code, out.getvalue(), err.getvalue()
 
     def test_server_video_relocate_endpoint_security_and_cli_show_trace(self):
@@ -622,13 +625,15 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
             self.assertEqual((stale, json.loads(raw)["code"]), (400, "stale-decision"))
         self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n3"), payload["note"])
 
-        # CLI show 中英文都能展示重定位记录
+        # CLI show 中英文都能展示重定位记录，且不污染进程语言
+        before_locale = notes_cli.i18n.current_locale()
         for lang, expected in (
             ("zh-CN", ("先前位置记录", "片头增长 12 帧", "24")),
             ("en", ("Prior location record", "24")),
         ):
             rc, sout, serr = self._run_cli(["show", str(self.review), "--all", "--locale", lang])
             self.assertEqual(rc, 0, serr)
+            self.assertEqual(notes_cli.i18n.current_locale(), before_locale)
             for token in expected:
                 self.assertIn(token, sout)
 
