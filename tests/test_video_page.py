@@ -36,7 +36,404 @@ def frame_anchor():
     }
 
 
+def compare_ui(expression):
+    """视频、DOM 和服务端返回值使用合成数据，控件接线与页面生成代码一致。"""
+    return interaction_program(
+        [
+            (START, END),
+            ("// ---------- 视频对照与重定位 ----------", "// ---------- 批注区："),
+            ("let videoApproveSel=", "function finalizeSkipText"),
+        ],
+        """
+        const version=id=>({versionId:id,url:'/'+id,frames:60,fps:30,timebase:{num:1,den:30},width:160,height:90});
+        const VIDEO={currentVersionId:'V2',versions:['V1','V2'].map(version)},videoManifest=()=>VIDEO;
+        const makeNote=id=>({id,status:'drafted',text:id,video:{versionId:'V1',frame:6},
+          videoReview:{state:'pending_review',batch:1,versionId:'V2',summary:'First receipt',target:{kind:'frame',frame:15}}});
+        let notes=[makeNote('caption'),makeNote('music')],mode='server';
+        const calls=[],toast=()=>{},renderFinalizeAll=()=>{};
+        let api=async (method,path,body)=>{calls.push({path,body});return {}};
+        let applyServer=doc=>{if(doc?.notes)notes=doc.notes;videoSyncApproveSel();videoCompareSync()};
+        class Control extends EventTarget {
+          constructor(){super();this.style={};this.value='';this.textContent='';this.readyState=2;this.paused=true}
+          click(){if(!this.disabled&&!this.hidden)return this.onclick?.()}
+          getAttribute(key){return this[key]}
+          removeAttribute(key){delete this[key]}
+          load(){if(this.onloadeddata)queueMicrotask(()=>this.onloadeddata?.())}
+          get currentTime(){return this.time||0}
+          set currentTime(value){this.time=value;if(this.onseeked)queueMicrotask(()=>this.onseeked?.())}
+          pause(){this.paused=true}
+        }
+        const controls=new Map(),get=id=>{
+          if(!controls.has(id))controls.set(id,new Control());return controls.get(id)};
+        const sr={getElementById:get},document={createElement:()=>new Control()};
+        const videoLayout=()=>{},videoFindVersion=id=>VIDEO.versions.find(v=>v.versionId===id);
+        """,
+        """
+        setVideoServerFeatures({features:['video-decisions','video-evidence-revision']});
+        videoCompareInit();
+        videoCompareOpen(notes[0]);
+        const replace=(revision,frame)=>{
+          notes[0]={...notes[0],videoReview:{...notes[0].videoReview,evidenceRevision:revision,
+            summary:'Replacement '+frame,target:{kind:'frame',frame}}};
+          videoCompareSync();
+        };
+        """
+        + expression,
+    )
+
+
+class VideoSourceDialogTests(unittest.TestCase):
+    def test_dialog_displays_the_compared_cuts_reasons_and_candidate_media_before_confirming(self):
+        result = interaction_program(
+            [("function sourceEntryLabel(", "// ---------- 导出 / 导入")],
+            """
+            const VIDEO=true,mode='server',sr={getElementById:$},renderHandSource=()=>{};
+            let srvNoVideoSource=false;
+            for(const name of ['Confirm','Root','Engine','Entry','Frames','Duration','Fps','Width','Height']){
+              const el=$('vsrc'+name);el.style={};el.value='';
+            }
+            const root='/synthetic/project',engine='remotion';
+            const entry=id=>({kind:'composition',id});
+            const review={width:640,height:360,fps:30,frames:180,duration:6};
+            const cut={width:320,height:180,fps:24,frames:72,duration:3};
+            const proposal={status:'pending',engine,root,entry:entry('Typed'),versionId:'V1',proposalRevision:'shown',
+              cutComparison:{review,movies:[{name:'out/demo.mp4',media:cut,differences:[{field:'frames',review:180,project:72}]},
+                {name:'out/second.mp4',media:null,diagnostic:{code:'boxDepth',params:{limit:2}}}]},
+              reasons:['mediaMismatch','entryNotListed'],candidates:[
+                {id:'c1',engine,root,entry:entry('Visible'),media:{width:960,height:540,fps:24,frames:48}},
+                {id:'c2',engine,root,entry:entry('Typed'),media:{height:180}}]};
+            const calls=[],api=async(method,path,body)=>{calls.push({path,body});return {sourceProject:proposal}};
+            const document={querySelector:()=>({value:'c1'})};
+            """,
+            """
+            $('vsrcRoot').value=root;$('vsrcEntry').value='Typed';$('vsrcEngine').value=engine;
+            await $('vsrcLink').onclick();
+            const text=$('vsrcState').innerHTML.replace(/<[^>]*>/g,' ');
+            await $('vsrcConfirm').onclick();
+            return [text,calls.at(-1).body];
+            """,
+        )
+        text, confirm = result
+        for fragment in (
+            "V1",
+            "640 × 360",
+            "180 frames",
+            "out/demo.mp4",
+            "out/second.mp4",
+            "MP4 box nesting exceeds the supported 2 levels",
+            "320 × 180",
+            "72 frames",
+            "reviewed 180",
+            "project 72",
+            "960 × 540",
+            "48 frames",
+            "unknown × 180",
+            "unknown fps",
+            "unknown frames",
+            "inspect",
+            "video_engines.py",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, text)
+        self.assertEqual(confirm, {"choice": "c1", "proposalRevision": "shown"})
+
+
+class VideoCompareEvidenceTests(unittest.TestCase):
+    def test_question_without_a_target_keeps_reply_and_displayed_version_during_other_receipt(self):
+        result = compare_ui(
+            """
+            videoCompareClose();
+            notes[0].status='open';notes[0].videoReview={state:'needs_reply',question:'Which frame?',evidenceRevision:'question'};
+            videoCompareOpen(notes[0]);
+            get('videoCompareReplyInput').value='Keep frame six 请保留';
+            VIDEO.versions.push(version('V3'));VIDEO.currentVersionId='V3';
+            notes[1].videoReview={...notes[1].videoReview,versionId:'V3',evidenceRevision:'music'};
+            videoCompareSync();
+            return [get('videoCompareReplyInput').value,get('videoCompareAfterInfo').textContent];
+            """,
+        )
+        self.assertEqual(result, ["Keep frame six 请保留", "V2"])
+
+    def test_new_receipt_first_opened_after_a_return_needs_no_extra_confirmation(self):
+        result = compare_ui(
+            """
+            notes[0].videoReview={...notes[0].videoReview,state:'returned',decision:'returned',
+              decisionInputRevision:'legacy',evidenceRevision:'returned',returnReason:'Please shift the title'};
+            videoCompareSync();
+            const returnNotice=!get('videoCompareEvidenceNotice').hidden;
+            videoCompareClose();
+            notes[0].videoReview={...makeNote('caption').videoReview,evidenceRevision:'next-batch',batch:2};
+            videoCompareOpen(notes[0]);
+            const approve=get('videoCompareApprove');
+            return {returnNotice,canApprove:!approve.hidden&&!approve.disabled};
+            """,
+        )
+        self.assertEqual(result, {"returnNotice": False, "canApprove": True})
+
+    def test_card_and_group_approval_wait_for_the_displayed_replacement(self):
+        result = compare_ui(
+            """
+            const picked=()=>videoSelectedBatches({batches:[{seq:1,ids:['caption','music']}]}).batches[0]?.ids;
+            videoSelectAllReady();const initial=picked();
+            replace('second',24);
+            videoCompareClose();videoSelectAllReady();
+            const waiting=picked();
+            await submitVideoDecision('caption','approve');
+            videoCompareOpen(notes[0]);
+            const after=get('videoCompareAfter'),ack=get('videoCompareAcknowledge');
+            after.readyState=1;after.dispatchEvent(new Event('emptied'));
+            await ack.click();const loading=get('videoCompareApprove').disabled;
+            after.readyState=2;after.dispatchEvent(new Event('loadeddata'));await ack.click();
+            videoSelectAllReady();const confirmed=picked();
+            await submitVideoDecision('caption','approve');
+            return {initial,waiting,loading,confirmed,calls};
+            """,
+        )
+        self.assertEqual(result["initial"], ["caption", "music"])
+        self.assertEqual(result["waiting"], ["music"])
+        self.assertTrue(result["loading"])
+        self.assertEqual(result["confirmed"], ["caption", "music"])
+        self.assertEqual([call["body"]["expectedEvidence"] for call in result["calls"]], ["second"])
+
+    def test_unrelated_receipts_and_replays_preserve_the_open_edit_and_playback(self):
+        result = compare_ui(
+            """
+            get('videoCompareToggleRelocate').click();
+            const summary=get('videoRelocateSummary'),player=get('videoCompareAfter');
+            summary.value='Unfinished 剪口';player.currentTime=1.1;player.paused=false;
+            const state=()=>[summary.value,player.currentTime,player.paused,get('videoCompareApprove').disabled];
+            notes=JSON.parse(JSON.stringify(notes));
+            videoCompareSync();const replay=state();
+            VIDEO.versions.push(version('V3'));VIDEO.currentVersionId='V3';
+            notes[1].videoReview={...notes[1].videoReview,versionId:'V3',evidenceRevision:'music-update'};
+            videoCompareSync();return {replay,other:state()};
+            """,
+        )
+        expected = ["Unfinished 剪口", 1.1, False, False]
+        self.assertEqual(result["replay"], expected)
+        self.assertEqual(result["other"], expected)
+
+    def test_replaced_evidence_needs_a_fresh_confirmation_for_each_revision(self):
+        result = compare_ui(
+            """
+            const approve=get('videoCompareApprove'),notice=get('videoCompareEvidenceNotice'),ack=get('videoCompareAcknowledge');
+            const canApprove=()=>!approve.hidden&&!approve.disabled;
+            const opened=canApprove();
+            replace('second',24);
+            const replacement={summary:get('videoCompareAfterReason').textContent,
+              warning:get('videoCompareEvidenceMessage').textContent,notice:!notice.hidden,blocked:!canApprove()};
+            await approve.click();
+            await ack.click();
+            const reviewed=canApprove();
+            videoCompareSync();
+            const replayed=canApprove();
+            replace('third',30);
+            const renewed=!canApprove();
+            await approve.click();
+            await ack.click();await approve.click();
+            return {opened,replacement,reviewed,replayed,renewed,calls};
+            """,
+        )
+        self.assertTrue(result["opened"])
+        self.assertTrue(result["replacement"]["blocked"])
+        self.assertTrue(result["replacement"]["notice"])
+        self.assertIn("updated", result["replacement"]["warning"].lower())
+        self.assertIn("Replacement 24", result["replacement"]["summary"])
+        self.assertTrue(result["reviewed"] and result["replayed"] and result["renewed"])
+        self.assertEqual(
+            result["calls"],
+            [
+                {
+                    "path": "/api/notes/caption/video-decision",
+                    "body": {
+                        "action": "approve",
+                        "expectedEvidence": "third",
+                        "expectedVersion": "V2",
+                        "expectedBatch": 1,
+                    },
+                }
+            ],
+        )
+
+    def test_relocation_keeps_approval_ready_without_stale_evidence_lock(self):
+        result = compare_ui(
+            """
+            setVideoServerFeatures({features:['video-decisions','video-evidence-revision','video-relocate','video-relocate-revision']});
+            videoCompareClose();
+            notes[0]={id:'caption',status:'open',text:'caption',video:{versionId:'V1',frame:6},
+              videoReview:{state:'needs_relocate',batch:1,versionId:'V2',evidenceRevision:'reloc-1',relocateReason:'Check cut'}};
+            videoCompareOpen(notes[0]);
+            get('videoRelocateKind').value='frame';
+            get('videoRelocateFrame').value='24';
+            get('videoRelocateSummary').value='Confirmed new frame';
+            get('videoRelocateReason').value='Matched cut';
+            api=async (method,path,body)=>{
+              calls.push({path,body});
+              const updated={...notes[0],status:'drafted',draftBatch:1,videoReview:{
+                ...notes[0].videoReview,state:'pending_review',summary:body.summary,
+                relocatedReason:body.reason,target:body.target,
+                decisionInputRevision:body.expectedEvidence,evidenceRevision:'reloc-2'}};
+              notes=[updated,notes[1]];
+              return {note:updated,doc:{notes}};
+            };
+            const saved=await videoRelocateSave();
+            const approve=get('videoCompareApprove'),notice=get('videoCompareEvidenceNotice');
+            videoSelectAllReady();
+            const picked=videoSelectedBatches({batches:[{seq:1,ids:['caption','music']}]}).batches[0]?.ids;
+            return {
+              saved:!!saved,
+              notice:!notice.hidden,
+              canApprove:!approve.hidden&&!approve.disabled,
+              needsReview:videoEvidenceNeedsReview(notes[0]),
+              picked,
+            };
+            """,
+        )
+        self.assertEqual(
+            result,
+            {"saved": True, "notice": False, "canApprove": True, "needsReview": False, "picked": ["caption", "music"]},
+        )
+
+    def test_return_clears_evidence_lock_before_next_batch(self):
+        result = compare_ui(
+            """
+            setVideoServerFeatures({features:['video-decisions','video-evidence-revision','video-feedback-revision']});
+            replace('late-1',24);
+            const lockedBefore=videoEvidenceNeedsReview(notes[0]);
+            api=async (method,path,body)=>{
+              calls.push({path,body});
+              const returned={...notes[0],status:'open',videoReview:{
+                ...notes[0].videoReview,state:'returned',decision:'returned',
+                decisionInputRevision:body.expectedEvidence,evidenceRevision:'ret-1',returnReason:body.reason}};
+              notes=[returned,notes[1]];
+              return {note:returned,doc:{notes}};
+            };
+            const returnedRes=await submitVideoDecision('caption','return',{reason:'Shift again'});
+            videoCompareClose();
+            notes[0]={...makeNote('caption'),videoReview:{...makeNote('caption').videoReview,batch:2,evidenceRevision:'next-batch-1'}};
+            videoSyncApproveSel();
+            videoSelectAllReady();
+            const picked=videoSelectedBatches({batches:[{seq:2,ids:['caption']}]}).batches[0]?.ids;
+            videoCompareOpen(notes[0]);
+            const approve=get('videoCompareApprove'),notice=get('videoCompareEvidenceNotice');
+            return {
+              returned:!!returnedRes,
+              lockedBefore,
+              lockedAfter:videoEvidenceNeedsReview(notes[0]),
+              picked,
+              notice:!notice.hidden,
+              canApprove:!approve.hidden&&!approve.disabled,
+            };
+            """,
+        )
+        self.assertEqual(
+            result,
+            {
+                "returned": True,
+                "lockedBefore": True,
+                "lockedAfter": False,
+                "picked": ["caption"],
+                "notice": False,
+                "canApprove": True,
+            },
+        )
+
+
 class VideoPagePureTests(unittest.TestCase):
+    def test_shortcuts_leave_shadow_form_keys_to_the_control(self):
+        result = interaction_program(
+            [
+                (
+                    'document.addEventListener("keydown",e=>{\n  if(overviewShown())return;',
+                    "// ---------- Analysis view helpers ----------",
+                )
+            ],
+            """
+            let onKey, markMode=false, remarkId=null, focus=false, i=0;
+            const document={addEventListener:(_,f)=>onKey=f,querySelector:()=>null};
+            const overviewShown=()=>false,analysisShown=()=>false;
+            const toggleFocus=()=>{focus=!focus},setMarkMode=on=>{markMode=on},go=k=>{i=k};
+            """,
+            """
+            const host={tagName:'DIV'};
+            const key=(name,origin,target=host)=>{
+              let consumed=false;
+              onKey({key:name,target,composedPath:()=>[origin,target],preventDefault(){consumed=true}});
+              return consumed;
+            };
+            const input={tagName:'INPUT'},select={tagName:'SELECT'};
+            const form=[key('f',input),key('p',input),key('ArrowLeft',input),key('ArrowRight',select)];
+            const documentInput={tagName:'TEXTAREA'};
+            const documentKey=key('p',documentInput,documentInput);
+            const during=[focus,markMode,i];
+            const outside=key('p',host);
+            return {form,documentKey,during,outside,markMode};
+            """,
+        )
+        self.assertEqual(result["form"], [False, False, False, False])
+        self.assertFalse(result["documentKey"])
+        self.assertEqual(result["during"], [False, False, 0])
+        self.assertTrue(result["outside"] and result["markMode"])
+
+    def test_submit_retry_shows_original_batch_stage_and_document_merges_keep_their_message(self):
+        notices = interaction_program(
+            [("function onSent(op,r)", "function onRejected"), ("const BATCH_STATUS=", "const DELIVERY_LABEL=")],
+            "const pend={get:()=>[]},setHand=()=>{},notices=[],toast=text=>notices.push(text);let handQueued=true;",
+            """
+            const handoff={latest:{seq:2,status:"pending"}};
+            const op={kind:"handoff",submitId:"first"};
+            for(const status of ["pending","claimed","done"])onSent(op,{seq:1,status,merged:true,handoff});
+            onSent(op,{seq:1,merged:true,handoff});
+            onSent({kind:"handoff"},{seq:2,merged:true,handoff});
+            return notices;
+            """,
+            locale="zh-CN",
+        )
+        for text, stage in zip(notices, ("等待接收", "处理中", "已处理")):
+            self.assertIn("第 1 批", text)
+            self.assertIn(stage, text)
+        self.assertIn("第 1 批", notices[3])
+        self.assertNotIn("等待接收", notices[3])
+        self.assertNotIn("还没接收", notices[3])
+        self.assertIn("已更新这次提交", notices[4])
+
+    def test_reconnect_keeps_the_claimed_batch_notice_after_flushing_the_submit_queue(self):
+        actual = interaction_program(
+            [
+                ("const sameReview=", "function mirror()"),
+                ("function send(op,", "// 总览和命令行"),
+                ("let handPollKey=", "function applyServer("),
+                ("async function poll(){", "// ---------- 服务不在时"),
+                ("const BATCH_STATUS=", "const DELIVERY_LABEL="),
+            ],
+            """
+            const APP="ae",RID="synthetic",FILE=false,DOCX=null,PPTX=null,VIDEO=true,navigator={},document={hidden:false};
+            const storage=new Map(),K={pending:"p",legacyPending:"l",failed:"f"};
+            const LS={get:(k,v)=>storage.get(k)??v,set:(k,v)=>{storage.set(k,v);return true}};
+            let busy=0,mode="offline",rev=1,srvNoVideo=false,srvNoFullCheck=false,analysisUpgradePoll=null,handQueued=true;
+            const toast=text=>{$("toast").textContent=text},renderDocxBlock=()=>{},renderPptxBlock=()=>{},renderVideoBlock=()=>{};
+            const updateMode=()=>{},setHand=()=>{},applyServer=()=>{},posts=[];
+            const doc={app:APP,reviewId:RID,notes:[],features:["video","selective-handoff","video-handoff-snapshot",
+              "video-source","video-receipt","video-decisions","video-evidence-revision","full-check"]};
+            const api=async(method,path,body)=>{
+              if(method==="GET"&&path==="/api/notes")return doc;
+              if(method==="POST"&&path==="/api/handoff"){
+                posts.push(body.submitId);
+                return {doc,seq:1,merged:true,status:"claimed",handoff:{latest:{seq:2,status:"pending"}}};
+              }
+              throw new Error("unexpected request");
+            };
+            """,
+            """
+            pend.push({kind:"handoff",opId:"op1",noteIds:["n1"],submitId:"lost-response"});
+            await poll();return [posts,pend.get(),$("toast").textContent];
+            """,
+            locale="zh-CN",
+        )
+        self.assertEqual(actual[:2], [["lost-response"], []])
+        self.assertIn("第 1 批", actual[2])
+        self.assertIn("处理中", actual[2])
+
     def test_microsecond_playback_clock_preserves_frame_boundaries(self):
         actual = run_video(
             "const clock={frames:180,timebase:{num:1,den:30}};"
@@ -150,13 +547,15 @@ class VideoPagePureTests(unittest.TestCase):
             sr.activeElement=null;player.onFrame(0,{mediaTime:1});
             const playingMark=[get("videoMarkLayer").children.length,input.value];
             get("videoPlayRange").onclick();
-            const preview=[videoDraft.startFrame,videoDraft.endFrame,player.currentTime,videoRangeEnd];
+            const preview=[videoDraft.startFrame,videoDraft.endFrame,player.currentTime,player.paused];
             calls.length=0;
             videoShowNote({id:"old",video:{versionId:"V1",startFrame:15,endFrame:30}});
             const loading=calls.slice();
             videoShowNote({id:"latest",video:{versionId:"V1",startFrame:45,endFrame:90}});
             player.readyState=1;player.dispatchEvent(new Event("loadedmetadata"));
-            const loaded=[...calls,player.currentTime,videoRangeEnd];
+            const loaded=[...calls,player.currentTime];
+            player.currentTime=3.1;player.dispatchEvent(new Event("timeupdate"));
+            loaded.push(player.paused,player.currentTime);
             videoShowNote({id:"missing",video:{versionId:"V3",frame:1}});
             const missing=videoComparePair({video:{versionId:"V1",frame:0},
               videoReview:{versionId:"V3",target:{kind:"frame",versionId:"V3",frame:1}}},VIDEO);
@@ -166,9 +565,9 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertEqual((actual["atMark"], actual["pastMark"]), (1, 0))
         self.assertEqual(actual["editing"], "17")
         self.assertEqual(actual["playingMark"], [1, 30])
-        self.assertEqual(actual["preview"], [120, 180, 4, 6])
+        self.assertEqual(actual["preview"], [120, 180, 4, False])
         self.assertEqual(actual["loading"], [])
-        self.assertEqual(actual["loaded"], ["pause", "play", 1.5, 3])
+        self.assertEqual(actual["loaded"], ["pause", "play", 1.5, True, 3])
         self.assertIsNone(actual["missingUrl"])
         self.assertIn("V3", actual["messages"][0])
         self.assertEqual(actual["src"], "/V1")
@@ -198,6 +597,52 @@ class VideoPagePureTests(unittest.TestCase):
         self.assertEqual(actual["allTicked"], ["n1", "n2", "n3", "n4", "n5"])
         self.assertEqual(actual["three"], ["n1", "n4", "n5"])
         self.assertEqual(actual["none"], [])
+
+    def test_reply_updates_the_visible_page_counts_as_soon_as_notes_refresh(self):
+        actual = interaction_program(
+            [
+                (START, END),
+                ("function refreshList(force){", "let pageTreeHtml="),
+                ("function updateCounts(){", "function markBtnLabel(){"),
+                ("function updatePageStat(){", "function render(){"),
+            ],
+            """const VIDEO=true,videoManifest=()=>({currentVersionId:"V2"}),P=[{n:1}],N=1,i=0,total=0;
+               let notes=[{page:1,id:"n1",status:"open",videoReview:{state:"needs_reply"}}];
+               let listStale=false,editingId=null,composing=false,hideDone=false;
+               const allStats={o:1,f:0,d:0},isDone=()=>false,noteHtml=n=>videoReceiptCardHtml(n);
+               const noop=()=>{},stashEdit=noop,indexNotes=noop,drawPins=noop,renderPageTree=noop,
+                 updateLegacy=noop,renderResume=noop,renderFinalizeAll=noop;
+               $("nflight").dataset={};$("ndraft").dataset={};$("jump").options=[];""",
+            """updatePageStat();const before=$("stat").textContent;
+               notes[0].videoReview={state:"needs_reply", decision:"replied",reply:"Keep the title"};
+               refreshList();return {before,after:$("stat").textContent,card:$("nlist").innerHTML};""",
+        )
+        self.assertIn("Needs reply 1 · Replied 0", actual["before"])
+        self.assertIn("Needs reply 0 · Replied 1", actual["after"])
+        self.assertIn("Keep the title", actual["card"])
+
+    def test_fresh_and_legacy_cards_and_compare_use_the_same_relocation_eligibility(self):
+        result = interaction_program(
+            [(START, END)],
+            "let videoRangeEnd=null;const hand={videoRelocationBatches:{submitted:1,processed:null}};",
+            """
+            const manifest={currentVersionId:"V3",versions:[{versionId:"V1",frames:60,fps:30},
+                                                            {versionId:"V2",frames:60,fps:30,batch:1},
+                                                            {versionId:"V3",frames:60,fps:30,batch:2}]};
+            return ["fresh","submitted","processed"].map(id=>{
+              const note={id,status:"open",video:{versionId:"V1",frame:3}};
+              const pair=videoComparePair(note,manifest);
+              return [videoReceiptCardHtml(note,manifest).includes('data-act="video-relocate"'),pair.canRelocate,pair.batch,pair.after.versionId,pair.state]});
+            """,
+        )
+        self.assertEqual(
+            result,
+            [
+                [False, False, None, "V3", "unsubmitted"],
+                [True, True, 1, "V2", "missing_evidence"],
+                [True, True, None, "V3", "missing_evidence"],
+            ],
+        )
 
     def test_video_receipt_state_readiness_targets_counts_and_card_html(self):
         manifest = {
@@ -272,17 +717,35 @@ class VideoPagePureTests(unittest.TestCase):
                 },
             },
         ]
+        notes.extend(
+            [
+                {
+                    **notes[1],
+                    "id": "answered",
+                    "videoReview": {
+                        "state": "needs_reply",
+                        "decision": "replied",
+                        "reply": "保留原配乐",
+                    },
+                },
+                {**notes[1], "id": "returned", "videoReview": {"state": "returned", "decision": "returned"}},
+            ]
+        )
         for lang in ("zh-CN", "en"):
             actual = interaction_program(
-                [(START, END)],
-                "let videoRangeEnd=null;",
+                [
+                    (START, END),
+                    ("function handPickNoteTag(", "function renderHandPick("),
+                    ("function updatePageStat(){", "function render(){"),
+                ],
+                "let videoRangeEnd=null;const P=[{n:1}],N=1,i=0,total=0,VIDEO=true,clip=(s,n)=>s.slice(0,n);"
                 "const manifest="
                 + json.dumps(manifest, ensure_ascii=False)
                 + ",notes="
                 + json.dumps(notes, ensure_ascii=False)
-                + ";"
-                "return {"
-                "states:notes.map(videoNoteState),"
+                + ";const videoManifest=()=>manifest;",
+                "updatePageStat();return {"
+                "states:notes.map(videoNoteState),stat:$('stat').textContent,tags:notes.map(handPickNoteTag),"
                 "ready:notes.map(n=>videoReceiptReady(n,manifest)),"
                 "rangeWithFrame:videoReceiptReady({...notes[0],video:{startFrame:120,endFrame:180,versionId:'V1'}},manifest),"
                 "oobReady:videoReceiptReady({...notes[0],videoReview:{...notes[0].videoReview,target:{kind:'frame',versionId:'V2',frame:192}}},manifest),"
@@ -304,9 +767,11 @@ class VideoPagePureTests(unittest.TestCase):
                     "unsubmitted",
                     "approved",
                     "pending_review",
+                    "replied",
+                    "returned",
                 ],
             )
-            self.assertEqual(actual["ready"], [True, False, False, False, False, False, False, True])
+            self.assertEqual(actual["ready"], [True, False, False, False, False, False, False, True, False, False])
             self.assertFalse(actual["oobReady"])
             self.assertFalse(actual["rangeWithFrame"])
             self.assertFalse(actual["noVerReady"])
@@ -318,10 +783,31 @@ class VideoPagePureTests(unittest.TestCase):
                     "needs_relocate": 1,
                     "missing_evidence": 1,
                     "failed": 1,
-                    "returned": 0,
+                    "replied": 1,
+                    "returned": 1,
                     "unsubmitted": 1,
                     "approved": 1,
                 },
+            )
+            self.assertEqual(sum(actual["counts"].values()), len(notes))
+            reply_label, waiting_label, returned_label = (
+                ("已答复", "待答复", "已退回") if lang == "zh-CN" else ("Replied", "Needs reply", "Returned")
+            )
+            for label in (reply_label, waiting_label, returned_label):
+                self.assertIn(label + " 1", actual["stat"])
+            self.assertIn(reply_label, actual["cards"][8])
+            self.assertIn(reply_label, actual["tags"][8])
+            self.assertIn(waiting_label, actual["cards"][1])
+            self.assertIn(waiting_label, actual["tags"][1])
+            self.assertNotIn("data-vid-reply=", actual["cards"][8])
+            self.assertIn("data-vid-reply=", actual["cards"][1])
+            self.assertEqual(
+                {
+                    state
+                    for state, card in zip(actual["states"], actual["cards"])
+                    if 'data-act="video-relocate"' in card
+                },
+                {"pending_review", "needs_relocate", "missing_evidence"},
             )
             self.assertIn("120", actual["cutText"])
             self.assertIn("108", actual["cutText"])
@@ -419,7 +905,6 @@ class VideoPageWiringTests(unittest.TestCase):
             'tMsg("viewer.video.frameAria")',
             "videoCompareRefreshLocale()",
             'if(typeof videoCompareClose==="function")videoCompareClose();',
-            '["needs_reply","returned","failed"].includes(st)',
             "docxBlocked()||pptxBlocked()||videoBlocked()",
             'hasPrior?"viewer.hand.pickTitleRework":"viewer.hand.pickTitle"',
         ):
@@ -428,6 +913,240 @@ class VideoPageWiringTests(unittest.TestCase):
         self.assertNotIn('aria-label="Video version"', self.source)
         self.assertNotIn('aria-label="Frame"', self.source)
         self.assertNotIn('{message:"root / entry"}', self.source)
+
+
+def playback_page(expression, locale="en"):
+    return interaction_program(
+        [("// ---------- 视频审阅纯函数 ----------", "// ---------- 批注区：")],
+        """
+        const version=id=>({versionId:id,url:'/'+id,frames:180,fps:30,timebase:{num:1,den:30},
+          width:640,height:360,duration:6});
+        const VIDEO={currentVersionId:'V1',versions:['V1','V2'].map(version)},liveVideo=VIDEO,FILE=false;
+        let videoActiveVersionId='V1',mode='server';
+        const notes=[],isDone=()=>false,renderVideoSource=()=>{},saveDraft=()=>{},toast=()=>{};
+        class Control extends EventTarget {
+          constructor(){super();this.style={};this.hidden=false;this.value='';this.textContent='';this.clientWidth=400;this.clientHeight=400;}
+          getAttribute(key){return this[key]??null}
+          setAttribute(key,value){this[key]=value}
+          appendChild(){}
+          click(){if(!this.disabled&&!this.hidden)return this.onclick?.()}
+          change(value){this.value=value;return this.onchange?.({target:this})}
+        }
+        class Player extends Control {
+          constructor(){super();this.currentTime=0;this.paused=true;this.readyState=0;this.error=null;}
+          get currentTime(){return this.time}
+          set currentTime(seconds){this.time=Math.floor(seconds*1e6)/1e6}
+          emit(name){this.dispatchEvent(new Event(name))}
+          load(){this.error=null;this.readyState=0;this.paused=true;this.currentTime=0}
+          metadata(width=640,height=360){
+            this.videoWidth=width;this.videoHeight=height;this.readyState=1;this.emit('loadedmetadata');
+          }
+          pause(){if(!this.paused){this.paused=true;queueMicrotask(()=>this.emit('pause'))}}
+          async play(){if(this.paused){this.paused=false;this.emit('play')}}
+        }
+        const controls=new Map(),players=['videoPlayer','videoCompareBefore','videoCompareAfter'];
+        const get=id=>{
+          if(!controls.has(id))controls.set(id,players.includes(id)?new Player():new Control());
+          return controls.get(id);
+        };
+        const sr={getElementById:get},document={createElement:()=>new Control()};
+        const player=get('videoPlayer'),before=get('videoCompareBefore'),after=get('videoCompareAfter');
+        const range={id:'cue',status:'drafted',text:'cue',video:{v:1,versionId:'V1',startFrame:12,endFrame:30},
+          videoReview:{state:'pending_review',versionId:'V2',target:{kind:'range',startFrame:15,endFrame:45}}};
+        notes.push(range);
+        """,
+        "videoInit();\n" + expression,
+        locale=locale,
+    )
+
+
+class VideoPlaybackTests(unittest.TestCase):
+    def test_dimension_notice_names_the_displayed_cut_and_explains_mark_and_annotation_dimensions(self):
+        for locale, decoded, registered in (("en", "decoded", "registered"), ("zh-CN", "解码", "登记")):
+            with self.subTest(locale=locale):
+                notices = playback_page(
+                    """
+                    const box=get('videoError'),messages=[];
+                    for(const id of ['V1','V2']){
+                      get('videoVersionPick').change(id);player.metadata(320,240);
+                      messages.push([box.hidden,box.textContent]);
+                    }
+                    const layer=get('videoMarkLayer').style,draft=videoDraftAt();
+                    const geometry=[layer.top,layer.height,draft.videoWidth,draft.videoHeight];
+                    player.metadata();
+                    const matchingHidden=box.hidden;
+                    videoCompareOpen(range);
+                    before.metadata(320,240);after.metadata(320,240);
+                    for(const side of ['Before','After']){
+                      const hint=get('videoCompare'+side+'MediaNotice');messages.push([hint.hidden,hint.textContent]);
+                    }
+                    return {messages,matchingHidden,geometry};
+                    """,
+                    locale,
+                )
+                for version, (hidden, message) in zip(("V1", "V2", "V1", "V2"), notices["messages"]):
+                    self.assertFalse(hidden)
+                    self.assertIn(version, message)
+                    self.assertRegex(message, decoded + r"[^.。]*320 × 240")
+                    self.assertRegex(message, registered + r"[^.。]*640 × 360")
+                self.assertTrue(notices["matchingHidden"])
+                self.assertEqual(notices["geometry"], ["50px", "300px", 640, 360])
+
+    def test_native_pause_and_scrub_release_the_range_on_each_player(self):
+        result = playback_page("""
+            player.metadata();
+            const observations={};
+            for(const side of ['Main','Before','After']){
+              const el=side==='Main'?player:get('videoCompare'+side),end=side==='After'?1.5:1;
+              if(side!=='Main'){videoCompareOpen(range);before.metadata();after.metadata()}
+              const seek=seconds=>{
+                el.seeking=true;el.currentTime=seconds;el.emit('seeking');
+                el.seeking=false;el.emit('seeked');el.emit('timeupdate');
+              };
+              const start=async()=>{
+                if(side==='Main')videoShowNote(range);
+                else get('videoComparePlay'+side).click();
+                seek(el.currentTime);await Promise.resolve();
+              };
+              const crossed=()=>{el.currentTime=2.5;el.emit('timeupdate');return [el.paused,el.currentTime]};
+              await start();el.currentTime=end+.1;el.emit('timeupdate');const normal=[el.paused,el.currentTime];
+              await start();el.pause();await Promise.resolve();await el.play();const paused=crossed();
+              await start();seek(.8);const scrubbed=crossed();
+              await start();el.pause();seek(3);const pausedScrub=el.currentTime;
+              observations[side]={normal,paused,scrubbed,pausedScrub};
+            }
+            return observations;
+        """)
+        for side, end in (("Main", 1), ("Before", 1), ("After", 1.5)):
+            with self.subTest(side=side):
+                self.assertEqual(
+                    result[side],
+                    {"normal": [True, end], "paused": [False, 2.5], "scrubbed": [False, 2.5], "pausedScrub": 3},
+                )
+
+    def test_late_metadata_cannot_play_a_closed_replaced_or_paused_comparison(self):
+        result = playback_page("""
+            const replacement={...range,id:'replacement',video:{versionId:'V2',frame:54},
+              videoReview:{...range.videoReview,versionId:'V1',target:{kind:'frame',frame:57}}};
+            notes.push(replacement);
+            const observations={};
+            for(const side of ['Before','After']){
+              const el=get('videoCompare'+side),starts=[];
+              el.addEventListener('play',()=>starts.push(el.src));
+              const play=()=>get('videoComparePlay'+side).click();
+              videoCompareOpen(range);play();get('videoCompareClose').click();el.metadata();
+              const closed=[el.paused,el.currentTime,starts.splice(0)];
+              el.load();videoCompareOpen(range);play();get('videoCompareClose').click();
+              videoCompareOpen(replacement);el.metadata();
+              const reopened=[el.paused,el.currentTime,starts.splice(0)];
+              el.load();videoCompareOpen(range);play();videoCompareOpen(replacement);el.metadata();
+              const switched=[el.paused,el.currentTime,starts.splice(0)];
+              el.load();videoCompareOpen(range);play();get('videoComparePause'+side).click();el.metadata();
+              const stopped=[el.paused,el.currentTime,starts.splice(0)];
+              get('videoCompareClose').click();el.load();
+              observations[side]={closed,reopened,switched,stopped};
+            }
+            videoShowNote(range);videoCompareOpen(range);player.metadata();
+            return {observations,mainPaused:player.paused};
+        """)
+        for side, frame_time, range_start in (("Before", 1.8, 0.4), ("After", 1.9, 0.5)):
+            with self.subTest(side=side):
+                expected = [True, frame_time, []]
+                self.assertEqual(
+                    result["observations"][side],
+                    {
+                        "closed": [True, 0, []],
+                        "reopened": expected,
+                        "switched": expected,
+                        "stopped": [True, range_start, []],
+                    },
+                )
+        self.assertTrue(result["mainPaused"])
+
+    def test_interval_endpoint_uses_the_same_decodable_frame_as_the_readout_and_annotation(self):
+        result = playback_page("""
+            range.video.endFrame=179;range.videoReview.target.endFrame=179;
+            player.metadata();videoShowNote(range);
+            const stop=el=>{el.currentTime=5.99;el.emit('timeupdate');el.emit('seeked')};
+            stop(player);
+            const main=[player.currentTime,get('videoFrame').value,videoDraftAt().frame];
+            videoCompareOpen(range);before.metadata();after.metadata();
+            const compare={};
+            for(const side of ['Before','After']){
+              const el=get('videoCompare'+side);
+              el.readyState=2;el.emit('loadeddata');await get('videoComparePlay'+side).click();
+              stop(el);compare[side]=[el.currentTime,get('videoCompare'+side+'Frame').textContent];
+            }
+            get('videoCompareToggleRelocate').click();get('videoRelocateUseFrame').click();
+            return {main,compare,relocated:get('videoRelocateFrame').value};
+        """)
+        # 30 fps 的第 179 帧在 5.966666…秒开始。解码器能在该帧内表示的第一微秒是 5.966667 秒。
+        self.assertEqual(result["main"], [5.966667, 179, 179])
+        self.assertEqual(result["compare"], dict.fromkeys(("Before", "After"), [5.966667, "Current frame 179"]))
+        self.assertEqual(result["relocated"], 179)
+
+    def test_failed_media_can_be_retried_in_place_or_from_the_same_location(self):
+        result = playback_page("""
+            const fail=el=>{el.readyState=0;el.error={code:2};el.emit('error')};
+            const recover=el=>{
+              if(el.error)return false;
+              el.metadata();el.readyState=2;el.emit('loadeddata');return true;
+            };
+            const v2=VIDEO.versions.pop();renderVideoVersions();recover(player);fail(player);
+            const retry=get('videoRetry'),single=[get('videoVersionPick').hidden,!retry.hidden&&retry.textContent];
+            retry.click();single.push(recover(player),retry.hidden,get('videoError').hidden);
+            fail(player);videoShowNote(range);recover(player);
+            const jump=[player.src,player.currentTime,player.paused,!!player.error];
+            VIDEO.versions.push(v2);videoCompareOpen(range);recover(before);recover(after);
+            const comparison={};
+            for(const side of ['Before','After']){
+              const el=get('videoCompare'+side);
+              fail(el);videoCompareOpen(range);const reopened=[recover(el),el.currentTime,el.paused];
+              fail(el);get('videoComparePlay'+side).click();const played=[recover(el),el.currentTime,el.paused];
+              comparison[side]={reopened,played};
+            }
+            return {single,jump,comparison};
+        """)
+        self.assertEqual(result["single"], [True, "Retry playback", True, True, True])
+        self.assertEqual(result["jump"], ["/V1", 0.4, False, False])
+        for side, start in (("Before", 0.4), ("After", 0.5)):
+            self.assertEqual(
+                result["comparison"][side], {"reopened": [True, start, True], "played": [True, start, False]}
+            )
+
+    def test_compare_locale_refresh_updates_frame_readout_and_media_notices(self):
+        result = playback_page(
+            """
+            videoCompareOpen(range);
+            before.metadata(320,240);after.metadata(320,240);
+            before.readyState=2;after.readyState=2;
+            videoCompareLayout();
+            const english={
+              beforeFrame:get('videoCompareBeforeFrame').textContent,
+              afterFrame:get('videoCompareAfterFrame').textContent,
+              beforeNotice:get('videoCompareBeforeMediaNotice').textContent,
+              afterNotice:get('videoCompareAfterMediaNotice').textContent,
+            };
+            uiLocale='zh-CN';
+            videoCompareRefreshLocale();
+            const chinese={
+              beforeFrame:get('videoCompareBeforeFrame').textContent,
+              afterFrame:get('videoCompareAfterFrame').textContent,
+              beforeNotice:get('videoCompareBeforeMediaNotice').textContent,
+              afterNotice:get('videoCompareAfterMediaNotice').textContent,
+            };
+            return {english,chinese};
+            """,
+            locale="en",
+        )
+        self.assertIn("Current frame", result["english"]["beforeFrame"])
+        self.assertIn("Current frame", result["english"]["afterFrame"])
+        self.assertIn("decoded", result["english"]["beforeNotice"])
+        self.assertIn("decoded", result["english"]["afterNotice"])
+        self.assertIn("当前帧", result["chinese"]["beforeFrame"])
+        self.assertIn("当前帧", result["chinese"]["afterFrame"])
+        self.assertIn("解码", result["chinese"]["beforeNotice"])
+        self.assertIn("解码", result["chinese"]["afterNotice"])
 
 
 if __name__ == "__main__":

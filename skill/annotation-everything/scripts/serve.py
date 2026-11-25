@@ -111,6 +111,7 @@ FEATURES = [
     "video-evidence-revision",
     "video-feedback-revision",
     "video-decode-feedback",
+    "video-release-repair",
 ]
 
 # Read one byte without buffering the hook's JSON input. EOF before registration exits
@@ -195,6 +196,7 @@ STATUS_FILE = ledger.STATUS_FILE  # 运行状态文件名只在台账模块定�
 LOG_FILE = "server.log"
 MANIFEST = "review.json"
 MAX_BODY = 2 * 1024 * 1024
+MAX_RANGE_DIGITS = 20  # 足以表示 64 位文件偏移量
 HOST = "127.0.0.1"
 NOTE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})$")
 NOTE_VIDEO_RELOCATE_PATH = re.compile(r"^/api/notes/([A-Za-z0-9_-]{1,64})/video-relocate$")
@@ -658,6 +660,17 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, code: int, obj: Any) -> None:
+        if (
+            self.server.review_dir is not None
+            and isinstance(obj, dict)
+            and obj.keys() & {"note", "notes", "doc", "handoff", "latest"}
+        ):
+            video = self.server.manifest().get("video")
+            if isinstance(video, dict):
+                handoff = self._request_reads().handoff()
+                obj = video_review.public_review_response(
+                    obj, video, handoff if isinstance(handoff, dict) else {}, self.server.locale
+                )
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
     def _reject(self, e: Reject) -> None:
@@ -759,6 +772,11 @@ class Handler(BaseHTTPRequestHandler):
                 raise Reject(404, "not-found", self._t("serve.err.notFound"))
         except Reject as e:
             self._reject(e)
+        except store.VideoCommitError as e:
+            self._json(
+                409,
+                {"app": APP, "code": e.code, "error": e.detail(self._t), "params": {"confirmation": e.confirmation}},
+            )
         except (store.NoteError, UnicodeEncodeError) as e:  # 由请求内容引起的错误一律 4xx，页面不会反复重试
             detail: dict[str, Any] = {
                 "error": str(e) if isinstance(e, store.NoteError) else self._t("serve.err.badCharacters"),
@@ -998,7 +1016,12 @@ class Handler(BaseHTTPRequestHandler):
     def _handoff_error_text(self, error: store.HandoffError) -> str:
         if self.server.locale == "en" and error.code in i18n.HANDOFF_ERROR_KEYS:
             try:
-                return self._t(i18n.HANDOFF_ERROR_KEYS[error.code], **error.params)
+                params = dict(error.params)
+                if error.code == "receipt-batch-mismatch" and isinstance(params.get("batches"), list):
+                    params["batches"] = self._t("cli.hand.itemSep").join(str(n) for n in params["batches"])
+                elif error.code == "incomplete-video-receipt" and isinstance(params.get("ids"), list):
+                    params["ids"] = self._t("cli.hand.itemSep").join(str(x) for x in params["ids"])
+                return self._t(i18n.HANDOFF_ERROR_KEYS[error.code], **params)
             except (KeyError, i18n.MissingMessageError):
                 pass
         return str(error)
@@ -1163,6 +1186,9 @@ class Handler(BaseHTTPRequestHandler):
                     self._range_reject(size)
                     return
                 first, last = matched.groups()
+                if max(len(first), len(last)) > MAX_RANGE_DIGITS:
+                    self._range_reject(size)
+                    return
                 if not first:
                     suffix = int(last)
                     if suffix <= 0:
@@ -1232,7 +1258,7 @@ class Handler(BaseHTTPRequestHandler):
     def _public_video_extra(self, manifest: dict[str, Any]) -> dict[str, Any]:
         if isinstance(manifest.get("video"), dict):
             try:
-                return {"video": video_review.public_manifest(manifest)}
+                return {"video": video_review.public_manifest(manifest, locale=self.server.locale)}
             except video_review.VideoError:
                 pass
         return {}
@@ -1298,13 +1324,13 @@ class Handler(BaseHTTPRequestHandler):
             )
         elif path == "/api/video/versions" and cmd == "GET":
             try:
-                video = video_review.public_manifest(self.server.manifest())
+                video = video_review.public_manifest(self.server.manifest(), locale=self.server.locale)
             except video_review.VideoError:
                 raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
             self._json(200, {"video": video, **self._ident()})
         elif video_version is not None and cmd == "GET":
             try:
-                video = video_review.public_manifest(self.server.manifest())
+                video = video_review.public_manifest(self.server.manifest(), locale=self.server.locale)
                 version = next(item for item in video["versions"] if item["versionId"] == video_version.group(1))
             except (StopIteration, video_review.VideoError):
                 raise Reject(404, "no-video", self._t("serve.err.noApi")) from None
@@ -1341,11 +1367,24 @@ class Handler(BaseHTTPRequestHandler):
                     "doc": {
                         **self._notes_doc(),
                         **self._ident(),
-                        "video": video_review.public_manifest(self.server.manifest()),
+                        "video": video_review.public_manifest(self.server.manifest(), locale=self.server.locale),
                     },
                     "handoff": self._handoff_state(full=False),
                 },
             )
+        elif path == "/api/video/release-repair" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            seq, version = body.get("batch"), body.get("versionId")
+            if (
+                not claimed
+                or type(seq) is not int
+                or seq < 1
+                or not isinstance(version, str)
+                or not video_review.VERSION_ID.fullmatch(version)
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.noApi"))
+            store.release_video_repair(d, seq=seq, version_id=version, review_id=claimed)
+            self._json(200, {"handoff": self._handoff_state(full=False), **self._ident()})
         elif path == "/api/video/source-project" and cmd == "GET":
             video = self.server.manifest().get("video")
             self._json(
@@ -1358,12 +1397,20 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/video/source-project/confirm" and cmd == "POST":
             body = self._expect_obj(self._body())
             self._confirm_source_project(body)
+        elif path == "/api/video/recover" and cmd == "POST":
+            body = self._expect_obj(self._body())
+            if (
+                not claimed
+                or set(body) - {"preserve"}
+                or ("preserve" in body and not isinstance(body["preserve"], str))
+            ):
+                raise Reject(400, "bad-request", self._t("serve.err.noApi"))
+            backup = store.recover_video_writes(d, claimed, body.get("preserve"))
+            self._json(200, {"preserved": backup, **self._ident()})
         elif path == "/api/notes" and cmd == "GET":
-            if (d / store.VIDEO_COMMIT_FILE).exists():
-                with store.locked(d):
-                    pass  # 服务重启后首次轮询即可读到已提交的批次与逐条记录。
-            store.recover_video_decode_failures(d, self.server.manifest())
             doc = self._notes_doc()
+            if store.video_recovery_pending(d, self.server.manifest(), self._request_reads().handoff()):
+                doc["videoRecoveryPending"] = True
             idx = d / "index.html"
             doc["indexMtime"] = idx.stat().st_mtime if idx.exists() else None  # 页面据此提示「已重建，请刷新」
             doc["handoff"] = self._handoff_state(full=False)  # 轮询只带最新一批；处理记录全量走 GET /api/handoff
@@ -1451,6 +1498,7 @@ class Handler(BaseHTTPRequestHandler):
                     "handoff": self._handoff_state(full=False),
                     "merged": merged,
                     "seq": item["seq"],
+                    **({"status": item["status"]} if submit_id is not None else {}),
                     "acceptedFullCheck": item["fullCheck"],
                 },
             )
@@ -1653,10 +1701,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.log("info", f"handoff-review seq={seq}")
                 self.server.run_hook(item, False, event="review")
             else:
-                if self.server.manifest().get("format", {}).get("report") == "video":
-                    raise Reject(
-                        400, "video-selection-required", self._t("viewer.video.batchSelectionHint", selected=0, ready=0)
-                    )
                 item = store.handoff_finalize(d, seq, by="page")
                 self.server.log("info", f"handoff-finalize seq={seq}")
             self._json(
@@ -3827,11 +3871,44 @@ def check(locale: str | None = None) -> int:
                 "Content-Type": "application/json",
                 "X-AE-Review": vrid,
             }
-            v_paths = [video_dir / MANIFEST, video_dir / store.NOTES_FILE]
+            journal = video_dir / store.VIDEO_COMMIT_FILE
+            fsutil.atomic_write(
+                journal,
+                json.dumps(
+                    {
+                        "reviewId": vrid,
+                        store.NOTES_FILE: {"rev": 1, "notes": [{"id": "pending", "page": 1, "text": "synthetic note"}]},
+                        store.HANDOFF_FILE: {"seq": 0, "items": []},
+                        "events": [{"op": "video-receipt"}, {"op": "handoff-draft"}],
+                    }
+                ),
+                prefix=".check-",
+            )
+            v_paths = [
+                video_dir / name
+                for name in (
+                    MANIFEST,
+                    store.NOTES_FILE,
+                    store.HANDOFF_FILE,
+                    store.LOG_FILE,
+                    store.VIDEO_COMMIT_FILE,
+                    "media/v1.mp4",
+                )
+            ]
             v_before = [p.read_bytes() if p.exists() else None for p in v_paths]
+            for method in ("GET", "HEAD"):
+                status, hdr, _ = _req(vport, method, "/api/notes", vg)
+                ok(
+                    status == 200
+                    and "access-control-allow-origin" not in hdr
+                    and [p.read_bytes() if p.exists() else None for p in v_paths] == v_before,
+                    T("serve.check.videoNotesReadOnly", method=method),
+                )
             v_write_routes = (
+                ("/api/video/recover", {}),
                 ("/api/video/source-project", {"engine": "remotion", "root": str(tmp), "entry": {"id": "Main"}}),
                 ("/api/video/source-project/confirm", {"proposalRevision": "0" * 64}),
+                ("/api/video/release-repair", {"batch": 1, "versionId": "V1"}),
                 (
                     "/api/video/playback-failure",
                     {"batch": 1, "versionId": "V1", "noteId": "n1", "expectedEvidence": "x", "mediaError": 3},

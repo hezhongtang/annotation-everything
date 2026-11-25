@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -37,7 +39,7 @@ from tests.test_video_review import box, synthetic_mp4  # noqa: E402
 FAKE_REMOTION_BIN = textwrap.dedent(
     """
     #!/usr/bin/env python3
-    import json, os, shutil, sys, time
+    import json, os, shutil, subprocess, sys, time
 
     def _log():
         path = os.environ.get("AE_FAKE_BIN_LOG")
@@ -58,6 +60,14 @@ FAKE_REMOTION_BIN = textwrap.dedent(
                 print(f"{spec['id']}  {spec['width']}  {spec['height']}  {spec['fps']}  {spec['frames']}")
             return 0
         if sys.argv[1:] and sys.argv[1] == "render":
+            if mode in ("fail-with-helper", "sleep-with-helper"):
+                child = subprocess.Popen([sys.executable, os.environ["AE_FAKE_HELPER"]],
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                if child.stdout.readline() != b"ready\\n":
+                    return 2
+                if mode == "sleep-with-helper":
+                    time.sleep(5)
+                return 1
             if mode in ("fail", "render-fail"):
                 print("synthetic remotion render failed: dependency boom", file=sys.stderr)
                 return 1
@@ -668,7 +678,7 @@ class RenderTests(EngineEnvMixin):
         with self.assertRaises(video_engines.EngineError) as ctx:
             self.resolve(render_timeout=0.5)
         self.assertEqual(ctx.exception.code, "renderTimeout")
-        self.assertFalse(list((self.review / ".render").glob("*.mp4")))
+        self.assertEqual(list((self.review / ".render").iterdir()), [])
         entries = self.read_bin_log()
         pid = entries[-1]["pid"]
         for _ in range(40):
@@ -676,11 +686,68 @@ class RenderTests(EngineEnvMixin):
                 os.kill(pid, 0)
             except ProcessLookupError:
                 break
-            import time
-
             time.sleep(0.05)
         else:
             self.fail("超时后引擎进程仍在运行")
+
+    def test_wait_failure_and_interrupt_reap_the_running_engine(self):
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        self.set_env(AE_FAKE_ENGINE_MODE="sleep", AE_FAKE_ENGINE_SLEEP="5")
+        communicate = subprocess.Popen.communicate
+        for failure in (OSError, KeyboardInterrupt):
+            with self.subTest(failure=failure.__name__):
+                engine = []
+
+                def fail_while_rendering(proc, *args, **kwargs):
+                    if proc.args[1] != "render":
+                        return communicate(proc, *args, **kwargs)
+                    engine.append(proc)
+                    raise failure("synthetic wait failure")
+
+                with mock.patch.object(subprocess.Popen, "communicate", fail_while_rendering):
+                    with self.assertRaises(failure):
+                        self.resolve()
+                (proc,) = engine
+                try:
+                    self.assertIsNotNone(proc.poll(), "等待失败后假引擎仍在运行")
+                    self.assertEqual(list((self.review / ".render").iterdir()), [])
+                finally:
+                    # 旧实现漏回收时，用例收回自己启动的假引擎。
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait(timeout=5)
+                    proc.stdout.close()
+                    proc.stderr.close()
+
+    @unittest.skipUnless(os.name == "posix", "POSIX 引擎进程组与文件锁")
+    def test_engine_failure_or_timeout_stops_its_background_helper(self):
+        import fcntl
+
+        helper = self.root / "helper.py"
+        helper.write_text(
+            textwrap.dedent("""
+            import fcntl, os, time
+
+            with open(os.environ["AE_FAKE_HELPER_LEASE"], "w") as lease:
+                fcntl.flock(lease, fcntl.LOCK_EX)
+                lease.write("started")
+                lease.flush()
+                print("ready", flush=True)
+                time.sleep(3)
+                lease.write(" finished")
+        """)
+        )
+        self.arm_render(self.project, "remotion", MAIN_MOVIE)
+        for mode, error in (("fail-with-helper", "renderFailed"), ("sleep-with-helper", "renderTimeout")):
+            with self.subTest(mode=mode):
+                lease = self.root / mode
+                self.set_env(AE_FAKE_ENGINE_MODE=mode, AE_FAKE_HELPER=str(helper), AE_FAKE_HELPER_LEASE=str(lease))
+                with self.assertRaises(video_engines.EngineError) as problem:
+                    self.resolve(render_timeout=1.5)
+                self.assertEqual(problem.exception.code, error)
+                with lease.open() as handle:
+                    fcntl.flock(handle, fcntl.LOCK_SH)  # 子进程退出时释放，漏回收时也会在 3 秒内结束。
+                    self.assertEqual(handle.read(), "started")
 
     def test_compositions_failure_reports_engine_stderr(self):
         self.arm_render(self.project, "remotion", MAIN_MOVIE)
@@ -745,6 +812,48 @@ class RenderTests(EngineEnvMixin):
 
 
 class InspectCliTests(EngineEnvMixin):
+    def test_inspect_identifies_each_unreadable_cut_and_keeps_the_other_candidate(self):
+        import io
+
+        project = self.copy_fixture("hyperframes")
+        output = project / "out"
+        self.make_movie(output / "good.mp4")
+        (output / "empty.mp4").write_bytes(b"")
+        for lang, reason, fallback in (
+            ("en", "The MP4 file is empty", "default frame rate"),
+            ("zh-CN", "MP4 文件为空", "默认帧率"),
+        ):
+            with self.subTest(lang=lang), redirect_stdout(io.StringIO()) as buffer:
+                self.assertEqual(video_engines.main(["inspect", str(project), "--locale", lang]), 0)
+                report = json.loads(buffer.getvalue())
+                movies = {Path(m["path"]).name: m for m in report["movies"]}
+                self.assertEqual(movies["empty.mp4"]["reason"], reason)
+                self.assertEqual(movies["good.mp4"]["meta"]["frames"], 180)
+                self.assertIn(fallback, report["compositions"][0]["evidence"])
+
+    def test_invalid_timeout_is_rejected_before_the_engine_starts(self):
+        import io
+
+        project = self.copy_fixture("remotion")
+        self.arm_render(project, "remotion", MAIN_MOVIE)
+        self.set_env(AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]), AE_FAKE_BIN_LOG=str(self.root / "log"))
+        for value in ("nan", "inf", "-inf", "0", "2147484", "1e300"):
+            for origin in ("option", "environment"):
+                with self.subTest(value=value, origin=origin):
+                    self.set_env(AE_VIDEO_RENDER_TIMEOUT=value if origin == "environment" else "")
+                    args = [f"--render-timeout={value}"] if origin == "option" else []
+                    output = io.StringIO()
+                    with redirect_stdout(output):
+                        code = video_engines.main(["inspect", str(project), *args])
+                    self.assertEqual(code, 2)
+                    diagnostic = json.loads(output.getvalue())
+                    self.assertEqual(diagnostic["error"], "badTimeout")
+                    self.assertIn("2147483", diagnostic["detail"])
+        self.assertEqual(self.read_bin_log(), [])
+        # 上界仍可用于渲染；假引擎立即结束。
+        maximum = video_engines.resolve_source(project, self.root / "review", {}, render_timeout=2147483)
+        self.assertEqual(maximum["action"], "rendered")
+
     def test_inspect_prints_candidate_evidence_as_json(self):
         project = self.copy_fixture("remotion")
         media = self.make_movie(project / "out" / "Main.mp4")
@@ -779,8 +888,77 @@ class InspectCliTests(EngineEnvMixin):
 class BuildIntegrationTests(EngineEnvMixin):
     """从工程目录开始的完整构建：与 MP4 入口同一审阅形态。"""
 
+    def test_candidate_lists_media_comparisons_and_file_descriptions_use_the_build_language(self):
+        project = self.copy_fixture("hyperframes")
+        movie = project / "out" / "candidate.mp4"
+        self.make_movie(movie, fps=30)
+        for lang, default, separator, comparison, modified in (
+            ("en", "default frame rate", ", ", "Movie ", "modified"),
+            ("zh-CN", "默认帧率", "、", "成片 ", "修改时间"),
+        ):
+            for opts, fragments in (
+                ({}, [default, "data-fps"]),
+                ({"video_composition": "missing"}, [separator, "scene-b.html", "index.html"]),
+                ({"video_composition": "index.html", "reuse_movie": movie}, [comparison, "24", "30", "180"]),
+                ({"video_composition": "compositions/scene-b.html"}, [modified, "180"]),
+            ):
+                with self.subTest(lang=lang, opts=opts):
+                    with self.assertRaises(build_viewer.BuildError) as error:
+                        build_viewer.build(
+                            project, None, self.root / "review", locale=lang, no_scan_skills=True, **opts
+                        )
+                    for fragment in fragments:
+                        self.assertIn(fragment, str(error.exception))
+                    if lang == "en":
+                        self.assertNotIn("、", str(error.exception))
+
     def build(self, report, out, **kwargs):
         return build_viewer.build(report, None, out, no_scan_skills=True, locale="zh-CN", **kwargs)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX 属主与权限位")
+    def test_private_receipt_directory_is_diagnosed_and_render_can_retry(self):
+        project = self.copy_fixture("remotion")
+        self.arm_render(project, "remotion", MAIN_MOVIE)
+        home = self.root / "ledger"
+        evidence = home / "video-renders"
+        evidence.mkdir(mode=0o700, parents=True)
+        self.set_env(AE_HOME=str(home), AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
+        for failure in ("permissions", "owner"):
+            review = self.root / failure
+            evidence.chmod(0o750 if failure == "permissions" else 0o700)
+            uid = os.getuid() + int(failure == "owner")
+            with mock.patch.object(os, "getuid", return_value=uid), self.assertRaises(build_viewer.BuildError) as error:
+                self.build(project, review, no_reuse=True)
+            with self.subTest(failure=failure, check="diagnosis"):
+                self.assertIn("渲染凭据目录", str(error.exception))
+                self.assertIn(str(evidence.resolve()), str(error.exception))
+            with self.subTest(failure=failure, check="staging"):
+                self.assertEqual(list((review / ".render").glob("*")), [])
+            evidence.chmod(0o700)
+            self.build(project, review, no_reuse=True)
+            self.assertEqual((review / "media/v1.mp4").read_bytes(), MAIN_MOVIE)
+
+    def test_receipt_write_failure_and_interrupt_release_render_staging(self):
+        project = self.copy_fixture("remotion")
+        self.arm_render(project, "remotion", MAIN_MOVIE)
+        home = self.root / "ledger"
+        self.set_env(AE_HOME=str(home), AE_FAKE_COMPOSITIONS=json.dumps([MAIN_COMP]))
+        replace = os.replace
+        for failure, diagnostic in ((PermissionError, build_viewer.BuildError), (KeyboardInterrupt, KeyboardInterrupt)):
+            with self.subTest(failure=failure.__name__):
+                review = self.root / failure.__name__
+
+                def fail_receipt_write(source, target):
+                    if Path(target).parent == home.resolve() / "video-renders":
+                        raise failure("synthetic receipt write failure")
+                    return replace(source, target)
+
+                with mock.patch.object(os, "replace", fail_receipt_write), self.assertRaises(diagnostic) as error:
+                    self.build(project, review)
+                self.assertIn("synthetic receipt write failure", str(error.exception))
+                self.assertEqual(list((review / ".render").iterdir()), [])
+                self.build(project, review)
+                self.assertEqual((review / "media/v1.mp4").read_bytes(), MAIN_MOVIE)
 
     def test_replaced_output_is_rejected_before_v1_publication_and_can_be_retried(self):
         import video_review
@@ -932,6 +1110,30 @@ class SourceProjectLinkTests(EngineEnvMixin):
 
     def build_from_project(self, project, out, **kwargs):
         return build_viewer.build(project, None, out, no_scan_skills=True, locale="zh-CN", **kwargs)
+
+    def test_mp4_link_keeps_the_hyperframes_default_rate_check_when_no_fps_is_declared(self):
+        import video_source
+
+        project = self.copy_fixture("hyperframes")
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "index.html").write_text("<html></html>")
+        cut = project / "out" / "cut.mp4"
+        for fps in (30, 24):
+            with self.subTest(fps=fps):
+                self.arm_render(project, "hyperframes", synthetic_mp4(fps=fps))
+                self.build_from_project(project, self.root / f"render-{fps}", no_reuse=True)
+                self.make_movie(cut, fps=fps)
+                review = self.root / f"mp4-{fps}"
+                build_viewer.build(cut, None, review, no_scan_skills=True, locale="en")
+                video = json.loads((review / "review.json").read_text())["video"]
+                proposed = video_source.local_project_link(
+                    video, engine="hyperframes", root=str(project), entry={"id": "index.html"}
+                )["sourceProject"]
+                if fps == 30:
+                    self.assertEqual(proposed["match"], "verified")
+                else:
+                    self.assertEqual(proposed["status"], "pending")
+                    self.assertIn("defaultFpsMismatch", proposed["reasons"])
 
     def test_reused_v1_links_verified_source_project(self):
         project = self.copy_fixture("remotion")

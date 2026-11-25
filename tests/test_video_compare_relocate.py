@@ -375,22 +375,47 @@ class VideoRelocateStoreTests(unittest.TestCase):
         self.assertIn("relocatedFrom", n2_v3["videoReview"])
         self.assertGreaterEqual(len(n2_v3["videoReview"]["history"]), 3)
 
-    def test_existing_open_video_note_without_vr_can_supplement_evidence(self):
-        v2_file = self._movie(self.v2_bytes, "v2.mp4")
-        video_review.register_version(self.review, v2_file, batch=1, by="claude", review_id=self.rid, receipt_id="r-v2")
-        _, n4_supp, _ = store.relocate_video_note(
-            self.review,
-            "n4",
-            version_id="V2",
-            target={"kind": "frame", "frame": 182},
-            summary="补齐 V2 对应帧定位",
-        )
-        self.assertEqual(n4_supp["video"]["frame"], 170)
-        self.assertEqual(n4_supp["video"]["versionId"], "V1")
-        self.assertEqual(n4_supp["videoReview"]["state"], "missing_evidence")
-        self.assertEqual(n4_supp["videoReview"]["target"]["frame"], 182)
-        manifest = json.loads((self.review / "review.json").read_text(encoding="utf-8"))
-        self.assertFalse(video_review.review_readiness(n4_supp, manifest, review_dir=self.review)[0])
+    def test_relocation_requires_evidence_for_this_note_and_keeps_legacy_notes_repairable(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review, seq=1)
+        path = self._movie(self.v2_bytes, "v2.mp4")
+        video_review.register_version(self.review, path, batch=1, by="claude", review_id=self.rid, receipt_id="r-v2")
+
+        store.import_notes(self.review, [video_note("history", "旧处理记录", frame=5)])
+        doc = store.load(self.review)
+        by_id = {n["id"]: n for n in doc["notes"]}
+        # 合成旧记录。n1 只在提交批次中点名，n3 只保留对应成片，n4 只保留逐条处理痕迹。
+        by_id["n3"]["videoReview"] = {"versionId": "V2"}
+        by_id["history"]["videoReview"] = {"history": [{"state": "needs_relocate", "batch": 1, "versionId": "V2"}]}
+
+        by_id["n4"]["trail"] = [{"at": "2020-01-01", "by": "agent", "stage": "draft", "action": "drafted"}]
+        (self.review / store.NOTES_FILE).write_text(json.dumps(doc))
+        target = {"kind": "frame", "frame": 182}
+        snapshot = store.handoff_state(self.review)
+        self.assertEqual(snapshot["videoRelocationBatches"], {"n1": 1, "n3": None, "n4": None, "history": 1})
+        self.assertEqual(snapshot["latest"]["videoStats"]["missingEvidenceIds"], ["n1"])
+        self.assertEqual(snapshot["latest"]["videoStats"]["unsubmittedIds"], ["n2"])
+        with self.assertRaises(store.HandoffError) as unsubmitted:
+            store.relocate_video_note(
+                self.review, "n2", version_id="V2", target={"kind": "range", "startFrame": 130, "endFrame": 180}
+            )
+        self.assertEqual(unsubmitted.exception.params["reason"], "unsubmitted")
+        self.assertEqual(store.load(self.review), doc)
+        with self.assertRaises(store.HandoffError) as wrong_version:
+            store.relocate_video_note(self.review, "n4", version_id="V1", target={"kind": "frame", "frame": 170})
+        self.assertEqual(wrong_version.exception.code, "invalid-receipt-target")
+        for nid in ("n1", "n3", "n4", "history"):
+            with self.subTest(note=nid):
+                _, repaired, _ = store.relocate_video_note(
+                    self.review, nid, version_id="V2", target=target, summary="补齐对应帧"
+                )
+                self.assertEqual(repaired["video"], by_id[nid]["video"])
+                self.assertEqual(repaired["videoReview"]["target"]["frame"], 182)
+                self.assertEqual(repaired["videoReview"]["history"][-1]["source"], "relocate")
+                if nid == "n1":
+                    self.assertEqual(repaired["videoReview"]["batch"], 1)
+                if nid == "n4":
+                    self.assertEqual(repaired["videoReview"]["state"], "missing_evidence")
 
 
 class VideoRelocateServerAndCliTests(unittest.TestCase):
@@ -427,11 +452,14 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
 
     def _run_cli(self, argv):
         out, err = io.StringIO(), io.StringIO()
+        previous_locale = notes_cli.i18n.current_locale()
         with redirect_stdout(out), redirect_stderr(err):
             try:
                 code = notes_cli.main(argv)
             except SystemExit as exc:
                 code = int(exc.code) if isinstance(exc.code, int) else 2
+            finally:
+                notes_cli.i18n.set_locale(previous_locale)
         return code, out.getvalue(), err.getvalue()
 
     def test_server_video_relocate_endpoint_security_and_cli_show_trace(self):
@@ -481,6 +509,17 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
         self.assertIn("video-relocate", features)
         self.assertIn("video-relocate-revision", features)
         self.assertNotIn("Access-Control-Allow-Origin", h_hdr)
+
+        before = store.load(self.review)
+        no_basis, _, response = serve._req(
+            server.port,
+            "POST",
+            "/api/notes/n1/video-relocate",
+            headers,
+            {"versionId": "V2", "target": {"kind": "frame", "frame": 24}, "expectedEvidence": "legacy"},
+        )
+        self.assertEqual((no_basis, json.loads(response)["code"]), (400, "video-not-ready"))
+        self.assertEqual(store.load(self.review), before)
 
         # 安全底线：Host / Origin / Content-Type / ReviewMismatch / 404 / 越界
         bad_host, _, _ = serve._req(
@@ -586,13 +625,15 @@ class VideoRelocateServerAndCliTests(unittest.TestCase):
             self.assertEqual((stale, json.loads(raw)["code"]), (400, "stale-decision"))
         self.assertEqual(next(n for n in store.load(self.review)["notes"] if n["id"] == "n3"), payload["note"])
 
-        # CLI show 中英文都能展示重定位记录
+        # CLI show 中英文都能展示重定位记录，且不污染进程语言
+        before_locale = notes_cli.i18n.current_locale()
         for lang, expected in (
             ("zh-CN", ("先前位置记录", "片头增长 12 帧", "24")),
             ("en", ("Prior location record", "24")),
         ):
             rc, sout, serr = self._run_cli(["show", str(self.review), "--all", "--locale", lang])
             self.assertEqual(rc, 0, serr)
+            self.assertEqual(notes_cli.i18n.current_locale(), before_locale)
             for token in expected:
                 self.assertIn(token, sout)
 
@@ -722,6 +763,36 @@ class VideoComparePageTests(unittest.TestCase):
                 },
             ],
         }
+
+    def test_compare_offers_a_cut_window_only_when_it_contains_each_in_movie_side(self):
+        comparison = interaction_program(
+            [(PURE_START, PURE_END)],
+            "let videoRangeEnd=null; const manifest=" + json.dumps(self._manifest()) + ";",
+            """
+            return [[60,30,60],[60,60,90],[60,59,61],[0,0,1],[192,191,192],[192],[0],[60]].map(
+              ([frame,contextStart,contextEnd])=>{
+                const note={id:"n2",status:"drafted",video:{versionId:"V1",startFrame:65,endFrame:80},
+                  videoReview:{state:"pending_review",outcome:"deleted",versionId:"V2",summary:"Removed shot",
+                    target:{kind:"cut",frame,contextStart,contextEnd}}};
+                const pair=videoComparePair(note,manifest);
+                const range=pair.after.spec?.playRange;
+                return [pair.ready, range?[range.startFrame,range.endFrame]:null];
+              });
+            """,
+        )
+        self.assertEqual(
+            comparison,
+            [
+                [False, None],
+                [False, None],
+                [True, [59, 61]],
+                [True, [0, 1]],
+                [True, [191, 192]],
+                [True, [162, 192]],
+                [True, [0, 30]],
+                [True, [30, 90]],
+            ],
+        )
 
     def test_pure_compare_helpers_use_per_version_timebase_and_format_deleted_and_relocated_cards(self):
         manifest = self._manifest()

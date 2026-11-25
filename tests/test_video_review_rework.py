@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -38,7 +41,7 @@ import video_source  # noqa: E402
 import wakeup  # noqa: E402
 from tests.test_analysis_page import interaction_program  # noqa: E402
 from tests.test_video_handoff import V1_MEDIA, video_note  # noqa: E402
-from tests.test_video_review import synthetic_mp4  # noqa: E402
+from tests.test_video_review import run_video_cli, synthetic_mp4  # noqa: E402
 
 
 class VideoReviewReworkBase(unittest.TestCase):
@@ -322,6 +325,26 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         self.assertEqual(store.load(self.review), before)
         self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
 
+    def test_legacy_notes_only_receipt_finds_its_batch_among_concurrent_claims(self):
+        store.handoff_submit(self.review, note_ids=["n1"])
+        store.handoff_claim(self.review, seq=1)
+        store.video_receipt(
+            self.review,
+            receipt_id="opening-question",
+            receipt=[{"noteId": "n1", "outcome": "question", "question": "字幕上移一行吗？"}],
+        )
+        store.handoff_submit(self.review, note_ids=["n3"])
+        store.handoff_claim(self.review, seq=2)
+        handoff = store.handoff_load(self.review)
+        # 旧格式写完 notes.json、尚未写回批次时的合成记录。
+        handoff["items"][0].update(status="claimed", videoReceipts=[])
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        before = store.load(self.review)
+        result = store.video_receipt(self.review, receipt_id="opening-question")
+        self.assertEqual((result["seq"], result["replayed"], result["status"]), (1, True, "done"))
+        self.assertEqual(store.load(self.review), before)
+        self.assertEqual(store.handoff_load(self.review)["items"][1], handoff["items"][1])
+
     def interrupt_after_decode_failure_is_registered(self):
         from unittest.mock import patch
 
@@ -348,19 +371,409 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             )
         self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
 
-    def test_poll_after_restart_recovers_decode_failure_without_another_browser_report(self):
-        self.interrupt_after_decode_failure_is_registered()
+    def review_files(self):
+        return {
+            p.relative_to(self.review): hashlib.sha256(p.read_bytes()).digest()
+            for p in self.review.rglob("*")
+            if p.is_file()
+        }
+
+    @contextlib.contextmanager
+    def review_http(self):
         with serve.ReviewServer(self.review, 0, log_to_file=False) as server:
-            worker = threading.Thread(target=server.handle_request, daemon=True)
+            worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
             worker.start()
-            code, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": f"127.0.0.1:{server.port}"})
-            worker.join(2)
-        self.assertEqual(code, 200, raw)
-        response = json.loads(raw)
-        self.assertEqual(response["handoff"]["latest"]["status"], "claimed")
-        notes = {n["id"]: n for n in response["notes"]}
-        self.assertEqual(notes["n2"]["videoReview"]["state"], "failed")
-        self.assertEqual(notes["n1"]["videoReview"]["decision"], "approved")
+            try:
+                yield (
+                    server,
+                    {
+                        "Host": f"127.0.0.1:{server.port}",
+                        "Origin": f"http://127.0.0.1:{server.port}",
+                        "Content-Type": "application/json",
+                        "X-AE-Review": self.rid,
+                    },
+                )
+            finally:
+                server.shutdown()
+                worker.join(2)
+
+    def test_request_review_leaves_video_batch_available_for_reviewer_decisions(self):
+        self._deliver_v2_mixed_batch()
+        with self.review_http() as (server, headers):
+            status, _, raw = serve._req(
+                server.port,
+                "POST",
+                "/api/handoff/review",
+                headers,
+                {"seq": 1, "receiverBindingId": wakeup.load_binding(self.review)["bindingId"]},
+            )
+            self.assertEqual(status, 400, raw)
+            self.assertIn("逐条通过", json.loads(raw)["error"])
+            status, _, raw = serve._req(server.port, "POST", "/api/handoff/finalize", headers, {"seq": 1})
+            self.assertEqual((status, json.loads(raw)["code"]), (400, "video-selection-required"))
+            self.assertIn("批量通过", json.loads(raw)["error"])
+            self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "drafted")
+            self.assertIsNone(store.handoff_claim(self.review, stage="review"))
+            store.video_decision(self.review, "n1", action="return", reason="保留原字幕高度")
+            self.assertEqual(self._note("n1")["videoReview"]["decision"], "returned")
+
+    def assert_notes_reads_preserve_review(self, server, headers):
+        before = self.review_files()
+        for method in ("GET", "HEAD"):
+            with self.subTest(method=method):
+                code, _, raw = serve._req(server.port, method, "/api/notes", {"Host": headers["Host"]})
+                self.assertEqual(code, 200, raw)
+                if method == "HEAD":
+                    self.assertEqual(raw, b"")
+                self.assertEqual(self.review_files(), before)
+
+    def pending_pair(self):
+        notes = store.load(self.review)
+        notes["rev"] += 1
+        notes["notes"][0]["text"] = "待恢复的合成意见"
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        journal.write_text(
+            json.dumps(
+                {
+                    "reviewId": self.rid,
+                    "notes.json": notes,
+                    "handoff.json": {"seq": 0, "items": []},
+                    "events": [{"op": "video-receipt"}, {"op": "handoff-draft"}],
+                }
+            )
+        )
+        journal.chmod(0o600)
+        return journal
+
+    def test_reading_notes_preserves_the_review_in_every_stop_state(self):
+        with self.review_http() as (server, headers):
+            self.assert_notes_reads_preserve_review(server, headers)
+            self.pending_pair()
+            store.video_review.register_version(
+                self.review,
+                self._movie(self.v2_bytes, "pending.mp4"),
+                batch=1,
+                by="agent",
+                receipt_id="pending-cut",
+                await_receipt=True,
+            )
+            for state in ("active", "stopping", "incomplete"):
+                with self.subTest(state=state), review_stop.operation(self.review, deadline=None):
+                    if state == "stopping":
+                        review_stop.begin(self.review)
+                    elif state == "incomplete":
+                        review_stop.mark(self.review, "http", "incomplete", "synthetic-interruption")
+                    self.assert_notes_reads_preserve_review(server, headers)
+
+    def test_reading_notes_during_an_interrupted_stop_leaves_file_set_intact(self):
+        review_stop.begin(self.review)
+        self.assertFalse((self.review / review_stop.OPERATION_LOCK).exists())
+        with self.review_http() as (server, headers):
+            self.assert_notes_reads_preserve_review(server, headers)
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(raw)["stop"]["state"], "incomplete")
+
+    def test_write_drain_waits_for_an_admitted_recovery(self):
+        self.pending_pair()
+        with self.review_http() as (server, headers):
+            answers = []
+            with store.fsutil.flocked(self.review / store.LOCK_FILE, exclusive=True):
+                worker = threading.Thread(
+                    target=lambda: answers.append(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0])
+                )
+                worker.start()
+                deadline = time.monotonic() + 2
+                while server.wait_for_writes(0) and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertFalse(server.wait_for_writes(0.02))
+                review_stop.begin(self.review)
+                status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+                self.assertEqual((status, json.loads(raw)["code"]), (409, "review-stopped"))
+            worker.join(3)
+            self.assertEqual(answers, [200])
+            self.assertTrue(server.wait_for_writes(0))
+            self.assertEqual(self._note("n1")["text"], "待恢复的合成意见")
+
+    def test_poll_after_restart_leaves_decode_failure_for_write_recovery(self):
+        self.interrupt_after_decode_failure_is_registered()
+        with self.review_http() as (server, headers):
+            with review_stop.operation(self.review, deadline=None):
+                for state in ("active", "stopping", "incomplete"):
+                    if state == "stopping":
+                        review_stop.begin(self.review)
+                    elif state == "incomplete":
+                        review_stop.mark(self.review, "http", "incomplete", "synthetic-interruption")
+                    self.assert_notes_reads_preserve_review(server, headers)
+            self.assertEqual(self._note("n2")["videoReview"]["state"], "pending_review")
+            self.assertEqual(store.handoff_load(self.review)["items"][0]["status"], "drafted")
+
+    def test_explicit_write_recovers_an_interrupted_decode_and_can_be_retried(self):
+        self.interrupt_after_decode_failure_is_registered()
+        with self.review_http() as (server, headers):
+
+            def read():
+                return json.loads(serve._req(server.port, "GET", "/api/notes", headers)[2])
+
+            self.assertTrue(read().get("videoRecoveryPending"))
+            before = self.review_files()
+            for changed, status in (
+                ({"Origin": None}, 403),
+                ({"Content-Type": "text/plain"}, 415),
+                ({"X-AE-Review": "0000000000000000"}, 409),
+            ):
+                request_headers = {k: v for k, v in {**headers, **changed}.items() if v is not None}
+                code, _, _ = serve._req(server.port, "POST", "/api/video/recover", request_headers, {})
+                self.assertEqual(code, status)
+                self.assertEqual(self.review_files(), before)
+            code, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+            self.assertEqual(code, 200, raw)
+            response = read()
+            self.assertFalse(response.get("videoRecoveryPending"))
+            self.assertEqual(response["handoff"]["latest"]["status"], "claimed")
+            notes = {n["id"]: n for n in response["notes"]}
+            self.assertEqual(notes["n2"]["videoReview"]["state"], "failed")
+            self.assertEqual(notes["n1"]["videoReview"]["decision"], "approved")
+            after = self.review_files()
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertEqual(self.review_files(), after)
+
+    def test_reviewer_preserves_damaged_or_foreign_transactions_before_writing(self):
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        other = {
+            "reviewId": "ab" * 8,
+            "notes.json": {"rev": 9, "notes": []},
+            "handoff.json": {"seq": 0, "items": []},
+            "events": [{"op": "video-receipt"}, {"op": "handoff-draft"}],
+        }
+        partial = {**other, "reviewId": self.rid, "handoff.json": {"items": 7}}
+        cases = (
+            (b"{", "damaged-video-commit"),
+            (b"[]", "damaged-video-commit"),
+            (json.dumps(partial).encode(), "damaged-video-commit"),
+            (json.dumps(other).encode(), "foreign-video-commit"),
+        )
+        with self.review_http() as (server, headers):
+
+            def post(body):
+                code, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, body)
+                return code, json.loads(raw)
+
+            for n, (raw, expected_code) in enumerate(cases):
+                with self.subTest(expected_code=expected_code, n=n):
+                    journal.write_bytes(raw)
+                    journal.chmod(0o600)
+                    before = self.review_files()
+                    code, issue = post({})
+                    self.assertEqual((code, issue.get("code")), (409, expected_code))
+                    self.assertTrue(issue["error"])
+                    self.assertEqual(self.review_files(), before)
+                    self.assert_notes_reads_preserve_review(server, headers)
+                    self.assertEqual(post({"preserve": "outdated"})[0], 409)
+                    self.assertEqual(self.review_files(), before)
+                    code, result = post({"preserve": issue["params"]["confirmation"]})
+                    self.assertEqual(code, 200, result)
+                    self.assertEqual((self.review / result["preserved"]).read_bytes(), raw)
+                    self.assertFalse(journal.exists())
+                    self.assertEqual(self._note("n1")["text"], "第96帧字幕遮挡图标")
+                    code, _, raw = serve._req(
+                        server.port,
+                        "POST",
+                        "/api/notes",
+                        headers,
+                        {"page": 1, "id": f"after{n}", "text": "恢复后继续写"},
+                    )
+                    self.assertIn(code, (200, 201), raw)
+                    self.assertEqual(self._note(f"after{n}")["text"], "恢复后继续写")
+
+            submit = {
+                "noteIds": ["n1"],
+                "submitId": "after-recovery",
+                "receiverBindingId": wakeup.load_binding(self.review)["bindingId"],
+            }
+            code, _, raw = serve._req(server.port, "POST", "/api/handoff", headers, submit)
+            self.assertEqual(code, 200, raw)
+            self.assertEqual(json.loads(raw)["seq"], 1)
+            self.assertEqual(store.handoff_load(self.review)["items"][0]["openIds"], ["n1"])
+
+    def test_damaged_transaction_snapshots_preserve_the_saved_review(self):
+        saved = self._note("n1")
+        for name, data in (
+            ("notes.json", {"rev": 1, "notes": [{"id": "n1"}]}),
+            ("notes.json", {"rev": 1, "notes": [saved, saved]}),
+            ("handoff.json", {"seq": 1, "items": [{"seq": 1, "status": "done"}, {"seq": 1, "status": "pending"}]}),
+            ("handoff.json", {"seq": 1, "items": [{"seq": 2, "status": "pending"}]}),
+        ):
+            with self.subTest(name=name, data=data):
+                journal = self.pending_pair()
+                txn = json.loads(journal.read_bytes())
+                txn[name] = data
+                journal.write_text(json.dumps(txn))
+                before = self.review_files()
+                with self.assertRaises(store.VideoCommitError) as failed:
+                    store.recover_video_writes(self.review, self.rid)
+                self.assertEqual(failed.exception.part, name)
+                self.assertEqual(self.review_files(), before)
+                backup = store.recover_video_writes(self.review, self.rid, failed.exception.confirmation)
+                self.assertEqual(json.loads((self.review / backup).read_bytes()), txn)
+                self.assertEqual(self._note("n1"), saved)
+
+    def test_recovery_control_preserves_a_dangling_transaction_entry(self):
+        journal = self.review / store.VIDEO_COMMIT_FILE
+        journal.symlink_to("absent-synthetic-record")
+        with self.review_http() as (server, headers):
+            status, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": headers["Host"]})
+            self.assertEqual(status, 200)
+            self.assertTrue(json.loads(raw).get("videoRecoveryPending"))
+            status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+            self.assertEqual(status, 409, raw)
+            token = json.loads(raw)["params"]["confirmation"]
+            status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {"preserve": token})
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(os.readlink(self.review / json.loads(raw)["preserved"]), "absent-synthetic-record")
+            status, _, raw = serve._req(server.port, "GET", "/api/notes", {"Host": headers["Host"]})
+            self.assertFalse(json.loads(raw).get("videoRecoveryPending"))
+
+    def test_recovery_conflict_uses_localized_handoff_error(self):
+        self.pending_pair()
+        with self.review_http() as (server, headers):
+            server.locale = "en"
+            status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {"preserve": "stale-token"})
+            payload = json.loads(raw)
+            self.assertEqual((status, payload["code"]), (400, "video-commit-changed"))
+            self.assertIn("Recover video review", payload["error"])
+            self.assertNotIn("恢复视频审阅", payload["error"])
+
+    def test_recovery_resumes_each_interrupted_audit_append_exactly_once(self):
+        from unittest.mock import patch
+
+        log = self.review / store.LOG_FILE
+        real_open = os.open
+        for failure_at in (1, 2):
+            with self.subTest(failure_at=failure_at):
+                journal = self.pending_pair()
+                changes = json.loads(journal.read_bytes())
+                for event in changes["events"]:
+                    event["case"] = failure_at
+                journal.write_text(json.dumps(changes))
+                writes = 0
+
+                def disk_open(path, flags, *args, **kwargs):
+                    nonlocal writes
+                    if Path(path) == log and flags & os.O_APPEND:
+                        writes += 1
+                        if writes == failure_at:
+                            raise OSError("synthetic interruption during audit append")
+                    return real_open(path, flags, *args, **kwargs)
+
+                with patch.object(os, "open", side_effect=disk_open), self.assertRaises(OSError):
+                    store.recover_video_writes(self.review, self.rid)
+                self.assertTrue(journal.is_file())
+                for _ in range(2):
+                    store.recover_video_writes(self.review, self.rid)
+                events = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertEqual(
+                    [e["op"] for e in events if e.get("case") == failure_at], ["video-receipt", "handoff-draft"]
+                )
+                self.assertEqual(self._note("n1")["text"], "待恢复的合成意见")
+                self.assertFalse(journal.exists())
+
+    def test_page_releases_unattributed_legacy_work_and_keeps_completed_decisions(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        store.handoff_claim(self.review)
+        store.video_receipt(
+            self.review,
+            receipt_id="partial",
+            finish=False,
+            receipt=[{"noteId": "n3", "outcome": "question", "question": "保留片头吗？"}],
+        )
+        store.video_decision(self.review, "n3", action="reply", reply="保留")
+        saved = self._note("n3")
+        handoff = store.handoff_load(self.review)
+        batch = handoff["items"][0]
+        batch["status"] = "reviewing"
+        batch["claimedAt"] = "2000-01-01T00:00:00Z"
+        batch["videoSubmission"].pop("claimedReceiver")
+        (self.review / store.HANDOFF_FILE).write_text(json.dumps(handoff))
+        with self.review_http() as (server, headers):
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+            self.assertEqual(code, 200, raw)
+            self.assertTrue(json.loads(raw)["videoRecoveryPending"])
+            self.assertEqual(store.handoff_load(self.review), handoff)
+            code, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+            self.assertEqual(code, 200, raw)
+            code, _, raw = serve._req(server.port, "GET", "/api/handoff", headers)
+            current = json.loads(raw)["latest"]
+            self.assertEqual(current["status"], "done")
+            self.assertEqual(current["videoStageRecovery"]["unhandledIds"], ["n1"])
+            self.assertEqual(self._note("n3"), saved)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(run_video_cli(notes_cli.main, ["batches", str(self.review), "--locale", "en"]), 0)
+            self.assertIn("Select these annotations again: n1", output.getvalue())
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            store.handoff_submit(self.review, note_ids=["n1"])
+            self.assertEqual(store.handoff_claim(self.review)["seq"], 2)
+
+    def test_copy_with_pending_writes_rebuilds_only_from_settled_source(self):
+        journal = self.pending_pair()
+        copied = self.root / "copy-before-recovery"
+        shutil.copytree(self.review, copied)
+        original = self.review_files()
+        with self.assertRaisesRegex(build_viewer.BuildError, "先在原审阅"):
+            build_viewer.main(["--rebuild", str(copied)])
+        self.assertEqual((copied / journal.name).read_bytes(), journal.read_bytes())
+        self.assertEqual(store.load(copied)["notes"][0]["text"], "第96帧字幕遮挡图标")
+        self.assertEqual(original, self.review_files())
+        with self.review_http() as (server, headers):
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertFalse(journal.exists())
+            committed = self.review_files()
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertEqual(self.review_files(), committed)
+            code, _, raw = serve._req(server.port, "GET", "/api/notes", headers)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(raw)["notes"][0]["text"], "待恢复的合成意见")
+        fresh = self.root / "settled-copy"
+        shutil.copytree(self.review, fresh)
+        build_viewer.main(["--rebuild", str(fresh)])
+        self.assertNotEqual(ledger.read_manifest(fresh)["reviewId"], self.rid)
+        store.add(fresh, {"id": "fresh", "page": 1, "text": "新审阅继续批注"})
+        self.assertFalse(any(n["id"] == "fresh" for n in store.load(self.review)["notes"]))
+
+    def test_staged_render_is_preserved_until_recovery_is_admitted(self):
+        from unittest.mock import patch
+
+        replace = os.replace
+
+        def interrupt(src, dest):
+            if Path(dest) == self.review / "review.json":
+                raise OSError("synthetic interruption before publishing V2")
+            return replace(src, dest)
+
+        with patch.object(os, "replace", side_effect=interrupt), self.assertRaises(OSError):
+            store.video_review.register_version(self.review, self._movie(self.v2_bytes, "new.mp4"), batch=1, by="agent")
+        stage = self.review / "media" / "v2.mp4"
+        journal = self.review / ".video-registration.json"
+        self.assertEqual(stage.read_bytes(), self.v2_bytes)
+        self.assertTrue(journal.is_file())
+        with self.review_http() as (server, headers):
+            self.assert_notes_reads_preserve_review(server, headers)
+            with review_stop.operation(self.review, deadline=None):
+                review_stop.begin(self.review)
+                for state in ("stopping", "incomplete"):
+                    if state == "incomplete":
+                        review_stop.mark(self.review, "http", "incomplete", "synthetic-interruption")
+                    before = self.review_files()
+                    self.assert_notes_reads_preserve_review(server, headers)
+                    status, _, raw = serve._req(server.port, "POST", "/api/video/recover", headers, {})
+                    self.assertEqual((status, json.loads(raw)["code"]), (409, "review-stopped"))
+                    self.assertEqual(self.review_files(), before)
+                review_stop.start(self.review)
+            self.assertEqual(serve._req(server.port, "POST", "/api/video/recover", headers, {})[0], 200)
+            self.assertFalse(journal.exists())
+            self.assertEqual(ledger.read_manifest(self.review)["video"]["currentVersionId"], "V2")
+            self.assertEqual(stage.read_bytes(), self.v2_bytes)
 
     def test_same_receiver_can_replace_failed_cut_after_interruption_before_page_refresh(self):
         self.interrupt_after_decode_failure_is_registered()
@@ -425,6 +838,49 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
             store.video_decode_failed(self.review, **req)
         self.assertEqual(self._note("n2")["videoReview"]["versionId"], "V3")
 
+    def test_a_later_playback_failure_does_not_reopen_a_released_batch(self):
+        store.handoff_submit(self.review, note_ids=["n1", "n3"])
+        store.handoff_claim(self.review, seq=1)
+        for nid, version, finish in (("n1", "V2", False), ("n3", "V3", True)):
+            store.video_receipt(
+                self.review,
+                seq=1,
+                receipt_id=version,
+                movie=self._movie(self.v2_bytes, version + ".mp4"),
+                finish=finish,
+                receipt=[{"noteId": nid, "outcome": "fixed", "summary": "重做画面", "target": {"frame": 12}}],
+            )
+
+        def report(nid, version):
+            store.video_decode_failed(
+                self.review,
+                note_id=nid,
+                version_id=version,
+                seq=1,
+                review_id=self.rid,
+                expected_evidence=self._note(nid)["videoReview"]["evidenceRevision"],
+                reason="MediaError 3",
+            )
+
+        report("n3", "V3")
+        with self.assertRaises(store.HandoffError):
+            store.release_video_repair(self.review, seq=1, version_id="V2", review_id=self.rid)
+        store.release_video_repair(self.review, seq=1, version_id="V3", review_id=self.rid)
+        self.assertEqual(store.handoff_state(self.review)["latest"]["status"], "drafted")
+        self.assertEqual(self._note("n1")["videoReview"]["state"], "pending_review")
+        store.handoff_submit(self.review, note_ids=["n3"])
+        store.handoff_claim(self.review, seq=2)
+        before = store.handoff_load(self.review)["items"][1]
+        report("n1", "V2")
+        state = store.handoff_state(self.review)
+        self.assertEqual(state["history"][1]["status"], "done")
+        self.assertEqual(state["inFlightIds"], ["n3"])
+        self.assertEqual(self._note("n1")["videoReview"]["state"], "failed")
+        with self.assertRaises(store.HandoffError):
+            store.video_receipt(self.review, seq=1, receipt_id="late", movie=self.v1_path)
+        store.release_video_repair(self.review, seq=1, version_id="V3", review_id=self.rid)
+        self.assertEqual(store.handoff_load(self.review)["items"][1], before)
+
     def test_approval_requires_the_evidence_revision_selected_by_the_reviewer(self):
         self._deliver_v2_mixed_batch()
         stale = "older-location"
@@ -440,6 +896,43 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
         )
         self.assertEqual(result["finalizedIds"], ["n2"])
         self.assertEqual(self._note("n1")["status"], "drafted")
+
+    def test_bulk_review_preview_and_results_keep_reasons_for_each_annotation(self):
+        self._deliver_v2_mixed_batch()
+        store.add(self.review, video_note("n7", "补充片尾用字", frame=165))
+        store.handoff_submit(self.review, note_ids=["n6", "n7"])
+        store.handoff_claim(self.review, seq=2)
+        store.video_receipt(
+            self.review,
+            seq=2,
+            receipt_id="unreadable-new-cut",
+            movie=self._movie(self.v3_bytes, "final.mp4"),
+            receipt=[
+                {"noteId": "n6", "outcome": "fixed", "summary": "加大字号", "target": {"frame": 150}},
+                {"noteId": "n7", "outcome": "question", "question": "使用哪种字体？"},
+            ],
+        )
+        store.video_decision(self.review, "n7", action="reply", reply="保留片头字体")
+        (self.review / "media" / "v3.mp4").unlink()
+        preview = store.handoff_state(self.review)["finalizable"]
+        self.assertEqual(preview["batches"], [{"seq": 1, "ids": ["n1", "n2"]}])
+        excluded = {
+            "n3": "needs_reply",
+            "n4": "needs_relocate",
+            "n5": "missing_evidence",
+            "n6": "media-unreadable",
+            "n7": "replied",
+        }
+        self.assertEqual({row["id"]: row.get("detail") for row in preview["skipped"]}, excluded)
+        result = store.handoff_finalize_all(
+            self.review,
+            {1: {"n1", "n2"}},
+            evidence={"n1": self._note("n1")["videoReview"]["evidenceRevision"], "n2": "earlier-evidence"},
+        )
+        self.assertEqual(result["finalizedIds"], ["n1"])
+        self.assertEqual(
+            {row["id"]: row.get("detail") for row in result["skipped"]}, {**excluded, "n2": "evidence-changed"}
+        )
 
     def test_selective_batch_finalize_approves_only_picked_ready_items_and_blocks_all_unready_states(self):
         self._deliver_v2_mixed_batch()
@@ -545,6 +1038,133 @@ class VideoDecisionApprovalAndBatchTests(VideoReviewReworkBase):
 
 
 class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
+    def test_existing_reply_is_reported_by_the_cli_and_batch_review(self):
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n3", action="reply", reply="保留原配乐")
+        doc = store.load(self.review)
+        vr = next(n["videoReview"] for n in doc["notes"] if n["id"] == "n3")
+        vr.pop("batch")  # 旧记录只留下决定批次
+        vr.pop("evidenceRevision")
+        vr.pop("decisionInputRevision")
+        (self.review / store.NOTES_FILE).write_text(json.dumps(doc))
+        for lang, summary, status in (
+            ("zh-CN", "待答复 0，已答复 1", "回执状态：已答复"),
+            ("en", "needs reply 0, replied 1", "Receipt status: Replied"),
+        ):
+            with self.subTest(locale=lang):
+                rc, out, err = self._run_cli(["batches", str(self.review), "--locale", lang])
+                self.assertEqual(rc, 0, err)
+                self.assertIn(summary, out)
+                rc, out, err = self._run_cli(["show", str(self.review), "--all", "--locale", lang])
+                self.assertEqual(rc, 0, err)
+                self.assertIn(status, out)
+        skipped = store.handoff_finalize_all(self.review, {1: {"n3"}}, evidence={"n3": "legacy"})["skipped"]
+        self.assertEqual(next(row["detail"] for row in skipped if row["id"] == "n3"), "replied")
+        self.assertEqual(store.load(self.review), doc)
+
+    def test_evidence_history_links_receipt_relocation_return_and_reply(self):
+        self._deliver_v2_mixed_batch()
+        first = self._note("n4")["videoReview"]["evidenceRevision"]
+        _, moved, _ = store.relocate_video_note(
+            self.review,
+            "n4",
+            version_id="V2",
+            target={"kind": "range", "startFrame": 66, "endFrame": 96},
+            summary="调整转场",
+            expected_evidence=first,
+        )
+        second = moved["videoReview"]["evidenceRevision"]
+        returned = store.video_decision(self.review, "n4", action="return", reason="还需延长", expected_evidence=second)
+        review = returned["note"]["videoReview"]
+        self.assertEqual(
+            [entry["evidenceRevision"] for entry in review["history"]], [first, second, review["evidenceRevision"]]
+        )
+        self.assertEqual([entry["previousEvidenceRevision"] for entry in review["history"][1:]], [first, second])
+        self.assertEqual(len({first, second, review["evidenceRevision"]}), 3)
+        self.assertEqual(
+            [entry["action"] for entry in returned["note"]["trail"]], ["relocate", "relocated", "returned"]
+        )
+
+        original = self._note("n3")["videoReview"]["evidenceRevision"]
+        reply = store.video_decision(self.review, "n3", action="reply", reply="保留", expected_evidence=original)[
+            "note"
+        ]["videoReview"]
+        self.assertEqual(
+            (reply["history"][-1]["previousEvidenceRevision"], reply["history"][-1]["evidenceRevision"]),
+            (original, reply["evidenceRevision"]),
+        )
+        self.assertNotEqual(original, reply["evidenceRevision"])
+
+    def test_legacy_decisions_survive_relocation_attempts_and_stale_receipts(self):
+        store.handoff_submit(self.review, note_ids=["n3", "n4"])
+        store.handoff_claim(self.review, seq=1)
+        store.video_receipt(
+            self.review,
+            seq=1,
+            receipt_id="partial",
+            finish=False,
+            movie=self._movie(self.v2_bytes, "v2.mp4"),
+            receipt=[
+                {"noteId": "n3", "outcome": "question", "question": "保留片头吗？"},
+                {"noteId": "n4", "outcome": "fixed", "summary": "旧版只有改动说明"},
+            ],
+        )
+        store.video_decision(self.review, "n3", action="reply", reply="保留")
+        store.video_decision(self.review, "n4", action="return", reason="调整字幕")
+        legacy = store.load(self.review)
+        # 旧写入方允许人工决定与待补定位的状态共存。
+        for note in legacy["notes"]:
+            if note["id"] in ("n3", "n4"):
+                note["videoReview"]["state"] = "missing_evidence"
+        (self.review / store.NOTES_FILE).write_text(json.dumps(legacy))
+        for nid, target in (
+            ("n3", {"kind": "frame", "frame": 16}),
+            ("n4", {"kind": "range", "startFrame": 60, "endFrame": 70}),
+        ):
+            with self.subTest(nid=nid):
+                before = self._note(nid)
+                revision = before["videoReview"]["evidenceRevision"]
+                with self.assertRaises(store.HandoffError) as protected:
+                    store.relocate_video_note(
+                        self.review, nid, version_id="V2", target=target, expected_evidence=revision
+                    )
+                self.assertEqual(protected.exception.code, "note-already-decided")
+                with self.assertRaises(store.HandoffError) as stale:
+                    store.video_receipt(
+                        self.review,
+                        seq=1,
+                        receipt_id="late-" + nid,
+                        finish=False,
+                        receipt=[{"noteId": nid, "outcome": "question", "question": "迟到的问题"}],
+                    )
+                self.assertEqual(stale.exception.code, "stale-receipt")
+                self.assertEqual(self._note(nid), before)
+        self.assertEqual(store.load(self.review), legacy)
+
+    def test_only_an_open_unanswered_question_accepts_a_reply(self):
+        self._deliver_v2_mixed_batch()
+        store.video_decision(self.review, "n1", action="return", reason="字幕需要再上移")
+        store.video_decision(self.review, "n2", action="approve")
+        for nid in ("n1", "n2", "n4", "n5", "n6"):
+            with self.subTest(nid=nid):
+                before = self._note(nid)
+                with self.assertRaises(store.HandoffError):
+                    store.video_decision(self.review, nid, action="reply", reply="保留片头")
+                self.assertEqual(self._note(nid), before)
+        first = {
+            "action": "reply",
+            "reply": "保留片头",
+            "expected_evidence": self._note("n3")["videoReview"]["evidenceRevision"],
+        }
+        saved = store.video_decision(self.review, "n3", **first)["note"]
+        self.assertTrue(store.video_decision(self.review, "n3", **first)["replayed"])
+        for request in ({"action": "reply", "reply": "改为动画"}, {"action": "return", "reason": "改为动画"}):
+            with self.subTest(action=request["action"]), self.assertRaises(store.HandoffError):
+                store.video_decision(
+                    self.review, "n3", expected_evidence=saved["videoReview"]["evidenceRevision"], **request
+                )
+            self.assertEqual(self._note("n3"), saved)
+
     def test_late_return_or_reply_cannot_restore_an_older_decision(self):
         self._deliver_v2_mixed_batch()
         for nid, action, field in (("n2", "return", "reason"), ("n3", "reply", "reply")):
@@ -555,6 +1175,16 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
                 current = result["note"]["videoReview"]["evidenceRevision"]
                 self.assertNotEqual(current, original)
                 self.assertTrue(store.video_decision(self.review, nid, **first)["replayed"])
+                if action == "reply":
+                    store.handoff_submit(self.review, note_ids=[nid])
+                    store.handoff_claim(self.review, seq=2)
+                    store.video_receipt(
+                        self.review,
+                        seq=2,
+                        receipt_id="another-question",
+                        receipt=[{"noteId": nid, "outcome": "question", "question": "需要保留几帧？"}],
+                    )
+                    current = self._note(nid)["videoReview"]["evidenceRevision"]
                 store.video_decision(
                     self.review, nid, **{"action": action, field: "第二稿", "expected_evidence": current}
                 )
@@ -574,7 +1204,7 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         try:
             with redirect_stdout(out), redirect_stderr(err):
                 try:
-                    code = notes_cli.main(argv)
+                    code = run_video_cli(notes_cli.main, argv)
                 except SystemExit as exc:
                     code = int(exc.code) if isinstance(exc.code, int) else 2
         finally:
@@ -599,6 +1229,30 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         self.assertEqual(self._note("fresh")["status"], "open")
         self.assertNotIn("resolvedBy", self._note("fresh"))
 
+    def test_document_cli_import_explains_a_cross_format_location(self):
+        document = self.root / "document"
+        build_viewer.build(ROOT / "fixtures/sample/report.html", None, document, no_scan_skills=True)
+        export = self.root / "foreign.json"
+        export.write_text(json.dumps([video_note("other", "move title", frame=1)]))
+        for lang, hint in (("en", "matching cut"), ("zh-CN", "对应成片")):
+            code, _, err = self._run_cli(["import", str(document), str(export), "--locale", lang])
+            self.assertNotEqual(code, 0)
+            self.assertIn(hint, err)
+            self.assertEqual(store.load(document)["notes"], [])
+
+    def test_cli_show_points_to_available_video_decisions(self):
+        self._deliver_v2_mixed_batch()
+        for lang, actions, absent in (
+            ("zh-CN", ("逐条通过", "退回", "批量通过"), "请求复核或直接定稿"),
+            ("en", ("approve or return", "selected"), "asks for the review"),
+        ):
+            with self.subTest(lang=lang):
+                code, out, err = self._run_cli(["show", str(self.review), "--locale", lang])
+                self.assertEqual(code, 0, err)
+                for action in actions:
+                    self.assertIn(action, out.lower())
+                self.assertNotIn(absent, out.lower())
+
     def test_cli_reopen_cannot_return_pending_video_even_with_page_display_name(self):
         self._deliver_v2_mixed_batch()
         before = self._note("n1")
@@ -613,6 +1267,9 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         self._deliver_v2_mixed_batch()
         before_batches = len(store.handoff_load(self.review)["items"])
         self.assertEqual(before_batches, 1)
+
+        initial_stats = store.handoff_state(self.review)["latest"]["videoStats"]
+        self.assertEqual(initial_stats["needsReplyIds"], ["n3"])
 
         # V2 上：通过 n1（字幕），退回 n2（音量），答复 n3（待答复）
         store.video_decision(self.review, "n1", action="approve", expected_batch=1, expected_version="V2", by="page")
@@ -646,7 +1303,12 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
         self.assertEqual(state["inFlightIds"], [])
         self.assertEqual(state["history"][0]["videoStats"]["approvedIds"], ["n1"])
         self.assertEqual(state["history"][0]["videoStats"]["returnedIds"], ["n2"])
-        self.assertEqual(state["history"][0]["videoStats"]["needsReplyIds"], ["n3"])
+        stats = state["history"][0]["videoStats"]
+        self.assertEqual((stats["needsReplyCount"], stats["needsReplyIds"]), (0, []))
+        self.assertEqual((stats["repliedCount"], stats["repliedIds"]), (1, ["n3"]))
+        self.assertEqual(sum(value for key, value in stats.items() if key.endswith("Count")), 6)
+        self.assertEqual(rep["handoff"]["latest"]["videoStats"], stats)
+        self.assertEqual(hdoc["items"][0]["videoStats"], stats)
 
         n2 = self._note("n2")
         self.assertEqual(n2["status"], "open")
@@ -1047,16 +1709,33 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
             )
             self.assertEqual(c3, 200, raw3)
             self.assertEqual(json.loads(raw3)["note"]["videoReview"]["reply"], "保留原片头并渐隐")
+            for nid in ("n2", "n3", "n4", "n5"):
+                record = self._note(nid)
+                code, _, raw = serve._req(
+                    server.port,
+                    "POST",
+                    f"/api/notes/{nid}/video-decision",
+                    headers,
+                    {
+                        "action": "reply",
+                        "reply": "覆盖旧决定",
+                        "expectedEvidence": record["videoReview"]["evidenceRevision"],
+                    },
+                )
+                self.assertEqual((code, json.loads(raw)["code"]), (400, "video-not-awaiting-reply"))
+                self.assertEqual(self._note(nid), record)
         finally:
             store.locked, ledger.metadata_lock = orig_store_locked, orig_meta_lock
 
         # CLI show 与 batches 在中英文下正确渲染 decision / returnReason / reply / history / replied 痕迹
+        previous = notes_cli.i18n.current_locale()
         for lang, expected_tokens in (
             ("zh-CN", ("已通过", "人声被背景音盖住", "保留原片头并渐隐", "已答复", "历史")),
             ("en", ("Approved", "人声被背景音盖住", "保留原片头并渐隐", "Replied", "History")),
         ):
             sc, sout, serr = self._run_cli(["show", str(self.review), "--all", "--locale", lang])
             self.assertEqual(sc, 0, serr)
+            self.assertEqual(notes_cli.i18n.current_locale(), previous)
             for tok in expected_tokens:
                 self.assertIn(tok, sout)
             self.assertNotIn("cli.batch.trail.action.", sout)
@@ -1096,6 +1775,151 @@ class VideoReturnReplyReworkAndImmutabilityTests(VideoReviewReworkBase):
 
 
 class VideoPageReworkUITests(unittest.TestCase):
+    def test_document_batch_confirmation_counts_only_ordinary_drafts(self):
+        result = interaction_program(
+            [("function finalizeBatch(seq)", "const FINALIZE_SKIP=")],
+            """const notes=[{id:'video',status:'drafted',draftBatch:3,video:{v:2}},
+              {id:'doc',status:'drafted',draftBatch:3}],isDraft=n=>n.status==='drafted';
+            const confirms=[],messages=[],posts=[];const confirm=s=>{confirms.push(s);return true},
+              batchAction=async(p,b)=>posts.push([p,b]),toast=s=>messages.push(s);""",
+            """await finalizeBatch(3);notes.pop();await finalizeBatch(3);return {confirms,messages,posts};""",
+            locale="zh-CN",
+        )
+        self.assertEqual(len(result["confirms"]), 1)
+        self.assertIn("1 条", result["confirms"][0])
+        self.assertIn("视频审阅", result["messages"][0])
+        self.assertEqual(result["posts"], [["/api/handoff/finalize", {"seq": 3}]])
+
+    def test_document_page_rejects_foreign_location_before_saving_or_queueing(self):
+        for file_mode in (True, False):
+            with self.subTest(file=file_mode):
+                result = interaction_program(
+                    [
+                        ("function mergeLocal(items)", "const FULL_CHECK_COMPAT="),
+                        ("async function mutate(op)", "function onSent("),
+                    ],
+                    "const FILE="
+                    + json.dumps(file_mode)
+                    + """,VIDEO=null,mode="offline",K={notes:"notes"};
+                    let notes=[{id:"doc",page:1,text:"document",status:"open"},
+                      {id:"old",page:1,video:{v:2},status:"resolved",videoReview:{decision:"approved"},resolvedBy:"page",at:"before"}];
+                    const saved=[],queued=[],messages=[],LS={get:()=>notes},pend={push:op=>queued.push(op)};
+                    const mirror=()=>saved.push(true),refreshList=()=>{},updateMode=()=>{},toast=msg=>messages.push(msg);
+                    const docxBlocked=()=>false,pptxBlocked=()=>false,videoBlocked=()=>false,newId=()=>"op";
+                    const cleanItem=x=>({...x}),stamp=x=>x.at==="later"?2:1,dedupKey=x=>x.text,videoKey=JSON.stringify,settleMarks=()=>{},nowIso=()=>"now";""",
+                    """const imported={id:"new",page:1,text:"video",video:{v:2}};
+                    await mutate({kind:"import",notes:[{id:"ordinary",page:1,text:"partial"},imported]});
+                    await mutate({kind:"add",note:imported});await mutate({kind:"patch",id:"doc",body:{video:{v:2}}});
+                    await mutate({kind:"patch",id:"old",body:{status:"open"}});
+                    const rejected={saved:saved.length,queued:queued.length,messages:[...messages]};
+                    await mutate({kind:"import",notes:[{id:"old",page:1,video:{v:2},text:"updated",status:"open",at:"later"}]});
+                    return {rejected,notes};""",
+                )
+                self.assertEqual((result["rejected"]["saved"], result["rejected"]["queued"]), (0, 0))
+                self.assertEqual(len(result["rejected"]["messages"]), 4)
+                doc, old = result["notes"]
+                self.assertNotIn("video", doc)
+                self.assertEqual(
+                    (old["text"], old["status"], old["resolvedBy"], old["videoReview"]["decision"]),
+                    ("updated", "resolved", "page", "approved"),
+                )
+
+    def test_bulk_panel_explains_each_skip_with_the_page_catalogs(self):
+        skipped = [
+            {"id": nid, "reason": "unready", "detail": detail}
+            for nid, detail in (
+                ("question", "needs_reply"),
+                ("location", "needs_relocate"),
+                ("evidence", "missing_evidence"),
+                ("cut", "media-unreadable"),
+                ("answer", "replied"),
+            )
+        ]
+        result = {
+            "finalizedCount": 1,
+            "batches": [1],
+            "skippedCount": len(skipped) + 1,
+            "skipped": [*skipped, {"id": "title", "reason": "changed", "detail": "evidence-changed"}],
+        }
+        for lang, labels, changed in (
+            ("zh-CN", ("待答复", "待定位", "缺证据", "媒体不可读", "已答复"), "重新打开"),
+            ("en", ("Needs reply", "Needs relocate", "Missing evidence", "Media unreadable", "Replied"), "reopen"),
+        ):
+            with self.subTest(locale=lang):
+                panel = interaction_program(
+                    [(self.PURE_START, self.PURE_END), (self.FINALIZE_START, self.FINALIZE_END)],
+                    "const notes=[],VIDEO={},FILE=false,mode='server',finalizeAllSupported=true,finalizingAll=false,finalizeAllError='';"
+                    "const videoManifest=()=>VIDEO,isDraft=x=>x.status==='drafted';let finalizeAllResult=null;"
+                    "const hand={finalizable:{count:1,batches:[{seq:1,ids:['ready']}],skipped:"
+                    + json.dumps(skipped)
+                    + "}};",
+                    """renderFinalizeAll();const preview=$('videoBatchBlocked').textContent;
+                    finalizeAllResult="""
+                    + json.dumps(result)
+                    + """;renderFinalizeAll();
+                    return {preview,result:$('finalizeAllInfo').textContent};""",
+                    locale=lang,
+                )
+                for nid, label in zip(("question", "location", "evidence", "cut", "answer"), labels):
+                    for text in panel.values():
+                        self.assertTrue(any(nid in line and label in line for line in text.splitlines()), text)
+                self.assertTrue(
+                    any("title" in line and changed in line.lower() for line in panel["result"].splitlines()), panel
+                )
+
+    def test_resume_banner_and_arrival_notice_guide_each_review_format(self):
+        for lang, video_action, batch_action, doc_action in (
+            ("zh-CN", "逐条通过", "批量通过", "请求复核或直接定稿"),
+            ("en", "approve or return", "selected", "ask for the review or finalize"),
+        ):
+            for video in (True, False):
+                with self.subTest(locale=lang, video=video):
+                    messages = interaction_program(
+                        [
+                            ("function renderResume(){", "function goLast(){"),
+                            ("function setHand(h,quiet)", 'let handSig=""'),
+                        ],
+                        "const VIDEO="
+                        + json.dumps(video)
+                        + """,FILE=false,notes=[],P=[{n:1}],i=0;
+                        let hand={latest:{seq:1,status:'claimed'}},handSig='',flightSig='',resumeOff=false,resumeReady=true;
+                        const lostNotes=()=>[],lastNote=()=>null,counts=()=>({o:0,d:2}),fit=()=>{},renderFinalizeAll=()=>{};
+                        const messages=[],toast=msg=>messages.push(msg);$('resumeGo').style={};$('resume').classList.add=()=>{};""",
+                        """setHand({latest:{seq:1,status:'drafted',draftedCount:2}},true);renderResume();
+                        return [messages[0],$('resumeText').innerHTML];""",
+                        locale=lang,
+                    )
+                    for msg in messages:
+                        if video:
+                            self.assertIn(video_action, msg.lower())
+                            self.assertIn(batch_action, msg.lower())
+                            self.assertNotIn(doc_action, msg.lower())
+                        else:
+                            self.assertIn(doc_action, msg.lower())
+
+    def test_review_recovery_control_confirms_the_specific_record(self):
+        self.assertTrue('id="videoRecoveryBtn"' in self.TEMPLATE.read_text())
+        result = interaction_program(
+            [("function renderVideoRecovery(", "async function poll(){")],
+            """let accepted=false; const prompts=[], posts=[], messages=[];
+            const confirm=msg=>{prompts.push(msg);return accepted}, toast=message=>messages.push(message), resync=async()=>{};
+            const api=async(method,path,body)=>{posts.push([method,path,body]);
+              if(body.preserve)return {preserved:'synthetic.saved'};
+              throw Object.assign(new Error('Different review'), {code:'foreign-video-commit',params:{confirmation:'record-1'}})};""",
+            """const button=$('videoRecoveryBtn'); renderVideoRecovery({}); const hidden=button.hidden;
+            renderVideoRecovery({videoRecoveryPending:true,stop:{state:'incomplete'}}); const disabled=button.disabled;
+            renderVideoRecovery({videoRecoveryPending:true,stop:{state:'active'}}); await button.onclick();
+            const afterCancel=posts.length; accepted=true; await button.onclick();
+            return {hidden,disabled,visible:!button.hidden,afterCancel,posts,prompts,messages};""",
+        )
+        self.assertTrue(result["hidden"] and result["disabled"] and result["visible"])
+        self.assertEqual(result["afterCancel"], 1)
+        self.assertEqual(
+            result["posts"], [["POST", "/api/video/recover", body] for body in ({}, {}, {"preserve": "record-1"})]
+        )
+        self.assertIn("Different review", result["prompts"][-1])
+        self.assertIn("synthetic.saved", result["messages"][-1])
+
     TEMPLATE = ROOT / "skill" / "annotation-everything" / "scripts" / "viewer_template.html"
     PURE_START = "// ---------- 视频审阅纯函数 ----------"
     PURE_END = "// ---------- 视频审阅 DOM ----------"
@@ -1143,6 +1967,50 @@ class VideoPageReworkUITests(unittest.TestCase):
                 },
             ],
         }
+
+    def test_history_offers_release_only_for_decode_repairs_and_requires_confirmation(self):
+        setup = """
+        let VIDEO=true,supported=true,accepted=false,click,currentTaskSeq=null,currentTaskOpen=false,batchOpen=null;
+        const notes=[],posts=[],prompts=[],serverSupports=feature=>supported&&feature==="video-release-repair";
+        const fmtIso=x=>x||"",batchStatus=x=>x,handUserMessage=()=>"";
+        const hand={history:[]}, batch={seq:2,status:"claimed",videoFailure:{stage:"decode",versionId:"V5"}};
+        const render=h=>{hand.history=[h];renderBatches();return $("batchList").innerHTML};
+        const confirm=message=>{prompts.push(message);return accepted};
+        const batchAction=(path,body)=>posts.push({path,body});
+        $("batchList").querySelector=()=>null;
+        $("batchList").addEventListener=(_,cb)=>{click=cb};
+        """
+        expression = """
+        const visible=render(batch);
+        const target={closest:selector=>selector==="[data-release-repair]"?{dataset:{releaseRepair:"2",version:"V5"}}:null};
+        click({target});const cancelled=posts.length;accepted=true;click({target});
+        const closed=render({...batch,status:"done",videoRepairRelease:{versionId:"V5",ids:["x"],at:"10:00",by:"page"}});
+        const normal=render({...batch,videoFailure:undefined});
+        supported=false;const old=render(batch);supported=true;VIDEO=false;const document=render(batch);
+        return {visible,closed,normal,old,document,cancelled,posts,prompts};
+        """
+        for lang, release, recorded in (
+            ("zh-CN", "放弃本批补交", "已放弃"),
+            ("en", "End repair", "ended"),
+        ):
+            result = interaction_program(
+                [("function renderBatches(){", '$("handMsg").addEventListener("keydown"')],
+                setup,
+                expression,
+                locale=lang,
+            )
+            self.assertIn(release, result["visible"])
+            self.assertIn('data-release-repair="2"', result["visible"])
+            self.assertIn('data-version="V5"', result["visible"])
+            self.assertEqual(result["cancelled"], 0)
+            self.assertEqual(
+                result["posts"], [{"path": "/api/video/release-repair", "body": {"batch": 2, "versionId": "V5"}}]
+            )
+            self.assertTrue(all("V5" in message and "2" in message for message in result["prompts"]))
+            self.assertIn(recorded, result["closed"])
+            self.assertIn("V5", result["closed"])
+            for state in ("closed", "normal", "old", "document"):
+                self.assertNotIn("data-release-repair", result[state])
 
     def test_pure_history_receipt_card_and_note_html_render_decisions_safely(self):
         manifest = self._manifest()
@@ -1305,12 +2173,12 @@ class VideoPageReworkUITests(unittest.TestCase):
             self.assertIn('data-act="video-approve"', actual["noteCards"][0])
             self.assertIn('data-act="video-return-open"', actual["noteCards"][0])
             self.assertNotIn('data-act="reopen"', actual["noteCards"][0])
-            # n2 needs_reply has no batch pick, has escaped reply + inline reply form, no approve button
+            # The saved reply is escaped and read only.
             self.assertNotIn('data-act="video-batch-pick"', actual["vrCards"][1])
             self.assertNotIn("<script>alert(1)</script>", actual["vrCards"][1])
             self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", actual["vrCards"][1])
-            self.assertIn('data-vid-reply="n2"', actual["vrCards"][1])
-            self.assertIn('data-act="video-reply-save"', actual["vrCards"][1])
+            self.assertNotIn('data-vid-reply="n2"', actual["vrCards"][1])
+            self.assertNotIn('data-act="video-reply-save"', actual["vrCards"][1])
             self.assertNotIn('data-act="video-approve"', actual["noteCards"][1])
             self.assertNotIn('data-act="resolve"', actual["noteCards"][1])
             # n3 approved is immutable in card UI: no batch pick, no edit, no reopen, no approve
@@ -1441,44 +2309,54 @@ class VideoPageReworkUITests(unittest.TestCase):
             "const getNotes=async()=>({notes,handoff:hand});"
             "const api=async(m,p,b)=>{apiCalls.push({m,p,b});return {doc:{notes,rev:2},handoff:{finalizable:{count:1,batches:[{seq:1,ids:['n2']}],skipped:[]}},finalizedCount:1,finalizedIds:['n1'],skippedCount:0,skipped:[],batches:[{seq:1,ids:['n1']}]}};"
         )
-        actual = interaction_program(
-            [(self.PURE_START, self.PURE_END), (self.FINALIZE_START, self.FINALIZE_END)],
-            setup,
-            """
-            videoSyncApproveSel();
-            renderFinalizeAll();
-            const initialDisabled = $("finalizeAllBtn").disabled;
-            const initialSelSize = videoApproveSel.size;
-            const infoText = $("finalizeAllInfo").textContent;
-            const blockedHtml = $("videoBatchBlocked") ? $("videoBatchBlocked").textContent : infoText;
+        for lang, warning, reopen in (("zh-CN", "不可撤销", "重新打开"), ("en", "cannot be undone", "reopen")):
+            with self.subTest(locale=lang):
+                actual = interaction_program(
+                    [(self.PURE_START, self.PURE_END), (self.FINALIZE_START, self.FINALIZE_END)],
+                    setup,
+                    """
+                    videoSyncApproveSel();
+                    renderFinalizeAll();
+                    const initialDisabled = $("finalizeAllBtn").disabled;
+                    const initialSelSize = videoApproveSel.size;
+                    const infoText = $("finalizeAllInfo").textContent;
+                    const blockedHtml = $("videoBatchBlocked") ? $("videoBatchBlocked").textContent : infoText;
 
-            // 试图直接勾选一个不可复核条目也不得生效，只勾选 n1
-            videoToggleApprovePick("n3", true);
-            videoToggleApprovePick("n1", true);
-            const selAfterPick = [...videoApproveSel.keys()];
-            renderFinalizeAll();
-            const btnAfterPick = $("finalizeAllBtn").textContent;
-            await finalizeAll();
-            const blockedCount=apiCalls.length;
-            playable=true;
-            await finalizeAll();
-            const postPicked = apiCalls[0] ? apiCalls[0].b : null;
+                    // 试图直接勾选一个不可复核条目也不得生效，只勾选 n1
+                    videoToggleApprovePick("n3", true);
+                    videoToggleApprovePick("n1", true);
+                    const selAfterPick = [...videoApproveSel.keys()];
+                    renderFinalizeAll();
+                    const btnAfterPick = $("finalizeAllBtn").textContent;
+                    await finalizeAll();
+                    const blockedCount=apiCalls.length;
+                    playable=true;
+                    await finalizeAll();
+                    const postPicked = apiCalls[0] ? apiCalls[0].b : null;
 
-            // 全选待复核只能选中 n1, n2（其余 n3..n7 全部排除）
-            videoSelectAllReady();
-            const selAll = [...videoApproveSel.keys()];
-            return { initialDisabled, initialSelSize, blockedHtml, selAfterPick, btnAfterPick, postPicked, selAll, blockedCount };
-            """,
-            locale="zh-CN",
-        )
-        self.assertTrue(actual["initialDisabled"])
-        self.assertEqual(actual["initialSelSize"], 0)
-        self.assertTrue(actual["blockedHtml"])
-        self.assertEqual(actual["blockedCount"], 0)
-        self.assertEqual(actual["selAfterPick"], ["n1"])
-        self.assertIn("1", actual["btnAfterPick"])
-        self.assertEqual(actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}], "evidence": {"n1": "legacy"}})
-        self.assertEqual(actual["selAll"], ["n1", "n2"])
+                    // 全选待复核只能选中 n1, n2（其余 n3..n7 全部排除）
+                    videoSelectAllReady();
+                    const selAll = [...videoApproveSel.keys()];
+                    notes[0].videoReview.evidenceRevision='new-revision'; renderFinalizeAll();
+                    return {initialDisabled,initialSelSize,blockedHtml,selAfterPick,btnAfterPick,postPicked,selAll,blockedCount,
+                      confirm:confirms[0], changed:$("videoBatchBlocked").textContent, pickedAfterChange:[...videoApproveSel.keys()]};
+                    """,
+                    locale=lang,
+                )
+                self.assertTrue(actual["initialDisabled"])
+                self.assertEqual(actual["initialSelSize"], 0)
+                self.assertTrue(actual["blockedHtml"])
+                self.assertEqual(actual["blockedCount"], 0)
+                self.assertEqual(actual["selAfterPick"], ["n1"])
+                self.assertIn("1", actual["btnAfterPick"])
+                self.assertEqual(
+                    actual["postPicked"], {"batches": [{"seq": 1, "ids": ["n1"]}], "evidence": {"n1": "legacy"}}
+                )
+                self.assertEqual(actual["selAll"], ["n1", "n2"])
+                self.assertIn(warning, actual["confirm"].lower())
+                self.assertIn("n1", actual["changed"])
+                self.assertIn(reopen, actual["changed"].lower())
+                self.assertNotIn("n1", actual["pickedAfterChange"])
 
     def test_selective_rework_handpick_and_compare_decisions_wire_cleanly(self):
         manifest = self._manifest()
@@ -1608,7 +2486,7 @@ class VideoPageReworkUITests(unittest.TestCase):
             + json.dumps(cmp_notes, ensure_ascii=False)
             + ";"
             "const srNodes=new Map();"
-            "const makeBox=id=>({id,hidden:false,disabled:false,value:'',textContent:'',innerHTML:'',clientWidth:600,clientHeight:340,style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},appendChild(){},querySelectorAll(){return []},addEventListener(){},pause(){},load(){},setAttribute(){},getAttribute(){return null},currentTime:0,duration:6.4,paused:true,muted:false});"
+            "const makeBox=id=>({id,hidden:false,disabled:false,value:'',textContent:'',innerHTML:'',clientWidth:600,clientHeight:340,style:{},classList:{toggle(){},add(){},remove(){},contains(){return false}},appendChild(){},querySelectorAll(){return []},addEventListener(){},removeEventListener(){},pause(){},load(){},setAttribute(){},getAttribute(){return null},currentTime:0,duration:6.4,paused:true,muted:false});"
             "const getEl=id=>{if(!srNodes.has(id))srNodes.set(id,makeBox(id));return srNodes.get(id)};"
             "const sr={getElementById:getEl},probes=[],seeks=[];let decode=false;const document={createElement:tag=>tag==='video'?{readyState:2,time:0,get currentTime(){return this.time},set currentTime(v){this.time=v;seeks.push([this.src,v]);queueMicrotask(()=>this.onseeked?.())},removeAttribute(){this.src=''},load(){if(this.src){probes.push(this.src);queueMicrotask(()=>decode?this.onloadeddata():this.onerror())}}}:makeBox('d')};"
             "const videoEl=()=>getEl('videoPlayer'),videoManifest=()=>VIDEO,videoFindVersion=vid=>VIDEO.versions.find(v=>v.versionId===(vid||videoActiveVersionId))||null,videoCurrentVersion=()=>videoFindVersion(videoActiveVersionId);"

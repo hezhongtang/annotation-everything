@@ -10117,7 +10117,7 @@ def video_demo_movies(browser, tmp):
                 background += f",drawbox=color=0x634452:t=fill:enable='lt(n,{intro})'"
             else:
                 background += ",drawbox=x=40:y=40:w=120:h=90:color=0xe6566b:t=fill:enable='between(n,30,44)'"
-                background += ",drawbox=x=0:y=0:w=32:h=32:color=0x28ed60:t=fill:enable='eq(n,179)'"
+            background += ",drawbox=x=0:y=0:w=32:h=32:color=0x28ed60:t=fill:enable='eq(n,179)'"
             subprocess.run(
                 [
                     "ffmpeg",
@@ -10261,6 +10261,41 @@ def video_claim(page, review, identity, seq):
     return claim
 
 
+def video_claim_after_lost_response(page, review, identity):
+    """首次提交落盘并被领取后丢弃响应，由页面用同一标识补传。"""
+    attempts = []
+    claim = {}
+
+    def lose_first_response(route):
+        if route.request.method == "POST":
+            attempts.append(route.request.post_data_json["submitId"])
+            if len(attempts) == 1:
+                result = route.fetch()
+                assert result.ok, result.text()
+                seq = result.json()["seq"]
+                claim.update(
+                    json.loads(video_cli(SCRIPTS / "notes.py", "claim", review, "--seq", seq, *identity).stdout)
+                )
+                route.abort("connectionfailed")
+                return
+        route.continue_()
+
+    page.route("**/api/handoff", lose_first_response)
+    try:
+        page.click("#doHand")
+        ok(
+            wait_toast(page, "Batch 1 submitted · in progress", condition="补传显示原批次已领取")
+            and len(attempts) == 2
+            and attempts[0] == attempts[1]
+            and claim.get("claimed")
+            and claim["seq"] == 1,
+            "提交响应丢失后页面沿用原标识，显示已领取的第 1 批",
+        )
+    finally:
+        page.unroute("**/api/handoff", lose_first_response)
+    return claim
+
+
 def video_deliver(page, review, identity, claim, movie, entries, version):
     result = video_cli(
         SCRIPTS / "notes.py",
@@ -10289,6 +10324,14 @@ def video_compare(page, nid):
     page.locator("#videoCompareStage").wait_for()
 
 
+def video_type_feedback(page, selector, text):
+    field = page.locator(selector)
+    field.press_sequentially(text + "x")
+    field.press("ArrowLeft")
+    field.press("Delete")
+    assert field.input_value() == text
+
+
 def video_play_segment(page, side, start, end):
     page.click("#videoComparePlay" + side)
     return wait_dom(
@@ -10314,11 +10357,141 @@ def video_play_segment(page, side, start, end):
     )
 
 
+def video_retry_single_cut(page):
+    source = page.locator("#videoPlayer").get_attribute("src")
+    route = "**" + source
+    page.route(route, lambda request: request.fulfill(status=503, body="Synthetic media outage"))
+    retry = page.get_by_role("button", name="Retry playback")
+    try:
+        page.reload(wait_until="domcontentloaded")
+        retry.wait_for()
+        assert page.locator("#videoVersionPick").is_hidden()
+    finally:
+        page.unroute(route)
+    retry.click()
+    ok(
+        wait_dom(
+            page,
+            """() => {
+              const root=document.querySelector('#host').shadowRoot,v=root.getElementById('videoPlayer');
+              return v.readyState>=2 && v.videoWidth===640 && !v.error && root.getElementById('videoRetry').hidden;
+            }""",
+            8,
+            condition="同一份 V1 恢复解码",
+        ),
+        "仅有一版且尚无批注时，服务恢复后可用页面按钮重新加载 V1",
+    )
+
+
+def video_check_endpoint_frame(page, note_id):
+    def pause_and_scrub(button, player_id):
+        page.click(button)
+        assert wait_dom(
+            page,
+            """id => {
+              const v=document.querySelector('#host').shadowRoot.getElementById(id);
+              return !v.paused && !v.seeking && v.currentTime>4.02 && v.currentTime<5.9;
+            }""",
+            5,
+            arg=player_id,
+            condition=f"{player_id} 正在播放区间",
+        )
+        page.locator("#" + player_id).evaluate("""v=>{
+          delete v.dataset.scrubbed;
+          v.addEventListener('seeked',()=>v.dataset.scrubbed='yes',{once:true});
+          v.pause();v.currentTime=5.99;
+        }""")
+        ok(
+            wait_dom(
+                page,
+                """id=>{
+                  const v=document.querySelector('#host').shadowRoot.getElementById(id);
+                  return v.dataset.scrubbed==='yes' && v.paused && !v.seeking && Math.abs(v.currentTime-5.99)<.000002;
+                }""",
+                5,
+                arg=player_id,
+                condition=f"{player_id} 保持拖动后的 5.99 秒",
+            ),
+            f"{player_id} 暂停后可拖过原区间终点",
+        )
+
+    def stopped_on_marker(player_id, readout_id):
+        return wait_dom(
+            page,
+            """([playerId,readoutId]) => {
+              const root=document.querySelector('#host').shadowRoot,video=root.getElementById(playerId);
+              const field=root.getElementById(readoutId);
+              if(!video.paused || video.seeking || video.readyState<2 ||
+                 (field.value ?? field.textContent.replace('Current frame ',''))!=='179')return false;
+              const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;
+              const ctx=canvas.getContext('2d');ctx.drawImage(video,15,15,1,1,0,0,1,1);
+              const [r,g]=ctx.getImageData(0,0,1,1).data;
+              return g>r+120;
+            }""",
+            6,
+            arg=[player_id, readout_id],
+            condition=f"{player_id} 实际呈现第 179 帧的绿色角标，读数同为 179",
+        )
+
+    jump = f"[data-act='video-jump-orig'][data-id='{note_id}']"
+    pause_and_scrub(jump, "videoPlayer")
+    page.click(jump)
+    assert stopped_on_marker("videoPlayer", "videoFrame")
+    frame = video_save_note(page, "The endpoint shows the green corner")["video"]
+    ok((frame["versionId"], frame["frame"]) == ("V1", 179), "区间停止后新建的帧批注与角标及读数一致")
+    # 同一事件循环内开、播、关、重开，再让真实媒体元数据到达。
+    waiting = page.locator(f"[data-act='video-compare'][data-id='{note_id}']").evaluate("""button=>{
+        const root=document.querySelector('#host').shadowRoot,players=['Before','After'].map(s=>root.getElementById('videoCompare'+s));
+        for(const v of players){
+          v.dataset.playsWhileClosed='0';
+          v.addEventListener('play',()=>{
+            if(root.getElementById('videoCompareStage').hidden)v.dataset.playsWhileClosed='1';
+          });
+          v.addEventListener('loadedmetadata',()=>v.dataset.firstMetadata='ready',{once:true});
+        }
+        let waiting=true;
+        for(const side of ['Before','After']){
+          button.click();waiting=waiting && root.getElementById('videoCompare'+side).readyState===0;
+          root.getElementById('videoComparePlay'+side).click();root.getElementById('videoCompareClose').click();
+        }
+        return waiting;
+    }""")
+    assert waiting and wait_dom(
+        page,
+        """()=>['Before','After'].every(side=>document.querySelector('#host').shadowRoot
+            .getElementById('videoCompare'+side).dataset.firstMetadata==='ready')""",
+        8,
+        condition="对照关闭后两份成片的元数据都已到达",
+    )
+    ok(
+        all(
+            page.locator("#videoCompare" + side).evaluate("v=>v.paused && v.dataset.playsWhileClosed==='0'")
+            for side in ("Before", "After")
+        ),
+        "关闭并重新打开过的对照播放器收到媒体就绪事件后保持暂停",
+    )
+    video_compare(page, note_id)
+    for side in ("Before", "After"):
+        pause_and_scrub("#videoComparePlay" + side, "videoCompare" + side)
+        page.click("#videoComparePlay" + side)
+        ok(stopped_on_marker("videoCompare" + side, "videoCompare" + side + "Frame"), f"{side} 区间停止画面与帧号一致")
+    page.click("#videoCompareToggleRelocate")
+    page.select_option("#videoRelocateKind", "frame")
+    page.click("#videoRelocateUseFrame")
+    ok(page.input_value("#videoRelocateFrame") == "179", "对照中的重定位也取已解码的第 179 帧")
+    page.click("#videoCompareClose")
+
+
 def video_cut_and_relocate(page, review, identity, movies):
     video_seek(page, 35)
     cut = video_save_note(page, "Remove the pink insert")["id"]
     video_seek(page, 55)
     relocate = video_save_note(page, "Find the retimed shot")["id"]
+    video_seek(page, 120)
+    page.click("#videoSetStart")
+    video_seek(page, 178)
+    page.click("#videoSetEnd")
+    endpoint = video_save_note(page, "Check the green endpoint frame")["id"]
     page.click("#handBtn")
     claim = video_claim(page, review, identity, 1)
     cut_target = {"kind": "cut", "frame": 42, "contextStart": 30, "contextEnd": 60}
@@ -10331,29 +10504,87 @@ def video_cut_and_relocate(page, review, identity, movies):
         [
             {"noteId": cut, "outcome": "deleted", "summary": "Removed the pink insert", "target": cut_target},
             {"noteId": relocate, "outcome": "needs_relocate", "relocateReason": "The intro shifted this shot"},
+            {
+                "noteId": endpoint,
+                "outcome": "fixed",
+                "summary": "Kept the endpoint marker",
+                "target": {"kind": "range", "startFrame": 120, "endFrame": 179},
+            },
         ],
         "V2",
     )
+    video_check_endpoint_frame(page, endpoint)
     video_compare(page, cut)
     cut_readout = page.inner_text("#videoCompareAfterTime")
     ok(
         all(s in cut_readout for s in ("42", "30", "60")) and video_play_segment(page, "After", 1, 2),
         "删镜显示 V2 剪口及 30–60 帧上下文，可带声播放并按区间停止",
     )
+    page.click("#videoCompareToggleRelocate")
+    page.fill("#videoRelocateContextEnd", "42")
+    page.click("#videoRelocateSave")
+    page.locator("#videoRelocateErr").wait_for()
+    page.click("#videoRelocateCancel")
+    for frame, start, end in ((0, 0, 30), (192, 162, 192)):
+        page.click("#videoCompareToggleRelocate")
+        page.fill("#videoRelocateFrame", str(frame))
+        page.fill("#videoRelocateContextStart", str(start))
+        page.fill("#videoRelocateContextEnd", str(end))
+        receipt = video_click_post(page, "#videoRelocateSave", f"/api/notes/{cut}/video-relocate")
+        page.locator("#videoCompareRelocate").wait_for(state="hidden")
+        target = receipt["note"]["videoReview"]["target"]
+        ok(
+            (target["frame"], target["contextStart"], target["contextEnd"]) == (frame, start, end)
+            and video_play_segment(page, "After", start / 30, end / 30),
+            f"第 {frame} 帧剪口播放片内的 [{start}, {end}) 帧上下文",
+        )
     page.click("#videoCompareClose")
     video_compare(page, relocate)
     ok(not page.locator("#videoCompareApprove").is_visible(), "待定位的镜头没有通过入口")
+    kind = page.locator("#videoRelocateKind")
+    kind.evaluate(
+        "el => { window.__aeSelectKeys = []; el.addEventListener('keydown', e => window.__aeSelectKeys.push([e.key, e.defaultPrevented])); }"
+    )
+    kind.press("p")
+    kind.press("ArrowDown")
+    kind.press("ArrowLeft")
+    kind.press("ArrowRight")
+    assert page.locator("#videoCompareStage").is_visible() and not page.locator("#pinBtn.on").is_visible()
+    assert page.evaluate("window.__aeSelectKeys") == [
+        ["p", False],
+        ["ArrowDown", False],
+        ["ArrowLeft", False],
+        ["ArrowRight", False],
+    ]
+    kind.evaluate("el => { el.blur(); el.focus(); }")
+    kind.press("c")
+    assert kind.input_value() == "cut"
+    kind.evaluate("el => { el.blur(); el.focus(); }")
+    kind.press("f")
+    assert kind.input_value() == "frame" and page.locator("#videoCompareStage").is_visible()
     page.fill("#videoRelocateFrame", "67")
-    page.fill("#videoRelocateSummary", "Found original frame 55 after intro")
-    page.fill("#videoRelocateReason", "Matched the first shot after the cut")
+    summary = "Found original frame 55 after intro 片头"
+    reason = "Matched the first shot after the cut 剪口"
+    video_type_feedback(page, "#videoRelocateSummary", summary)
+    video_type_feedback(page, "#videoRelocateReason", reason)
     result = video_click_post(page, "#videoRelocateSave", f"/api/notes/{relocate}/video-relocate")
-    note = result["note"]
+    assert result["note"]["id"] == relocate
+    note = next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == relocate)
     ok(
         note["video"]["frame"] == 55
         and note["videoReview"]["target"]["frame"] == 67
+        and note["videoReview"]["summary"] == summary
+        and note["videoReview"]["relocatedReason"] == reason
         and note["videoReview"]["state"] == "pending_review"
-        and page.locator("#videoCompareApprove").is_visible(),
+        and page.locator("#videoCompareApprove").is_visible()
+        and page.locator("#videoCompareApprove").is_enabled()
+        and not page.locator("#videoCompareEvidenceNotice").is_visible(),
         "人工重定位保留 V1 第 55 帧，并将 V2 第 67 帧送回复核",
+    )
+    page.locator("#videoCompareClose").press("p")
+    ok(
+        page.locator("#pinBtn.on").is_visible() and not page.locator("#videoCompareStage").is_visible(),
+        "焦点离开输入控件后，P 仍可进入标注模式",
     )
 
 
@@ -10398,15 +10629,26 @@ def video_mp4_rework(page, review, identity, movies):
     subtitle, audio = video_mark_and_range(page)
     video_seek(page, 16)
     question = video_save_note(page, "Which opening title?")["id"]
+    fresh = []
     for frame, text in ((65, "Review the palette later"), (155, "Check end credits later")):
         video_seek(page, frame)
-        video_save_note(page, text)
+        fresh.append(video_save_note(page, text)["id"])
     page.click("#videoSourceBtn")
     page.select_option("#vsrcEngine", "hyperframes")
     page.fill("#vsrcRoot", str(movies["V1"].parent.parent))
     page.fill("#vsrcEntry", "index.html")
     linked = video_click_post(page, "#vsrcLink", "/api/video/source-project")
     ok(linked["sourceProject"]["status"] == "pending", "先批 MP4 可保留五条批注，补关联时展示待确认状态")
+    state = page.locator("#vsrcState")
+    state.get_by_text("Reviewed cut V1", exact=False).wait_for()
+    main_label = state.locator("label").filter(has_text="index.html").inner_text()
+    alternate_label = state.locator("label").filter(has_text="compositions/alternate.html").inner_text()
+    ok(
+        "Project cut out/V1.mp4" in state.inner_text()
+        and "640 × 360 px · 30 fps · 180 frames" in main_label
+        and "320 × 180 px · 30 fps · 30 frames" in alternate_label,
+        "确认前可在弹窗核对原片、工程现存成片和每个候选的媒体参数",
+    )
     entries = linked["sourceProject"]["candidates"]
     selected = next(c for c in entries if c["entry"]["id"] == "index.html")
     page.check(f'#vsrc input[name="vsrcChoice"][value="{selected["id"]}"]')
@@ -10422,7 +10664,7 @@ def video_mp4_rework(page, review, identity, movies):
     chosen = [subtitle, audio, question]
     for nid in chosen:
         page.check(f"#handPick input[data-noteid='{nid}']")
-    claim = video_claim(page, review, identity, 1)
+    claim = video_claim_after_lost_response(page, review, identity)
     material = {item["noteId"]: item for item in claim["materials"]}
     ok(
         set(claim["noteIds"]) == set(chosen) == set(material)
@@ -10451,6 +10693,13 @@ def video_mp4_rework(page, review, identity, movies):
         ],
         "V2",
     )
+    video_compare(page, fresh[0])
+    ok(
+        page.locator("#videoCompareToggleRelocate").is_hidden()
+        and all(not page.locator(f"[data-act='video-relocate'][data-id='{nid}']").count() for nid in fresh),
+        "本批已有 V2 时，两条未提交批注的卡片和对照视图仍不提供重定位",
+    )
+    page.click("#videoCompareClose")
     video_compare(page, subtitle)
     video_check_frame_pair(page)
     video_artifact(page, review, "subtitle-v1-v2", data=claim)
@@ -10466,26 +10715,36 @@ def video_mp4_rework(page, review, identity, movies):
         "两个播放器各自解码 AAC、带声播放指定区间，另一侧保持暂停",
     )
     video_artifact(page, review, "audio-v1-v2")
-    reason = "Please reduce the music another step"
+    reason = "Please soften the music another step 再轻一点"
     page.click("#videoCompareReturnBtn")
-    page.fill("#videoCompareReturnReason", reason)
+    video_type_feedback(page, "#videoCompareReturnReason", reason)
     returned = video_click_post(page, "#videoCompareReturnSave", f"/api/notes/{audio}/video-decision")
     ok(returned["note"]["videoReview"]["returnReason"] == reason, "退回理由保存在原音量批注")
     page.click("#videoCompareClose")
     video_compare(page, question)
-    reply = "Keep the short title"
-    page.fill("#videoCompareReplyInput", reply)
+    reply = "Keep the first title 保留片头"
+    video_type_feedback(page, "#videoCompareReplyInput", reply)
     replied = video_click_post(page, "#videoCompareReplySave", f"/api/notes/{question}/video-decision")
+    page.locator("#videoCompareState").filter(has_text="Replied").wait_for()
+    page.locator("#stat").filter(has_text="Needs reply 0 · Replied 1").wait_for(state="attached")
+    ok(page.locator("#videoCompareReplyBox").is_hidden(), "保存答复后对照视图显示已答复并收起输入框")
+    saved = {
+        n["id"]: n["videoReview"]
+        for n in page.request.get("/api/notes").json()["notes"]
+        if n["id"] in (audio, question)
+    }
     ok(
-        replied["note"]["videoReview"]["reply"] == reply
+        replied["note"]["videoReview"]["reply"] == saved[question]["reply"] == reply
+        and saved[audio]["returnReason"] == reason
         and page.request.get("/api/handoff").json()["latest"]["seq"] == 1,
         "保存答复和退回只更新原批注，批次仍是第一批",
     )
     page.click("#videoCompareClose")
     ok(
         not page.locator(f"[data-act='video-batch-pick'][data-id='{question}']").count()
-        and not page.locator(f"[data-act='video-batch-pick'][data-id='{audio}']").count(),
-        "待答复和已退回条目不可在批量通过中勾选",
+        and not page.locator(f"[data-act='video-batch-pick'][data-id='{audio}']").count()
+        and page.locator(f"#nlist [data-note='{question}'] .vr-chip").inner_text().startswith("Replied"),
+        "已答复卡片和已退回条目均不可在批量通过中勾选",
     )
     # 模拟另一标签页仍持有旧的勾选快照；服务须按提交时的证据重新检查。
     stale = page.request.post(
@@ -10496,20 +10755,35 @@ def video_mp4_rework(page, review, identity, movies):
     assert stale.ok, stale.text()
     skipped = {item["id"]: item.get("detail") for item in stale.json()["skipped"]}
     ok(
-        stale.json()["finalizedCount"] == 0
-        and skipped.get(audio) == "returned"
-        and skipped.get(question) == "needs_reply",
-        "服务拒绝陈旧的批量通过范围，分别指出退回与待答复状态",
+        stale.json()["finalizedCount"] == 0 and skipped.get(audio) == "returned" and skipped.get(question) == "replied",
+        "服务拒绝陈旧的批量通过范围，分别指出已退回与已答复状态",
     )
     page.check(f"[data-act='video-batch-pick'][data-id='{subtitle}']")
-    page.once("dialog", lambda dialog: dialog.accept())
+    ok(
+        wait_dom(
+            page,
+            r"""([audio,question])=>{
+              const rows=document.getElementById('videoBatchBlocked').textContent.split('\n');
+              return rows.some(row=>row.includes(audio)&&row.includes('Returned'))
+                &&rows.some(row=>row.includes(question)&&row.includes('Replied'));
+            }""",
+            6,
+            [audio, question],
+            condition="批量通过面板按原批注更新跳过原因",
+        ),
+        "批量通过面板逐条显示已退回和已答复的批注",
+    )
+    confirmations = []
+    page.once("dialog", lambda dialog: (confirmations.append(dialog.message), dialog.accept()))
     approved = video_click_post(page, "#finalizeAllBtn", "/api/handoff/finalize-all")
     ok(approved["finalizedIds"] == [subtitle], "实际批量通过只定稿有证据且已选中的字幕批注")
+    ok("cannot be undone" in confirmations[0], "确认视频批量通过前明确显示通过后不可撤销")
     page.click("#handBtn")
     ok(
         page.locator("#handPick input:checked").count() == 0
-        and not page.locator(f"#handPick input[data-noteid='{subtitle}']").count(),
-        "返工提交打开时没有预选项，已通过字幕离开候选",
+        and not page.locator(f"#handPick input[data-noteid='{subtitle}']").count()
+        and "Replied" in page.locator("#handPick .hp-item").filter(has_text=reply).inner_text(),
+        "重交窗口展示已答复及原文，初始空选，已通过字幕离开候选",
     )
     page.click("#handPick [data-pick='returned']")
     claim = video_claim(page, review, identity, 2)
@@ -10567,27 +10841,102 @@ def video_browser_decode_repair(page, review, identity, movies):
     data[start + 4 : start - 4 + size] = bytes(size - 8)
     broken = review.parent / "unencoded-samples.mp4"
     broken.write_bytes(data)
-    with page.expect_response(
-        lambda r: r.request.method == "POST" and r.url.endswith("/api/video/playback-failure")
-    ) as failed:
-        video_deliver(page, review, identity, claim, broken, entries, "V4")
-        if (
-            next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == nid)["videoReview"]["state"]
-            == "pending_review"
-        ):
-            video_compare(page, nid)
-    assert failed.value.ok, failed.value.text()
-    data = failed.value.json()
+
+    def deliver_broken(batch, note_id, outcomes, version):
+        with page.expect_response(
+            lambda r: r.request.method == "POST" and r.url.endswith("/api/video/playback-failure")
+        ) as failed:
+            video_deliver(page, review, identity, batch, broken, outcomes, version)
+            if (
+                next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == note_id)["videoReview"][
+                    "state"
+                ]
+                == "pending_review"
+            ):
+                video_compare(page, note_id)
+        assert failed.value.ok, failed.value.text()
+        return failed.value.json()
+
+    data = deliver_broken(claim, nid, entries, "V4")
     ok(
         data["handoff"]["latest"]["status"] == "claimed" and data["doc"]["video"]["currentVersionId"] == "V3",
         "Chrome 解码失败后保留上一有效成片，原接收会话可在同批继续",
     )
+    video_compare(page, nid)
     video_deliver(page, review, identity, claim, movies["V3"], entries, "V5")
     note = next(n for n in page.request.get("/api/notes").json()["notes"] if n["id"] == nid)
     ok(
         note["videoReview"]["versionId"] == "V5" and note["videoReview"]["state"] == "pending_review",
         "同批补交 V5 后原条目恢复待人工复核",
     )
+    page.locator("#videoCompareEvidenceNotice").wait_for()
+    assert page.inner_text("#videoCompareAfterInfo") == "V5"
+    ok(
+        page.locator("#videoCompareApprove").is_disabled()
+        and not page.locator(f"[data-act='video-approve'][data-id='{nid}']").count()
+        and not page.locator(f"[data-act='video-batch-pick'][data-id='{nid}']").count(),
+        "对照打开期间收到替换证据，确认前各处通过入口都受限",
+    )
+    page.click("#videoCompareAcknowledge")
+    path = f"/api/notes/{nid}/video-decision"
+    with page.expect_request(lambda r: r.method == "POST" and r.url.endswith(path)) as decision:
+        approved = video_click_post(page, "#videoCompareApprove", path)
+    ok(
+        decision.value.post_data_json["expectedEvidence"] == note["videoReview"]["evidenceRevision"]
+        and approved["note"]["status"] == "resolved",
+        "查看并确认 V5 后，以该修订通过原批注",
+    )
+
+    page.click("#videoCompareClose")
+    credits = next(n["id"] for n in notes if n["text"] == "Check end credits later")
+    page.click("#handBtn")
+    page.check(f"#handPick input[data-noteid='{credits}']")
+    fourth = video_claim(page, review, identity, 4)
+    deliver_broken(
+        fourth,
+        credits,
+        [{"noteId": credits, "outcome": "fixed", "summary": "Credits adjusted", "target": {"frame": 155}}],
+        "V6",
+    )
+    if page.locator("#videoCompareStage").is_visible():
+        page.click("#videoCompareClose")
+    page.click("#batchesTab")
+    release = "[data-release-repair='4']"
+    page.once("dialog", lambda dialog: dialog.accept())
+    released = video_click_post(page, release, "/api/video/release-repair")["handoff"]
+    ok(
+        released["latest"]["videoRepairRelease"]["ids"] == [credits] and released["inFlightIds"] == [],
+        "审阅人在处理记录明确放弃第四批补交，失败项离开在途范围",
+    )
+    page.get_by_text("Reviewer ended the repair for V6", exact=False).wait_for()
+    page.click("#batches [data-close]")
+    page.click("#handBtn")
+    pick = page.locator(f"#handPick input[data-noteid='{credits}']")
+    pick.wait_for()
+    ok(not pick.is_checked(), "失败项可重新勾选，释放后没有自动提交")
+    pick.check()
+    following = video_claim(page, review, identity, 5)
+    ok(
+        following["noteIds"] == [credits] and following["materials"][0]["videoReview"]["state"] == "failed",
+        "重新提交后接收会话只领取勾选的失败项，并能检查前一批的处理历史",
+    )
+
+
+def video_recover_pending_record(page, review):
+    journal = review / ".video-note-commit.json"
+    original = b"unfinished synthetic JSON"
+    journal.write_bytes(original)
+    journal.chmod(0o600)
+    button = page.get_by_role("button", name="Recover video review")
+    button.wait_for(state="visible")
+    page.once("dialog", lambda dialog: dialog.accept())
+    with page.expect_response(
+        lambda r: r.request.method == "POST" and r.url.endswith("/api/video/recover") and r.ok
+    ) as response:
+        button.click()
+    button.wait_for(state="hidden")
+    preserved = review / response.value.json()["preserved"]
+    ok(preserved.read_bytes() == original and not journal.exists(), "审阅人确认后保留原始记录并继续视频审阅")
 
 
 def video_review_checks(browser, tmp: Path):
@@ -10606,6 +10955,8 @@ def video_review_checks(browser, tmp: Path):
     video_cli(builder, *build_args, "--video-composition", "index.html", "--reuse-movie", movies["V1"])
     with video_review_page(browser, direct) as (page, identity):
         ok(page.locator("#videoPlayer").is_visible(), "指定合成与成片后，浏览器可以直接审阅 V1")
+        video_retry_single_cut(page)
+        video_recover_pending_record(page, direct)
         video_cut_and_relocate(page, direct, identity, movies)
     review = tmp / "video-mp4-review"
     video_cli(builder, "--report", movies["V1"], "--out", review, "--no-scan-skills", "--locale", "en")

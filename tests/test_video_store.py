@@ -52,7 +52,15 @@ def video_range():
 
 def review_dir() -> Path:
     path = Path(tempfile.mkdtemp(prefix="ae-video-store-"))
-    (path / "review.json").write_text("{}", encoding="utf-8")
+    version = {
+        "versionId": "V1",
+        "fps": 30,
+        "frames": 180,
+        "timebase": {"num": 1, "den": 30},
+        "width": 640,
+        "height": 360,
+    }
+    (path / "review.json").write_text(json.dumps({"video": {"currentVersionId": "V1", "versions": [version]}}))
     return path
 
 
@@ -163,18 +171,89 @@ class VideoStoreTests(unittest.TestCase):
             parsed, _always = export_format.parse_markdown(text)
             self.assertEqual([item["video"] for item in parsed], [video_frame(), video_range()])
 
-    def test_unrelated_video_import_does_not_block_document_finalize(self):
-        directory = review_dir()
-        store.add(directory, {"id": "doc", "page": 1, "text": "普通文档批注"})
-        store.handoff_submit(directory, target="review")
-        store.handoff_claim(directory)
-        store.set_status(directory, "doc", "resolved", seq=1, by="agent")
-        store.handoff_done(directory, seq=1)
-        store.import_notes(directory, [{"page": 1, "text": "视频批注", "video": video_frame()}])
-        result = store.handoff_finalize_all(directory, {1: {"doc"}}, evidence={})
-        self.assertEqual(result["finalizedIds"], ["doc"])
+    def test_document_writes_reject_new_video_locations(self):
+        for kind in ("html", "docx", "pptx"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                directory = Path(tmp)
+                manifest = {} if kind == "html" else {"format": {"report": kind, "version": 1}}
+                (directory / "review.json").write_text(json.dumps(manifest))
+                note = {"id": "doc", "page": 1, "text": "保留原段落"}
+                foreign = {"id": "foreign", "page": 1, "text": "字幕上移", "video": video_frame()}
+                previous, _ = store.add(directory, note)
+                for label, write in (
+                    ("add", lambda: store.add(directory, foreign)),
+                    ("import", lambda: store.import_notes(directory, [foreign])),
+                    ("backfill", lambda: store.update(directory, "doc", {"video": video_frame()})),
+                    (
+                        "import existing",
+                        lambda: store.import_notes(directory, [{**foreign, "id": "doc", "updatedAt": "2099-01-01"}]),
+                    ),
+                ):
+                    with self.subTest(entry=label), self.assertRaisesRegex(store.NoteError, "视频审阅"):
+                        write()
+                self.assertEqual(store.load(directory), previous)
+
+    def test_document_finalize_paths_preserve_only_legacy_video_items(self):
+        anchors = {
+            "html": {},
+            "docx": {
+                "docx": {
+                    "v": 1,
+                    "kind": "quote",
+                    "via": "selection",
+                    "para": {"id": "1234ABCD", "n": 0, "digest": "0123456789ab"},
+                }
+            },
+            "pptx": {"pptx": {"v": 1, "slide": "s260", "kind": "page", "via": "thumb"}},
+        }
+        for kind, anchor in anchors.items():
+            for action in ("done", "finalize", "finalize-all", "accept-rest"):
+                for mixed in (False, True):
+                    with self.subTest(kind=kind, action=action, mixed=mixed), tempfile.TemporaryDirectory() as tmp:
+                        d = Path(tmp)
+                        manifest = {} if kind == "html" else {"format": {"report": kind, "version": 1}}
+                        (d / "review.json").write_text(json.dumps(manifest))
+                        store.add(d, {"id": "doc", "page": 1, "text": "修正标题", **anchor})
+                        if mixed:
+                            store.add(d, {"id": "legacy", "page": 1, "text": "字幕上移"})
+                            store.add(d, {"id": "approved", "page": 1, "text": "镜头已确认"})
+                            store.set_status(d, "approved", "resolved")
+                        store.handoff_submit(d, target="final" if action == "done" else "review")
+                        store.handoff_claim(d)
+                        store.set_status(d, "doc", "drafted", seq=1, by="editor")
+                        if mixed:
+                            old, _ = store.set_status(d, "legacy", "drafted", seq=1, by="editor")
+                            # 旧版 review.json 与 notes.json 原样读入，模拟已经落盘的跨格式定位。
+                            old["notes"][1]["video"] = video_frame()
+                            old["notes"][2].update(
+                                video=video_range(), videoReview={"state": "approved", "decision": "approved"}
+                            )
+                            protected = copy.deepcopy(old["notes"][1:])
+                            (d / store.NOTES_FILE).write_text(json.dumps(old))
+                            with self.assertRaises(store.HandoffError):
+                                store.set_status(d, "legacy", "resolved", seq=1, by="editor")
+                        store.handoff_done(d, seq=1)
+                        if action == "finalize":
+                            store.handoff_finalize(d, 1)
+                        elif action == "finalize-all":
+                            result = store.handoff_finalize_all(d, {1: {"doc", "legacy"} if mixed else {"doc"}})
+                            self.assertEqual(result["finalizedIds"], ["doc"])
+                        elif action == "accept-rest":
+                            store.handoff_request_review(d, 1)
+                            store.handoff_claim(d, stage="review")
+                            store.handoff_done(d, seq=1, accept_rest=True)
+                        actual = store.load(d)["notes"]
+                        self.assertEqual(actual[0]["status"], "resolved")
+                        self.assertEqual(actual[0]["resolvedBatch"], 1)
+                        self.assertEqual({key: actual[0][key] for key in anchor}, anchor)
+                        self.assertEqual(store.handoff_state(d)["latest"]["status"], "drafted" if mixed else "done")
+                        if mixed:
+                            with self.assertRaises(store.HandoffError):
+                                store.set_status(d, "approved", "drafted", by="editor")
+                            self.assertEqual(store.load(d)["notes"][1:], protected)
 
     def test_newer_location_version_survives_without_being_used_as_v1(self):
+        self.addCleanup(i18n.set_locale, i18n.current_locale())
         future = {"v": 2, "versionId": "V9", "future": {"opaque": [1, 2, 3]}}
         _doc, note = store.add(review_dir(), {"page": 1, "text": "未来格式", "video": future})
         self.assertEqual(note["video"], future)
@@ -186,6 +265,7 @@ class VideoStoreTests(unittest.TestCase):
                 self.assertIn("v1", " ".join(shown))
 
     def test_cli_show_describes_registered_frame_and_range_in_both_languages(self):
+        self.addCleanup(i18n.set_locale, i18n.current_locale())
         manifest = {"video": {"currentVersionId": "V1"}}
         for locale in ("zh-CN", "en"):
             i18n.set_locale(locale)

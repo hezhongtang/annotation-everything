@@ -734,8 +734,8 @@ def resolve_sources(
         try:
             version_id = str(m.get("video", {}).get("currentVersionId") or "V1")
             return {"report": video_review.media_path(review_dir, m, version_id), "script": None}
-        except video_review.VideoError as exc:
-            raise BuildError(diag(locale, "build.video.error", path=review_dir, reason=str(exc))) from exc
+        except video_review.MediaError as exc:
+            raise BuildError(diag(locale, "build.video.error", path=review_dir, reason=exc.localized(locale))) from exc
     if "sourcesRel" in m:  # 0.1 版格式：sources 是绝对路径
         rel, absolute = m.get("sourcesRel") or {}, m.get("sources") or {}
     else:
@@ -746,7 +746,7 @@ def resolve_sources(
         cand += [Path(absolute[k])] if absolute.get(k) else []
         hit = next((c.resolve() for c in cand if c.is_file()), None)
         if hit is None and cand:
-            tried = "、".join(str(c) for c in cand)
+            tried = diag(locale, "build.source.listSep").join(str(c) for c in cand)
             raise BuildError(
                 diag(locale, "build.source.missing", kind=diag(locale, "cli.show.source." + k), paths=tried)
             )
@@ -932,17 +932,6 @@ def _reject_unc_path(path: Path | None) -> None:
         raise BuildError(f"Unsupported UNC or device path: {path}")
 
 
-def _remove_render_staging(path: Path) -> None:
-    """V1 已登记（或登记失败）后清掉引擎渲染暂存；清不掉只警告，不阻塞审阅。"""
-    try:
-        path.unlink()
-        path.parent.rmdir()
-    except FileNotFoundError:
-        pass
-    except OSError as exc:
-        print(f"warning: cannot remove render staging {path}: {exc}", file=sys.stderr)
-
-
 def build(
     report: Path,
     script: Path | None,
@@ -965,6 +954,7 @@ def build(
         _reject_unc_path(item)
     import i18n
     import ledger
+    import notes_store
 
     preview = ledger.read_manifest(out) if out.exists() else {}
     try:
@@ -974,6 +964,8 @@ def build(
         )
     except i18n.LocaleError as exc:
         raise SystemExit(f"错误：{exc}") from exc
+    if notes_store.video_recovery_pending(out, preview) and ledger.copied_from(out, preview):
+        raise BuildError(diag(locale_choice, "build.source.pendingRecovery"))
     # 生成侧的提示按本次选择的语言写；没选就是中文（旧审阅、旧调用）。auto 在这里定成具体语言
     warn_catalog = i18n.catalog(i18n.resolve_locale(locale_choice, system_languages=i18n.system_languages()))
     assets = Assets(asset_root or report.resolve().parent, locale=locale_choice)
@@ -1032,14 +1024,14 @@ def build(
         engine_result = resolved
         movie_for_v1 = resolved["source"]
         engine_cleanup = resolved.get("cleanup")
-        video_default_title = str(resolved["composition"]["id"])
-        for warning in resolved.get("warnings", []):
-            assets.warn(warning)
     if movie_for_v1 is not None:
         try:
             try:
                 origin = None
                 if engine_result:
+                    video_default_title = str(engine_result["composition"]["id"])
+                    for warning in engine_result.get("warnings", []):
+                        assets.warn(warning)
                     origin = {
                         "root": engine_result["root"],
                         "entry": engine_result["entry"],
@@ -1056,9 +1048,11 @@ def build(
                 )
             finally:
                 if engine_cleanup is not None:
-                    _remove_render_staging(engine_cleanup)
-        except video_review.VideoError as exc:
-            raise BuildError(diag(locale_choice, "build.video.error", path=report, reason=str(exc))) from exc
+                    video_engines.remove_render_staging(engine_cleanup)
+        except video_review.MediaError as exc:
+            raise BuildError(
+                diag(locale_choice, "build.video.error", path=report, reason=exc.localized(locale_choice))
+            ) from exc
         version = video_review.registered_version({"video": video_meta}, video_meta["currentVersionId"])
         if engine_result is not None:
             # #193 契约：直接入口把引擎证据写进 video.sourceProject。声明与登记 V1
@@ -1280,7 +1274,9 @@ def build(
         "DOCX": _js(docx_view(docx_meta)),
         "PPTX": _js(pptx_view(pptx_meta)),
         "VIDEO": _js(
-            video_review.public_manifest({"reviewId": rid, "video": video_meta}) if video_meta is not None else None
+            video_review.public_manifest({"reviewId": rid, "video": video_meta}, locale=locale_choice)
+            if video_meta is not None
+            else None
         ),
         "OVERVIEW_HOME": _js(None),
     }  # 对照页不是总览首页宿主；总览视图按 hash 路由照旧
@@ -1369,13 +1365,13 @@ def build(
         current = ledger.read_manifest(out)
         check_review_type(current)
         if video_meta is not None and not preview.get("video") and current.get("video"):
-            raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
+            raise BuildError(diag(locale_choice, "build.video.reviewChanged", path=out))
         if video_meta is not None and preview.get("video"):
             if current.get("reviewId") != preview.get("reviewId") or not isinstance(current.get("video"), dict):
-                raise BuildError(diag(locale_choice, "build.video.error", path=out, reason="review.json changed"))
+                raise BuildError(diag(locale_choice, "build.video.reviewChanged", path=out))
             if current["video"] != video_meta:
                 video_meta = current["video"]
-                values["VIDEO"] = _js(video_review.public_manifest({**current, "reviewId": rid}))
+                values["VIDEO"] = _js(video_review.public_manifest({**current, "reviewId": rid}, locale=locale_choice))
                 page_html = render_page()
                 manifest["video"] = video_meta
         write_private(out / "index.html", page_html)
@@ -1462,7 +1458,7 @@ def build(
         "remap": remap,
         "locale": locale_choice,
         "docx": docx_meta,
-        "video": video_review.public_manifest({"reviewId": rid, "video": video_meta})
+        "video": video_review.public_manifest({"reviewId": rid, "video": video_meta}, locale=locale_choice)
         if video_meta is not None
         else None,
     }

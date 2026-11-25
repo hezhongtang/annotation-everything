@@ -354,6 +354,8 @@ def target_text(h: dict[str, Any], lang: str | None = None, *, video: bool = Fal
 
 def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     """只翻译已知交接错误；中文和未知错误保留原始诊断，不解析异常字符串。"""
+    if isinstance(error, store.VideoCommitError):
+        return error.localized(cli_text(lang))
     messages = i18n.HANDOFF_ERROR_KEYS
     protection_codes = (
         "analysis-locked",
@@ -395,6 +397,10 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     params = dict(error.params)
     if error.code == "unreviewed":
         params.update(count=len(params["ids"]), ids=t("cli.hand.itemSep").join(params["ids"]))
+    elif error.code == "incomplete-video-receipt":
+        params["ids"] = t("cli.hand.itemSep").join(params["ids"])
+    elif error.code == "receipt-batch-mismatch" and isinstance(params.get("batches"), list):
+        params["batches"] = t("cli.hand.itemSep").join(str(n) for n in params["batches"])
     if error.code == "ambiguous-batches":
         params["batches"] = t("cli.hand.itemSep").join(
             t("cli.hand.error.batchState", seq=seq, status=label(t, STATUS_KEY.get(status, ""), status))
@@ -413,7 +419,7 @@ def handoff_error_text(error: store.NoteError, lang: str | None = None) -> str:
     return t(messages[error.code], **params)
 
 
-def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list[str]:
+def handoff_lines(state: dict[str, Any] | None, lang: str | None = None, *, video: bool = False) -> list[str]:
     """「交给 Agent」提交的摘要行（附言是用户在页面上写给代理的话）。"""
     t = cli_text(lang)
     if not state or not state.get("latest"):
@@ -448,14 +454,14 @@ def handoff_lines(state: dict[str, Any] | None, lang: str | None = None) -> list
             )
         )
     if state.get("drafted"):
-        out.append(t("cli.hand.drafted", count=state["drafted"]))
+        out.append(t("cli.hand.videoDrafted" if video else "cli.hand.drafted", count=state["drafted"]))
     for b in state.get("open") or []:
         out.append(
             t(
                 "cli.hand.open",
                 seq=b["seq"],
                 status=label(t, STATUS_KEY.get(b.get("status"), ""), b.get("status")),
-                target=target_text(b, lang),
+                target=target_text(b, lang, video=video),
             )
             + (t("cli.hand.unclaimed") if b.get("status") in ("pending", "review") else "")
         )
@@ -539,6 +545,11 @@ def batches_text(
                 out.append(t("cli.batch.stageSummary", stage=name, summary=e["summary"]))
         if h.get("reviewMessage"):
             out.append(t("cli.batch.reviewNote", message=h["reviewMessage"]))
+        for nid in h.get("videoWithdrawals") or {}:
+            out.append(t("viewer.batch.videoWithdrawn", id=nid))
+        unhandled = (h.get("videoStageRecovery") or {}).get("unhandledIds")
+        if unhandled:
+            out.append(t("viewer.batch.videoRecoveryUnprocessed", ids=sep.join(unhandled)))
         if "resolvedCount" in h:
             pages = sep.join(map(str, h.get("resolvedPages") or []))
             note = t("cli.batch.live") if h.get("live") else t("cli.batch.estimated") if h.get("estimated") else ""
@@ -565,6 +576,7 @@ def batches_text(
                     "cli.batch.videoStats",
                     pending=vs.get("pendingReviewCount", 0),
                     reply=vs.get("needsReplyCount", 0),
+                    replied=vs.get("repliedCount", 0),
                     relocate=vs.get("needsRelocateCount", 0),
                     missing=vs.get("missingEvidenceCount", 0),
                     failed=vs.get("failedCount", 0),
@@ -863,7 +875,7 @@ def _format_vr_history_entry(entry: dict[str, Any], t: Any) -> str:
         return t(
             "cli.show.videoReview.historyEntry", version=ver, state=t("cli.batch.trail.action.relocated"), detail=detail
         )
-    state = str(entry.get("state") or entry.get("decision") or "pending_review")
+    state = video_review.display_state(entry) or "pending_review"
     state_label = label(t, f"cli.show.videoReview.state.{state}", state)
     tgt = entry.get("target") if isinstance(entry.get("target"), dict) else None
     parts = [
@@ -881,7 +893,7 @@ def _format_vr_history_entry(entry: dict[str, Any], t: Any) -> str:
 
 def _video_review_lines(vr: dict[str, Any], t: Any) -> list[str]:
     out: list[str] = []
-    state = str(vr.get("state") or "")
+    state = video_review.display_state(vr)
     state_label = label(t, f"cli.show.videoReview.state.{state}", state)
     if vr.get("versionId"):
         out.append(t("cli.show.videoReview.statusVersion", state=state_label, version=vr["versionId"]))
@@ -1021,6 +1033,43 @@ def docx_lines(n: dict[str, Any], manifest: dict[str, Any], t: Any) -> list[str]
     return out
 
 
+def _video_source_lines(video: dict[str, Any], t: Any) -> list[str]:
+    source = video_source.agent_brief(video)
+    if source:
+        entry = source.get("entry") or {}
+        guidance = t(
+            "cli.hand.videoSource",
+            engine=source.get("engine"),
+            entry=t("cli.hand.videoSourceEntry", kind=entry.get("kind"), id=entry.get("id")),
+            root=source.get("root"),
+            version=source.get("versionId"),
+        )
+    else:
+        guidance = t("cli.show.video.linkFirst")
+    lines = [guidance]
+    cuts = [
+        cut
+        for cut in video.get("versions") or []
+        if isinstance(cut, dict) and isinstance(cut.get("versionId"), str) and cut["versionId"]
+    ]
+    if cuts:
+        labels = [
+            t("cli.show.video.cutPath", version=cut["versionId"], path=cut["path"])
+            if cut.get("path")
+            else cut["versionId"]
+            for cut in cuts
+        ]
+        lines.append(
+            t(
+                "cli.show.video.versions",
+                current=video.get("currentVersionId") or cuts[-1]["versionId"],
+                count=len(cuts),
+                list=t("cli.hand.itemSep").join(labels),
+            )
+        )
+    return lines
+
+
 def to_markdown(
     doc: dict[str, Any],
     manifest: dict[str, Any],
@@ -1076,11 +1125,16 @@ def to_markdown(
         + t("cli.show.listingAll" if include_resolved else "cli.show.listing", count=len(notes))
         + (t("cli.show.rev", rev=doc["rev"]) if doc.get("rev") is not None else ""),
     ]
-    if not isinstance(manifest.get("video"), dict):
+    video = manifest.get("video")
+    if isinstance(video, dict):
+        head.extend(_video_source_lines(video, t))
+        lf = video.get("lastFailure")
+        if isinstance(lf, dict) and lf.get("reason"):
+            head.append(t("cli.show.video.lastFailure", batch=lf.get("batch") or "—", reason=lf["reason"]))
+    else:
         head.append(_mark_hint(t, lang))
-    if sources:  # 已按 review.json 解析成实际路径（相对审阅目录优先），改稿就改这里列出的文件
         parts = []
-        for kind, path in sources.items():
+        for kind, path in (sources or {}).items():
             if not path:
                 continue
             label = t("cli.show.source.report" if kind == "report" else "cli.show.source.script")
@@ -1089,22 +1143,7 @@ def to_markdown(
             head.append(t("cli.show.sources", list=t("cli.show.sourceSep").join(parts)))
     if always:
         head.append(_always_head(t, lang, always, scope_label))
-    if isinstance(manifest.get("video"), dict):
-        vpub = video_review.public_manifest(manifest)
-        vids = [v["versionId"] for v in vpub.get("versions") or [] if isinstance(v, dict) and v.get("versionId")]
-        if vids:
-            head.append(
-                t(
-                    "cli.show.video.versions",
-                    current=vpub.get("currentVersionId") or vids[-1],
-                    count=len(vids),
-                    list=t("cli.hand.itemSep").join(vids),
-                )
-            )
-        lf = vpub.get("lastFailure")
-        if isinstance(lf, dict) and lf.get("reason"):
-            head.append(t("cli.show.video.lastFailure", batch=lf.get("batch") or "—", reason=lf["reason"]))
-    head += handoff_lines(handoff, lang)
+    head += handoff_lines(handoff, lang, video=ledger.report_format(manifest)[0] == "video")
     out = ["\n".join(head)]
     last = None
     for n in notes:
@@ -1517,7 +1556,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 "alwaysSkills": store.always_skills(d),
             }
             if isinstance(manifest.get("video"), dict):
-                payload["video"] = video_review.public_manifest(manifest)
+                payload["video"] = video_review.public_manifest(manifest, locale=lang)
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
             _refuse_newer_format(manifest)
@@ -1593,7 +1632,11 @@ def _main_locked(argv: list[str] | None = None) -> int:
                 pass
             print(t("cli.notes.import.wrongReview", source=src_rid, path=d, target=mine, other=other), file=sys.stderr)
             return 2
-        _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
+        try:
+            _doc, added, skipped, updated = store.import_notes(d, items, by="cli-import")
+        except store.NoteError as error:
+            print(t("cli.notes.error", reason=handoff_error_text(error, lang)), file=sys.stderr)
+            return 2
         print(t("cli.notes.import.complete", added=added, updated=updated, skipped=skipped, path=d / store.NOTES_FILE))
         if always is not None:
             try:
@@ -2037,6 +2080,9 @@ def _main_locked(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, KeyError) as error:
             print(t("cli.hand.agentBindingError", reason=str(error)), file=sys.stderr)
             return 2
+        if ledger.report_format(manifest)[0] == "video":
+            print(t("cli.hand.videoDone", seq=item["seq"]))
+            return 0
         if item["status"] in ("drafted", "review"):
             snapshot(d, item, "draft")
             print(
@@ -2134,6 +2180,7 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     "cli.videoReceipt.failureRecorded",
                     seq=result["seq"],
                     reason=result["failure"].get("reason") or "",
+                    receiptId=result["receiptId"],
                     version=result["currentVersionId"],
                 )
             )
@@ -2147,6 +2194,8 @@ def _main_locked(argv: list[str] | None = None) -> int:
                     count=len(result.get("notes") or []),
                 )
             )
+        if not a.json and result["missingEvidenceIds"]:
+            print(t("cli.videoReceipt.missingEvidence", ids=t("cli.hand.itemSep").join(result["missingEvidenceIds"])))
         return 0
     return 2
 
@@ -2424,6 +2473,12 @@ def claim_next(
             return "handoff", int(batch["seq"])
         return ("analysis", rounds[0]["seq"]) if rounds else None
 
+    def authorize_recovery():
+        review_stop.assert_accepts_work(d)
+        if authorize is not None:
+            authorize()
+
+    store.recover_video_claim_queue(d, authorize_recovery)
     selected = next_waiting()
     requested = ("analysis", round_no) if round_no is not None else ("handoff", seq) if seq is not None else None
 
@@ -2860,6 +2915,10 @@ def wait(
                     break
             if deadline is not None and time.monotonic() >= deadline:
                 print(t("cli.hand.timeout", seconds=f"{timeout:g}"))
+                if isinstance((manifest or {}).get("video"), dict):
+                    current = load_manifest(d).get("video")
+                    if isinstance(current, dict):
+                        print("\n".join(_video_source_lines(current, t)))
                 return 3
             time.sleep(max(0.2, interval))
     except KeyboardInterrupt:
@@ -2912,21 +2971,6 @@ def wait(
     submitted = item.get("videoSubmission") or {}
     if submitted:
         manifest = {**manifest, "video": submitted["video"]}
-    source = video_source.agent_brief(manifest.get("video") or {})
-    if source:  # 视频审阅已绑定源工程：改稿对准的引擎、入口与原成片版本一次说清
-        print(
-            t(
-                "cli.hand.videoSource",
-                engine=source.get("engine"),
-                entry=t(
-                    "cli.hand.videoSourceEntry",
-                    kind=(source.get("entry") or {}).get("kind"),
-                    id=(source.get("entry") or {}).get("id"),
-                ),
-                root=source.get("root"),
-                version=source.get("versionId"),
-            )
-        )
     if message := store.handoff_user_message(item):
         print(t("cli.hand.userMessage", message=message))
     video = manifest.get("format", {}).get("report") == "video"

@@ -34,7 +34,7 @@ import video_engines  # noqa: E402
 import video_source  # noqa: E402
 import wakeup  # noqa: E402
 
-from tests.test_video_review import synthetic_mp4  # noqa: E402
+from tests.test_video_review import run_video_cli, synthetic_mp4  # noqa: E402
 
 V1_MEDIA = {"duration": 6.0, "fps": 30, "frames": 180, "width": 640, "height": 360}
 
@@ -319,6 +319,33 @@ class VideoSourceTests(VideoHandoffBase):
         self.assertEqual(after, before, "关联与确认都不改原批注的原片定位")
 
 
+class VideoSourceCliTests(VideoHandoffBase):
+    def test_show_and_wait_identify_the_edit_target_and_label_the_registered_cut_for_review(self):
+        self.add_notes(video_note("caption", frame=18))
+        for linked in (False, True):
+            if linked:
+                self.link_source()
+                store.handoff_submit(self.d, "", note_ids=["caption"])
+            for command in ("show", "wait"):
+                with self.subTest(command=command, linked=linked):
+                    args = [command, str(self.d), "--locale", "zh-CN"]
+                    if command == "wait":
+                        args += ["--no-claim", "--timeout", "0.01", "--interval", "0.2"]
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        code = run_video_cli(notes_cli.main, args)
+                    self.assertEqual(code, 3 if command == "wait" and not linked else 0)
+                    text = buf.getvalue()
+                    self.assertNotIn("源文件（改稿改这里）", text)
+                    self.assertRegex(text, r"复核材料[^\n]*media/v1\.mp4")
+                    if linked:
+                        self.assertIn(str(self.root / "project"), text)
+                        self.assertIn("Main", text)
+                        self.assertIn("改稿", text)
+                    else:
+                        self.assertIn("先关联", text)
+
+
 class ClaimPayloadTests(VideoHandoffBase):
     def setUp(self):
         super().setUp()
@@ -339,7 +366,7 @@ class ClaimPayloadTests(VideoHandoffBase):
         try:
             buf = io.StringIO()
             with redirect_stdout(buf):
-                code = notes_cli.main(["claim", str(self.d)])
+                code = run_video_cli(notes_cli.main, ["claim", str(self.d)])
         finally:
             os.environ.clear()
             os.environ.update(env)
@@ -390,7 +417,9 @@ class ClaimPayloadTests(VideoHandoffBase):
         try:
             buf, err = io.StringIO(), io.StringIO()
             with redirect_stdout(buf), redirect_stderr(err):
-                code = notes_cli.main(["wait", str(self.d), "--no-claim", "--timeout", "0", "--locale", "en"])
+                code = run_video_cli(
+                    notes_cli.main, ["wait", str(self.d), "--no-claim", "--timeout", "0", "--locale", "en"]
+                )
         finally:
             os.environ.clear()
             os.environ.update(env)
@@ -401,7 +430,9 @@ class ClaimPayloadTests(VideoHandoffBase):
         rev = store.load(self.d)["rev"]
         store.handoff_submit(self.d, "只交两条", note_ids=["n1", "n2"])
         store.update(self.d, "n1", {"text": "提交后编辑"})
+        previous = notes_cli.i18n.current_locale()
         text = self.wait_text()
+        self.assertEqual(notes_cli.i18n.current_locale(), previous)
         self.assertIn(f". rev {rev}\n", text)
         self.assertNotIn("top-left of the page", text)
         self.assertIn("relative to the actual video picture", text)
@@ -423,7 +454,7 @@ class ClaimPayloadTests(VideoHandoffBase):
 
         with mock.patch.object(Path, "read_text", read_document):
             with redirect_stdout(io.StringIO()):
-                self.assertEqual(notes_cli.main(["show", str(self.d)]), 0)
+                self.assertEqual(run_video_cli(notes_cli.main, ["show", str(self.d)]), 0)
             self.assertIn("n1", self.wait_text())
 
     def test_wait_omits_unrecorded_revision_for_legacy_video_snapshot(self):
@@ -516,6 +547,24 @@ class ServeHandoffTests(VideoHandoffBase):
         code, _, body = self.post("/api/handoff", {**payload, "submitId": "new", "noteIds": ["n2"]})
         self.assertEqual((code, json.loads(body)["code"]), (409, "video-source-changed"))
 
+    def test_submit_retry_reports_original_batch_stage_after_a_later_submission(self):
+        self.link_source()
+        payload = {"noteIds": ["n1"], "submitId": "first-submit"}
+        self.assertEqual(self.post("/api/handoff", payload)[0], 200)
+        self.assertEqual(self.post("/api/handoff", {"noteIds": ["n2"], "submitId": "second-submit"})[0], 200)
+        for status in ("pending", "claimed", "done"):
+            if status == "claimed":
+                store.handoff_claim(self.d, seq=1)
+            elif status == "done":
+                store.video_receipt(
+                    self.d, seq=1, receipt=[{"noteId": "n1", "outcome": "question", "question": "字幕？"}]
+                )
+            code, _, body = self.post("/api/handoff", payload)
+            self.assertEqual(code, 200, body)
+            data = json.loads(body)
+            self.assertEqual((data["seq"], data.get("status"), data["merged"]), (1, status, True))
+            self.assertEqual((data["handoff"]["total"], data["handoff"]["latest"]["seq"]), (2, 2))
+
     def test_video_handoff_rejects_bad_note_ids(self):
         self.link_source()
         code, _h, body = self.post("/api/handoff", {"message": "x", "noteIds": ["n1", "ghost"]})
@@ -578,6 +627,166 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertEqual(code, 200)
         self.assertIsNone(json.loads(body)["sourceProject"])
 
+    def test_page_distinguishes_an_unusable_receipt_directory_and_can_confirm(self):
+        import i18n
+        import ledger
+
+        project = self.root / "hf"
+        (project / "compositions" / "scene-b.html").unlink()
+        (project / "index.html").write_text('<html data-fps="30"></html>')
+        (project / "out").mkdir()
+        movie = project / "out" / "cut.mp4"
+        movie.write_bytes(self.source.read_bytes())
+        fresh = max(p.stat().st_mtime_ns for p in project.rglob("*")) + 1_000_000_000
+        os.utime(movie, ns=(fresh, fresh))
+        payload = {"engine": "hyperframes", "root": str(project), "entry": {"id": "index.html"}}
+        isolated = self.root / "receipt-ledger"
+        isolated.mkdir()
+        with mock.patch.dict(os.environ, AE_HOME=str(isolated)):
+            code, _, raw = self.post("/api/video/source-project", payload)
+            self.assertEqual(code, 200, raw)
+            self.assertIn("missingReceipt", json.loads(raw)["sourceProject"]["reasons"])
+            (isolated / ledger.VIDEO_RENDERS_DIR).write_text("synthetic misplaced file")
+            for locale, label in (("en", "receipt directory"), ("zh-CN", "凭据目录")):
+                self.server.locale = locale
+                code, _, raw = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, raw)
+                proposal = json.loads(raw)["sourceProject"]
+                self.assertEqual(proposal["status"], "pending")
+                self.assertIn("renderEvidenceDirectory", proposal["reasons"])
+                self.assertNotIn("missingReceipt", proposal["reasons"])
+                self.assertIn(label, i18n.Translator(locale)("viewer.video.source.reason.renderEvidenceDirectory"))
+            code, _, raw = self.post(
+                "/api/video/source-project/confirm", {"proposalRevision": proposal["proposalRevision"]}
+            )
+            self.assertEqual(code, 200, raw)
+            self.assertEqual(json.loads(raw)["sourceProject"]["match"], "confirmed")
+
+    def test_missing_project_entry_lists_candidates_in_the_page_language(self):
+        project = self.root / "hf"
+        for lang, separator in (("zh-CN", "、"), ("en", ", ")):
+            with self.subTest(lang=lang):
+                self.server.locale = lang
+                code, _, response = self.post(
+                    "/api/video/source-project",
+                    {"engine": "hyperframes", "root": str(project), "entry": {"id": "unknown"}},
+                )
+                self.assertEqual(code, 400)
+                self.assertIn("compositions/scene-b.html" + separator + "index.html", json.loads(response)["error"])
+
+    def test_unreadable_remotion_config_names_the_file_and_other_projects_remain_selectable(self):
+        project = self.root / "project"
+        config = project / "remotion.config.ts"
+        config.write_text("// synthetic project", encoding="utf-16")
+        for lang, instruction in (("en", "save"), ("zh-CN", "保存")):
+            with self.subTest(lang=lang):
+                self.server.locale = lang
+                code, _, body = self.post(
+                    "/api/video/source-project", {"engine": "remotion", "root": str(project), "entry": {"id": "Main"}}
+                )
+                self.assertEqual(code, 400)
+                self.assertEqual(json.loads(body)["code"], "bad-source-project")
+                for fragment in (config.name, "UTF-8", instruction):
+                    self.assertIn(fragment, json.loads(body)["error"])
+                with self.assertRaises(build_viewer.BuildError) as error:
+                    build_viewer.build(project, None, self.root / "from-project", no_scan_skills=True, locale=lang)
+                for fragment in (config.name, "UTF-8", instruction):
+                    self.assertIn(fragment, str(error.exception))
+        code, _, body = self.post(
+            "/api/video/source-project", {"engine": "remotion", "root": str(self.root / "p"), "entry": {"id": "Main"}}
+        )
+        self.assertEqual(code, 200, body)
+
+    def test_project_proposal_identifies_unreadable_cuts_alongside_readable_media(self):
+        import video_review
+
+        project = self.root / "project"
+        out = project / "out"
+        out.mkdir()
+        (out / "preview.mp4").write_bytes(synthetic_mp4(frames=72))
+        (out / "empty.mp4").write_bytes(b"")
+        body = {"engine": "remotion", "root": str(project), "entry": {"id": "Main"}}
+
+        def project_cuts():
+            code, _, response = self.post("/api/video/source-project", body)
+            self.assertEqual(code, 200, response)
+            cuts = json.loads(response)["sourceProject"]["cutComparison"]["movies"]
+            return {cut["name"]: cut for cut in cuts}
+
+        with mock.patch.object(video_review, "MAX_BOX_DEPTH", 2):
+            issue = project_cuts()["out/preview.mp4"]["diagnostic"]
+            self.assertEqual(issue, {"code": "boxDepth", "params": {"limit": 2}})
+        cuts = project_cuts()
+        self.assertEqual(cuts["out/empty.mp4"]["diagnostic"]["code"], "emptyFile")
+        self.assertEqual(cuts["out/preview.mp4"]["media"]["frames"], 72)
+
+    def test_proposal_compares_registered_media_with_each_existing_project_cut(self):
+        for engine, folder, entry in (("remotion", "project", "Main"), ("hyperframes", "hf", "index.html")):
+            with self.subTest(engine=engine):
+                project = self.root / folder
+                out = project / "out"
+                out.mkdir()
+                (out / "draft.mp4").write_bytes(synthetic_mp4(frames=72, fps=24, width=320, height=180))
+                code, _, body = self.post(
+                    "/api/video/source-project", {"engine": engine, "root": str(project), "entry": {"id": entry}}
+                )
+                self.assertEqual(code, 200, body)
+                proposal = json.loads(body)["sourceProject"]
+                self.assertEqual(proposal["status"], "pending")
+                comparison = proposal["cutComparison"]
+                self.assertEqual(comparison["review"], V1_MEDIA)
+                (movie,) = comparison["movies"]
+                self.assertEqual(movie["name"], "out/draft.mp4")
+                self.assertEqual(movie["media"], {"duration": 3, "fps": 24, "frames": 72, "width": 320, "height": 180})
+                self.assertIn({"field": "frames", "review": 180, "project": 72}, movie["differences"])
+                self.assertIn("mediaMismatch", proposal["reasons"])
+
+    def test_pending_proposal_explains_content_freshness_and_render_provenance(self):
+        remotion = self.root / "project"
+        (remotion / "src" / "index.tsx").write_text('<Composition id="Main" fps={30} />')
+        hf = self.root / "hf"
+        (hf / "compositions" / "scene-b.html").unlink()
+        (hf / "index.html").write_text('<html data-fps="30"></html>')
+        for engine, project, entry in (("remotion", remotion, "Main"), ("hyperframes", hf, "index.html")):
+            out = project / "out"
+            out.mkdir()
+            cut = out / "cut.mp4"
+            original = self.source.read_bytes()
+            for reason in (
+                "noMovie",
+                "unreadableMovie",
+                "contentMismatch",
+                "staleMovie",
+                "missingReceipt",
+                "multipleMovies",
+            ):
+                with self.subTest(engine=engine, reason=reason):
+                    if reason == "unreadableMovie":
+                        cut.write_bytes(b"unfinished")
+                    elif reason == "contentMismatch":
+                        cut.write_bytes(original.replace(b"***", b"BBB", 1))
+                    elif reason == "staleMovie":
+                        cut.write_bytes(original)
+                        os.utime(cut, (1, 1))
+                    elif reason == "missingReceipt":
+                        os.utime(cut, None)
+                    elif reason == "multipleMovies":
+                        (out / "alternate.mp4").write_bytes(original)
+                    code, _, body = self.post(
+                        "/api/video/source-project", {"engine": engine, "root": str(project), "entry": {"id": entry}}
+                    )
+                    self.assertEqual(code, 200, body)
+                    proposal = json.loads(body)["sourceProject"]
+                    self.assertEqual(proposal["status"], "pending")
+                    self.assertIn(reason, proposal["reasons"])
+                    if reason in ("contentMismatch", "staleMovie", "missingReceipt"):
+                        self.assertEqual(proposal["cutComparison"]["movies"][0]["media"], V1_MEDIA)
+                    if reason == "multipleMovies":
+                        self.assertEqual(
+                            {m["name"] for m in proposal["cutComparison"]["movies"]},
+                            {"out/alternate.mp4", "out/cut.mp4"},
+                        )
+
     def test_matching_shape_alone_lists_project_candidates_for_confirmation(self):
         code, _h, body = self.post(
             "/api/video/source-project",
@@ -594,6 +803,37 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertEqual({c["entry"]["id"] for c in sp["candidates"]}, {"Main", "Intro"})
         self.assertIsNone(sp.get("match"))
         self.assertEqual(self.manifest()["video"]["sourceProject"]["entry"]["id"], "Main")
+
+    def test_visible_remotion_entry_and_manually_checked_dynamic_entry_can_be_chosen(self):
+        project = self.root / "project"
+        index = project / "src" / "index.tsx"
+        declaration = '<Composition id="Visible" fps={30} />'
+        dynamic = "<Composition id={name} fps={24} />"
+        for source, entered, chosen in (
+            (declaration, "Typo", "Visible"),
+            (declaration + dynamic, "Generated", "Generated"),
+            (dynamic, "Generated", "Generated"),
+        ):
+            with self.subTest(source=source, chosen=chosen):
+                index.write_text(source)
+                code, _, body = self.post(
+                    "/api/video/source-project", {"engine": "remotion", "root": str(project), "entry": {"id": entered}}
+                )
+                self.assertEqual(code, 200, body)
+                proposal = json.loads(body)["sourceProject"]
+                self.assertEqual(proposal["status"], "pending")
+                self.assertIn("entryNotListed", proposal["reasons"])
+                confirm = {"proposalRevision": proposal["proposalRevision"]}
+                if declaration in source:
+                    candidates = {c["entry"]["id"]: c["id"] for c in proposal["candidates"]}
+                    self.assertIn("Visible", candidates)
+                    code, _, _ = self.post("/api/video/source-project/confirm", confirm)
+                    self.assertEqual(code, 400)
+                    confirm["choice"] = candidates[chosen]
+                code, _, body = self.post("/api/video/source-project/confirm", confirm)
+                self.assertEqual(code, 200, body)
+                linked = json.loads(body)["sourceProject"]
+                self.assertEqual((linked["entry"]["id"], linked["match"]), (chosen, "confirmed"))
 
     def test_foreign_cut_copied_into_single_entry_project_requires_confirmation(self):
         project = self.root / "hf"
@@ -628,7 +868,10 @@ class ServeSourceProjectTests(VideoHandoffBase):
             with self.subTest(engine=engine):
                 source_asset = project / "music.txt"
                 source_asset.write_text("music A")
-                # 代替引擎输出；渲染凭据使用工程入口自身的生产写入路径。
+                # 工程入口要求已安装引擎。仅替代渲染输出，凭据仍走实际登记流程。
+                engine_bin = video_engines.detect_project(project)["bin"]
+                engine_bin.parent.mkdir(parents=True, exist_ok=True)
+                engine_bin.touch()
                 with (
                     mock.patch.object(video_engines, "list_compositions", return_value=[{"id": entry, **V1_MEDIA}]),
                     mock.patch.object(
@@ -710,6 +953,58 @@ class ServeSourceProjectTests(VideoHandoffBase):
         self.assertEqual(self.manifest()["video"]["sourceProject"]["status"], "pending")
         code, _, body = self.post(path, {"proposalRevision": current["proposalRevision"]})
         self.assertEqual((code, json.loads(body)["sourceProject"]["root"]), (200, str(second)))
+
+    def test_candidate_media_show_declarations_and_confirmation_uses_the_displayed_revision(self):
+        remotion = self.root / "project"
+        hf = self.root / "hf"
+        (hf / "compositions" / "scene-b.html").write_text(
+            '<html><div data-composition-id="b" data-height="180"></div></html>'
+        )
+        cases = (
+            (
+                "remotion",
+                remotion,
+                "Main",
+                "Other",
+                remotion / "src" / "index.tsx",
+                '<Composition id="Main" width={ 960 } height={540} fps={24} durationInFrames={72}/>'
+                '<Composition id="Other" height={180} fps={rate}/>',
+            ),
+            (
+                "hyperframes",
+                hf,
+                "index.html",
+                "compositions/scene-b.html",
+                hf / "index.html",
+                '<html><div data-composition-id="main" data-width="960" data-height="540" data-fps="24" data-duration="3"></div></html>',
+            ),
+        )
+        for engine, project, entry, partial_entry, path, declaration in cases:
+            with self.subTest(engine=engine):
+                payload = {"engine": engine, "root": str(project), "entry": {"id": entry}}
+                path.write_text(declaration)
+                code, _, body = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, body)
+                original = json.loads(body)["sourceProject"]
+                candidates = {c["entry"]["id"]: c for c in original["candidates"]}
+                known = candidates[entry]["media"]
+                self.assertEqual(
+                    {key: known.get(key) for key in ("width", "height", "fps", "frames")},
+                    {"width": 960, "height": 540, "fps": 24, "frames": 72},
+                )
+                self.assertEqual(candidates[partial_entry]["media"], {"height": 180})
+                path.write_text(declaration.replace("960", "1200"))
+                code, _, body = self.post("/api/video/source-project", payload)
+                self.assertEqual(code, 200, body)
+                current = json.loads(body)["sourceProject"]
+                confirm = {"choice": candidates[entry]["id"], "proposalRevision": original["proposalRevision"]}
+                code, _, body = self.post("/api/video/source-project/confirm", confirm)
+                self.assertEqual((code, json.loads(body)["code"]), (409, "stale-source-project"))
+                confirm["proposalRevision"] = current["proposalRevision"]
+                code, _, body = self.post("/api/video/source-project/confirm", confirm)
+                self.assertEqual(code, 200, body)
+                linked = json.loads(body)["sourceProject"]
+                self.assertEqual((linked["entry"]["id"], linked["basis"]["media"]["width"]), (entry, 1200))
 
     def test_post_validates_payload(self):
         code, _h, body = self.post(

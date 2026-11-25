@@ -168,10 +168,13 @@ def unlock_fd(fd: int) -> None:
     raise RuntimeError("当前平台缺少可用的文件锁实现")
 
 
-def _is_reparse_or_symlink(info: os.stat_result) -> bool:
+def is_reparse_or_symlink(info: os.stat_result) -> bool:
     if stat.S_ISLNK(info.st_mode):
         return True
     return bool((getattr(info, "st_file_attributes", 0) or 0) & _WIN_REPARSE_POINT_ATTR)
+
+
+_is_reparse_or_symlink = is_reparse_or_symlink
 
 
 def _win_same_owner(path: Path) -> bool:
@@ -287,7 +290,29 @@ def check_private_regular_file(
     return info
 
 
-def read_private_text(path: Path, *, max_bytes: int | None) -> str:
+def check_private_dir(
+    path: Path,
+    *,
+    exact_mode: int | None = None,
+    error_prefix: str = "dir",
+    private_error: str | None = None,
+) -> os.stat_result:
+    """校验 path 为当前用户私有的真实目录（非符号链接/重解析点）。"""
+    info = path.lstat()
+    priv_msg = private_error or f"private-{error_prefix}-required"
+    if not stat.S_ISDIR(info.st_mode) or is_reparse_or_symlink(info):
+        raise ValueError(priv_msg)
+    if is_windows():
+        if not _win_same_owner(path):
+            raise ValueError(priv_msg)
+    else:
+        bad_mode = stat.S_IMODE(info.st_mode) != exact_mode if exact_mode is not None else bool(info.st_mode & 0o077)
+        if info.st_uid != os.getuid() or bad_mode:
+            raise ValueError(priv_msg)
+    return info
+
+
+def read_private_bytes(path: Path, *, max_bytes: int | None) -> bytes:
     """核实本机私有普通文件的身份和权限，按调用方的大小约束读取。"""
     info = check_private_regular_file(path, max_bytes=max_bytes)
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
@@ -298,7 +323,11 @@ def read_private_text(path: Path, *, max_bytes: int | None) -> str:
         data = src.read() if max_bytes is None else src.read(max_bytes + 1)
         if max_bytes is not None and len(data) > max_bytes:
             raise ValueError("file-too-large")
-    return data.decode("utf-8")
+    return data
+
+
+def read_private_text(path: Path, *, max_bytes: int | None) -> str:
+    return read_private_bytes(path, max_bytes=max_bytes).decode("utf-8")
 
 
 @contextlib.contextmanager
@@ -308,6 +337,7 @@ def flocked(
     exclusive: bool = False,
     nonblocking: bool = False,
     nofollow: bool = False,
+    create: bool = True,
     deadline: float | None = None,
     dir_fd: int | None = None,
 ) -> Iterator[int]:
@@ -317,7 +347,7 @@ def flocked(
     BlockingIOError，否则等到 deadline（monotonic 时间）或获得锁；nofollow：拒绝跟随符号链接（O_NOFOLLOW）——按各处原来的
     行为，只有台账的更新协调锁为真，其余为假（放行符号链接的兼容问题另行评估）。
     dir_fd：在已打开的目录内解析相对 path，供需要固定目录身份的调用方使用；缺省保持原调用方式。
-    锁文件以 0600 新建；yield 文件描述符，调用方不需要时可以忽略。
+    锁文件默认以 0600 新建；create=False 只探测已有文件。yield 文件描述符。
     锁的粒度与持有范围由调用方的 with 块决定，这里不加也不减。
     """
     target = Path(path)
@@ -328,7 +358,9 @@ def flocked(
             info = None
         if info is not None and _is_reparse_or_symlink(info):
             raise OSError(errno.ELOOP, "Too many levels of symbolic links", str(target))
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0) | (getattr(os, "O_NOFOLLOW", 0) if nofollow else 0)
+    flags = os.O_RDWR | getattr(os, "O_BINARY", 0) | (getattr(os, "O_NOFOLLOW", 0) if nofollow else 0)
+    if create:
+        flags |= os.O_CREAT
     fd = os.open(target, flags, 0o600) if dir_fd is None else os.open(target, flags, 0o600, dir_fd=dir_fd)
     try:
         fh = os.fdopen(fd, "r+")

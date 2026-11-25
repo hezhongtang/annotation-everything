@@ -101,6 +101,25 @@ class VideoServerTests(unittest.TestCase):
                 self.assertEqual(response.headers["Content-Range"], content_range)
                 self.assertEqual(body, expected)
 
+    def test_public_version_endpoints_publish_only_failure_summaries(self):
+        import video_review
+
+        reason = "synthetic diagnostic /synthetic/private/decoder.log"
+        video_review.register_version(self.review, self.source, batch=1, by="agent", receipt_id="take2")
+        video_review.reject_decoded_version(self.review, "V2", 1, self.rid, reason)
+        for path in ("/api/video/versions", "/api/video/versions/V2"):
+            with self.subTest(path=path):
+                response, body = self.request("GET", path)
+                self.assertEqual(response.status, 200)
+                self.assertNotIn(reason.encode(), body)
+                result = json.loads(body)
+                if "video" in result:
+                    self.assertEqual(result["video"]["lastFailure"]["stage"], "decode")
+                    version = result["video"]["versions"][1]
+                else:
+                    version = result["videoVersion"]
+                self.assertEqual(version["playbackFailure"]["reason"], "浏览器无法解码成片")
+
     def test_invalid_ranges_and_unregistered_or_arbitrary_sources_are_rejected(self):
         for header in ("bytes=999999-", "bytes=20-10", "bytes=1-2,4-5", "items=1-2"):
             with self.subTest(header=header):
@@ -116,6 +135,21 @@ class VideoServerTests(unittest.TestCase):
             with self.subTest(path=path):
                 response, _body = self.request("GET", path)
                 self.assertEqual(response.status, 404)
+
+    def test_unsupported_range_numbers_return_416_and_allow_the_next_read(self):
+        from unittest.mock import patch
+
+        with patch.object(serve, "MAX_RANGE_DIGITS", 2, create=True):
+            for value in ("bytes=100-", "bytes=0-100", "bytes=-100"):
+                with self.subTest(value=value):
+                    response, body = self.request("GET", self.media_url, {"Range": value})
+                    self.assertEqual(response.status, 416)
+                    self.assertEqual(response.headers["Content-Range"], f"bytes */{len(self.media)}")
+                    self.assertEqual(json.loads(body)["code"], "bad-range")
+            response, body = self.request("GET", self.media_url, {"Range": "bytes=8-11"})
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.headers["Content-Range"], f"bytes 8-11/{len(self.media)}")
+            self.assertEqual(body, self.media[8:12])
 
     def test_saved_media_urls_cannot_read_a_different_review_on_the_same_port(self):
         other_review = self.root / "second-review"
