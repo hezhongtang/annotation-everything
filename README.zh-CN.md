@@ -37,7 +37,7 @@ README 随 `main` 分支更新；自动更新只安装正式版本标签。升�
 
 - **对着材料写意见**：报告与讲稿按页对照；选中文字即可引用、删除或改写，也能在报告上放点、框选区域。对应句子可提示两侧一起改。
 - **Word 文档直接审阅**：`.docx` 不用先转 HTML，按 Word 保存的原分页和页面方向生成对照页；分页可信度与只能近似显示的结构在页面和命令行都标明；批注记录所在段落和文字位置，Word 重排后重建对照页，批注仍跟着原段落。支持的纯文字删除／替换可按批次或批注回写 `.docx`，先校验和备份，再原子替换；只读结构会说明限制。
-- **桌面 Word 任务窗格原型**：在 macOS Word 中尝试将一份合成审阅绑定到当前 DOCX，应用一条跟踪修订，回读原文、改后文字与作者。[复现步骤与限制](docs/word-taskpane-prototype.md)
+- **桌面 Word 原页审阅**。在支持 WordApi 1.6 的 macOS Word 中连接新建或已有的 DOCX 审阅，核对当前文件、审阅标识、批次与接收会话。可在原页应用跟踪修订；保存重开后重新核对段落定位。[从 skill 打开与重连](skill/annotation-everything/references/word-native.zh-CN.md) · [原型实测步骤](docs/word-taskpane-prototype.md)
 - **PPT 演示文稿直接审阅**：`.pptx` 也不用先转图，一张幻灯片生成一页对照页，保留原始尺寸、方向与顺序；幻灯片由本机 LibreOffice 与 Poppler 渲染成图（缺工具、转换失败给出明确诊断，不会拿文字预览冒充视觉审阅）；演讲者备注进讲稿侧。在幻灯片下方的「元素文本」区拖选普通文本，批注保留元素身份、段落和字符偏移；画布上的元素点选、标点和框选保持可用。元素文本区按内容排版，幻灯片的视觉核对以渲染图为准。批注带幻灯片定位——幻灯片身份、元素目标、逻辑段落与码点偏移、归一化区域坐标——重建和页面重排后仍指向原来的幻灯片与元素。图表、SmartArt、图片、组合内部、媒体等只读结构可以选中批注，但明确标为只读元素。支持的文本与备注修改以及白名单内的几何、样式修改经整组预检回写，先存 0600 快照再原子替换；转换前后的字体证据与逐页视觉核验始终显式记录，不以结构成功代替视觉通过。[查看文本选择示例](docs/assets/pptx-text.zh.png)。
 - **按帧和片段审阅视频**。可以直接批注本地 MP4，也可以从 Remotion 或 HyperFrames 工程开始。把选中的意见交给接收会话，改稿后从原批注对照前后画面、分别试听片段，再逐条通过或写明理由退回。也可勾选已核对的条目批量通过，通过后不可撤销。加载失败时，点击「重新加载成片」或从批注再次跳转即可重试。[视频操作与验收记录](docs/video-acceptance.zh-CN.md)。
 - **一键交给 Agent 改稿**：批注自动保存。绑定接收会话后，显式提交这一批意见，Agent 同步修改报告和讲稿、重建对照页，并逐条记录处理结果。
@@ -146,7 +146,7 @@ python "$S\serve.py" "$env:TEMP\ae-demo"
 | `video_engines.py inspect PROJECT` / `build_viewer.py --report PROJECT --video-composition ENTRY --out REVIEW` | 列出可用合成，从选定入口开始审阅。`--reuse-movie PATH` 确认已有成片，`--no-reuse` 要求重新渲染 |
 | `notes.py video-receipt REVIEW --seq N --review-id ID --receipt-id KEY --receipt FILE --movie CUT.mp4` | 登记新成片，按原批注交回处理结果。未收到回执响应时，用原标识重试。补交修好的成片时换用新标识。渲染失败时用 `--render-error REASON` 记录原因 |
 | `docx_edit.py apply 审阅目录 --batch N` / `replace 审阅目录 --paragraph N --from 原文 --to 新文` | 回写 DOCX 快捷修改／自由批注的单条替换；`--id ID` 可重复选择批注，`--dry-run` 预演，`--output 新路径` 另存；默认备份后原地写入，不自动处理批注状态 |
-| `word_taskpane.py REVIEW --document DOCX --cert CERT.pem --key KEY.pem` | 启动固定环回 HTTPS 的 Word 原型。需要已运行的专属审阅与受信任的本机证书 |
+| `word_taskpane.py REVIEW --document DOCX --cert CERT.pem --key KEY.pem` | 启动 Word 侧栏连接服务，输出本次绑定码。需要已运行的专属审阅与受信任的环回 HTTPS 证书 |
 | `pptx_edit.py apply 审阅目录 --batch N` / `ops 审阅目录 --ops 操作文件` | 按幻灯片定位回写 PPTX 文本与备注快捷修改，或用 JSON 操作文件下发白名单内的元素几何与样式修改；`--id ID` 选择批注，`--dry-run` 预演，`--output 新路径` 另存；整组预检、0600 快照、原子替换，只读结构明确拒绝 |
 | `report_check.py 报告.html [--script 讲稿.md] [--record report-record.json]` | 公开报告核验入口：输出可读摘要，`--json` 输出结构化结果，`--locale zh-CN` 或 `en` 选择语言。退出码 0 表示程序检查通过，不等于报告可交付；1 表示检查未通过；2 表示输入或用法错误。内容、结构与视觉覆盖及交付阻塞项分别列出 |
 | `serve.py 审阅目录或审阅标识` | 启动本机服务；每份审阅都有固定的专属端口。`--locale auto\|zh-CN\|en` 或 `AE_LOCALE` 选诊断说明的语言 |
@@ -499,6 +499,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── agent-mechanisms.en.md     英文 Agent 机制对照
 │   ├── receiver-binding.zh-CN.md  接收方身份、状态与显式交接
 │   ├── receiver-binding.en.md     英文接收方绑定与交接
+│   ├── word-native.{zh-CN,en}.md  Word 原页审阅的绑定、恢复与浏览器入口
 │   ├── formats.md                 中文输入与输出格式
 │   └── formats.en.md              英文输入与输出格式
 ├── locales/                       中英消息（zh-CN.json、en.json）和语言选择契约
@@ -509,7 +510,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── video_engines.py           发现合成并用工程引擎渲染选定入口
 │   ├── docx_review.py             逐页渲染 DOCX，记录分页可信度与结构诊断，按段落重定位批注
 │   ├── docx_edit.py               按批注字节级回写 DOCX，校验、备份与原子替换
-│   ├── word_taskpane.py           桌面 Word 任务窗格原型的本机 HTTPS 接口
+│   ├── word_taskpane.py           Word 任务窗格的同源 HTTPS 连接与身份核对
 │   ├── pptx_reader.py             PPTX 包安全读取：OOXML 元素模型、能力矩阵与幻灯片身份
 │   ├── pptx_report.py             PPTX 对照页构建：本机 LibreOffice/Poppler 渲染与字体证据
 │   ├── pptx_edit.py               回写 PPTX 文本、备注与白名单几何/样式：预检、快照与原子替换

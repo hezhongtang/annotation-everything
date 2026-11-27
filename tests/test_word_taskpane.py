@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,7 @@ import ledger
 import make_word_native
 import notes_store
 import serve
+import wakeup
 
 
 @unittest.skipUnless(shutil.which("openssl"), "HTTPS test certificate requires openssl")
@@ -85,12 +87,14 @@ class TaskpaneTests(unittest.TestCase):
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
 
-    def review_fixture(self, letter):
+    def review_fixture(self, letter, session=None):
         label = letter.upper()
         file = make_word_native.build(self.root / label / "contract.docx", label)
         review = make_word_native.prepare_review(file, label)
         rid = ledger.read_manifest(review)["reviewId"]
         nid = notes_store.load(review)["notes"][0]["id"]
+        if session:
+            wakeup.bind_wait(review, "Codex", session)
         server = serve.ReviewServer(review, 0, log_to_file=False)
         ledger.claim_port(rid, review, server.port)
         serve.write_status(server)
@@ -142,6 +146,43 @@ class TaskpaneTests(unittest.TestCase):
             (200, {"reviewId": self.rid, "suggestion": expected}),
         )
 
+    def test_pane_reads_document_current_batch_and_receiver_without_editing_word(self):
+        request = {"documentKey": self.key(self.file)}
+        source = self.file.read_bytes()
+        status, opened = self.request("/api/bind", request)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            (opened["documentName"], opened["receiver"], opened["batch"], opened["browserUrl"]),
+            ("contract.docx", {"state": "unconfigured"}, None, f"http://127.0.0.1:{ledger.get(self.rid)['port']}/"),
+        )
+        notes_store.handoff_submit(self.review, "核对表格")
+        status, refreshed = self.request("/api/status", {**request, "reviewId": self.rid})
+        self.assertEqual(status, 200)
+        self.assertEqual(refreshed["batch"], {"seq": 1, "status": "pending"})
+        self.assertEqual(self.file.read_bytes(), source)
+
+    def test_receiver_transfer_invalidates_the_open_pane(self):
+        import word_taskpane
+
+        review, file, rid, nid = self.review_fixture("c", session="first-session")
+        self.server = word_taskpane.TaskpaneServer(review, file, self.tls, port=0)
+        self.start(self.server)
+        body = {"documentKey": self.key(file)}
+        status, opened = self.request("/api/bind", body)
+        self.assertEqual(status, 200)
+        received = opened["receiver"]
+        self.assertEqual(
+            (received["state"], received["harness"], received["sessionId"]), ("idle", "Codex", "first-session")
+        )
+        wakeup.bind_wait(review, "Codex", "other-session", replace=True)
+        for path, request in (
+            ("/api/status", {**body, "reviewId": rid}),
+            ("/api/suggestion", {**body, "reviewId": rid, "id": nid}),
+            ("/api/bind", body),
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path, request), (409, {"error": "receiver-changed"}))
+
     def test_file_replaced_after_binding_cannot_receive_the_cached_suggestion(self):
         body = {"documentKey": self.key(self.file)}
         self.assertEqual(self.request("/api/bind", body)[0], 200)
@@ -150,6 +191,29 @@ class TaskpaneTests(unittest.TestCase):
             self.request("/api/suggestion", {**body, "reviewId": self.rid, "id": self.nid}),
             (409, {"error": "document-changed"}),
         )
+
+    def test_reopen_after_save_requires_explicit_rebuild_and_new_connection(self):
+        import build_viewer
+        import word_taskpane
+
+        body = {"documentKey": self.key(self.file)}
+        status, before = self.request("/api/bind", body)
+        self.assertEqual(status, 200)
+        old_token = self.server.token
+        notes_store.handoff_submit(self.review, "保留既有批次")
+        # A save can change the ZIP fingerprint while preserving all paragraph text.
+        with zipfile.ZipFile(self.file, "a") as package:
+            package.comment = b"synthetic save"
+        self.assertEqual(self.request("/api/bind", body), (409, {"error": "document-changed"}))
+        self.assertEqual(build_viewer.main(["--rebuild", str(self.review)]), 0)
+        self.assertEqual(self.request("/api/bind", body), (409, {"error": "document-changed"}))
+        self.server = word_taskpane.TaskpaneServer(self.review, self.file, self.tls, port=0)
+        self.start(self.server)
+        self.assertEqual(self.request("/api/bind", body, token=old_token)[0], 403)
+        status, reopened = self.request("/api/bind", body)
+        self.assertEqual(status, 200)
+        self.assertEqual((reopened["reviewId"], reopened["batch"]["seq"]), (self.rid, 1))
+        self.assertEqual(reopened["suggestions"], before["suggestions"])
 
     def test_second_live_review_cannot_be_selected_by_identity_document_or_note(self):
         key = self.key(self.file)

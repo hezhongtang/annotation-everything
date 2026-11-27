@@ -19,6 +19,8 @@ Before loading the selected workflow, resolve `$S` to the `scripts/` directory b
 5. **无任务激活 / Activation without a task**. If the user only activates the skill and the current turn contains no material, task, or handoff event, open the standalone overview home with `serve.py overview`. After the update check, follow [启动总览首页](references/workflow.zh-CN.md#启动总览首页) or [Start the overview home](references/workflow.en.md#start-the-overview-home) in the selected workflow.
 6. **分析事件**：收到 `analysis` 轮次或配置分析接收时，中文请求读取[分析操作指引](references/analysis.zh-CN.md)，按该流程处理。**Analysis events**: for an `analysis` round or analysis-receiving setup, English requests use the [analysis guide](references/analysis.en.md). Load only the matching language.
 
+7. **Word 原生审阅 / Native Word review**. 用户要求在桌面 Word 原页审阅、从侧栏绑定文档或重连审阅时，读取[在 Word 中连接审阅](references/word-native.zh-CN.md)。For requests to review in desktop Word or reconnect its task pane, read [Connect a review in Word](references/word-native.en.md). Follow the matching-language guide before applying suggestions.
+
 `$S` in the guides means the `scripts/` directory beside this installed `SKILL.md`. Resolve it from the skill copy that was loaded. The scripts use the Python standard library (check the current shell first: invoke with `python3` on macOS/Linux bash/zsh or `python` in Windows PowerShell, quoting paths with spaces or non-ASCII characters). Both languages use the same installation, scripts, translation resources, review identity, and storage protocol.
 
 ## 各 Agent 的对应机制 / Agent mechanisms

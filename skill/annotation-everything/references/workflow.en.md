@@ -150,6 +150,8 @@ Without a service, open `index.html` directly. Annotations persist in browser st
 
 ## 5. Read the accepted batch and edit sources
 
+For native revisions and comments in desktop Word, follow [Connect a review in Word](word-native.en.md) to select the document, start the review and connect its pane.
+
 **Locations of DOCX annotations**: `show` prints a `DOCX location` line under the annotation (paragraph number, paraId, character offsets in the paragraph, source). A line starting with ⚠ means the location cannot be used as is: when the paragraph text has changed, check the position against the quoted text; when the location was written against another version of the source file, rebuild the review page first; when its version is newer than this tool supports, it cannot be used for write-back. For an annotation marked orphaned after a rebuild, confirm with the user which paragraph it belongs to.
 
 **DOCX write-back**: use `show` to check the accepted batch requirements, original text and paragraph locations, then follow this branch. Supported content and refusal reasons are in [Formats](formats.en.md), under “Word documents (DOCX)”.

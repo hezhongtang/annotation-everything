@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-review HTTPS source for the macOS Word task pane prototype (#214)."""
+"""Serve a local Word task pane bound to one running AE review and its source DOCX."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ import ledger
 import notes_store
 import review_stop
 import serve
+import wakeup
 
 PORT = 43821
 ASSETS = Path(__file__).resolve().parents[1] / "word-taskpane"
@@ -30,7 +31,7 @@ RESOURCES = {
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     **{f"/api/icon/{n}.png": (f"icon-{n}.png", "image/png") for n in (16, 32, 80)},
 }
-MAX_DOCUMENT = 16 * 1024 * 1024  # The prototype is for small, local synthetic documents.
+MAX_DOCUMENT = 16 * 1024 * 1024
 W = docx_review.W
 IRREGULAR_TABLE = {W + tag for tag in ("gridSpan", "vMerge", "hMerge", "gridBefore", "gridAfter")}
 
@@ -85,6 +86,7 @@ class Binding:
         if not isinstance(docx, dict) or not isinstance(docx.get("fingerprint"), str):
             raise Refused(409, "invalid-review")
         self.fingerprint = docx["fingerprint"]
+        self.receiver_id = (wakeup.load_binding(self.review, manifest=manifest) or {}).get("bindingId")
         self.check_live()
         data = self.verified_bytes()
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
@@ -106,7 +108,6 @@ class Binding:
         if (
             manifest.get("reviewId") != self.rid
             or ledger.report_format(manifest) != ("docx", docx_review.FORMAT_VERSION)
-            or (manifest.get("docx") or {}).get("fingerprint") != self.fingerprint
             or entry.get("dir") != str(self.review)
             or type(self.port) is not int
             or not 1024 <= self.port <= 65535
@@ -122,6 +123,8 @@ class Binding:
             raise Refused(409, "review-unavailable")
         if self.document.suffix.lower() != ".docx" or resolve_sources(self.review, manifest)["report"] != self.document:
             raise Refused(409, "wrong-document")
+        if (manifest.get("docx") or {}).get("fingerprint") != self.fingerprint:
+            raise Refused(409, "document-changed")
         health = serve.probe(self.port, timeout=0.6)
         if (
             not serve.overview_health(health, self.rid, self.review, self.port)
@@ -129,7 +132,32 @@ class Binding:
             or health.get("hostKind")
         ):
             raise Refused(409, "review-unavailable")
-        return ledger.review_name(manifest)
+        receiver = health.get("receiver")
+        if "receiver-binding" not in health.get("features", []) or not isinstance(receiver, dict):
+            raise Refused(409, "receiver-unsupported")
+        if receiver.get("state") == "restart-required" or receiver.get("bindingId") != self.receiver_id:
+            raise Refused(409, "receiver-changed")
+        if receiver.get("state") not in {"unconfigured", "event", "waiting", "processing", "idle"}:
+            raise Refused(409, "receiver-unavailable")
+        return {"title": ledger.review_name(manifest), "receiver": receiver}
+
+    def authorize_receiver(self):
+        """For receiver-directed writes, call again under the existing notes/handoff lock."""
+        self.check_live()
+        self.verified_bytes()
+        if not self.receiver_id:
+            raise Refused(409, "receiver-required")
+
+    def status(self, live):
+        batches = notes_store.handoff_load(self.review)["items"]
+        latest = batches[-1] if batches else None
+        return {
+            **live,
+            "reviewId": self.rid,
+            "documentName": self.document.name,
+            "batch": {k: latest[k] for k in ("seq", "status")} if latest else None,
+            "browserUrl": f"http://127.0.0.1:{self.port}/",
+        }
 
     def suggestions(self):
         result = []
@@ -190,7 +218,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 name, mime = RESOURCES[resource_path]
                 self.send_payload(200, (ASSETS / name).read_bytes(), mime)
                 return
-            if self.command != "POST" or self.path not in ("/api/bind", "/api/suggestion"):
+            if self.command != "POST" or self.path not in ("/api/bind", "/api/status", "/api/suggestion"):
                 raise Refused(404, "not-found")
             if self.headers.get_all("Origin") != ["https://" + host] or self.headers.get(
                 "Sec-Fetch-Site", "same-origin"
@@ -215,19 +243,24 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 body = json.loads(self.rfile.read(int(lengths[0])).decode())
             except (ValueError, RecursionError):
                 raise Refused(400, "bad-json") from None
-            fields = {"documentKey"} if self.path == "/api/bind" else {"documentKey", "reviewId", "id"}
+            fields = {
+                "/api/bind": {"documentKey"},
+                "/api/status": {"documentKey", "reviewId"},
+                "/api/suggestion": {"documentKey", "reviewId", "id"},
+            }[self.path]
             if not isinstance(body, dict) or set(body) != fields or not all(isinstance(v, str) for v in body.values()):
                 raise Refused(400, "bad-request")
             binding = self.server.binding
             if body["documentKey"] not in binding.document_keys or body.get("reviewId", binding.rid) != binding.rid:
                 raise Refused(409, "bad-binding")
-            title = binding.check_live()
+            live = binding.check_live()
             binding.verified_bytes()
-            suggestions = binding.suggestions()
-            if self.path == "/api/bind":
-                self.send_payload(200, {"reviewId": binding.rid, "title": title, "suggestions": suggestions})
+            if self.path == "/api/status":
+                self.send_payload(200, binding.status(live))
+            elif self.path == "/api/bind":
+                self.send_payload(200, {**binding.status(live), "suggestions": binding.suggestions()})
             else:
-                suggestion = next((s for s in suggestions if s["id"] == body["id"]), None)
+                suggestion = next((s for s in binding.suggestions() if s["id"] == body["id"]), None)
                 if suggestion is None:
                     raise Refused(404, "no-suggestion")
                 self.send_payload(200, {"reviewId": binding.rid, "suggestion": suggestion})
@@ -252,6 +285,7 @@ def main(argv=None):
         tls.load_cert_chain(args.cert, args.key)
         with TaskpaneServer(args.review, args.document, tls) as server:
             print(f"https://127.0.0.1:{PORT}/index.html  review={server.binding.rid}", flush=True)
+            print(f"Browser viewer: http://127.0.0.1:{server.binding.port}/", flush=True)
             print(f"Binding token: {server.token}", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:
@@ -261,6 +295,11 @@ def main(argv=None):
             print(f"Fixed port {PORT} is already in use.", file=sys.stderr)
         else:
             print(f"Cannot start Word task pane: {exc}", file=sys.stderr)
+        if isinstance(exc, Refused) and exc.code == "document-changed":
+            print(
+                "Verify the saved original, then run build_viewer.py --rebuild REVIEW and reconnect.", file=sys.stderr
+            )
+        print("Open the dedicated browser URL shown by serve.py list for this review.", file=sys.stderr)
         return 2
     return 0
 

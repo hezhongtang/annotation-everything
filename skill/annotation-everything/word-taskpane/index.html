@@ -31,10 +31,17 @@
       <input id="token" type="password" autocomplete="off" spellcheck="false" required disabled>
       <button id="bind" type="submit" disabled>绑定当前文档</button>
     </form>
-    <p id="status" role="status" aria-live="polite">正在等待 Office.js 和 Word 建立连接。</p>
+    <p id="status" role="status" aria-live="polite">未绑定。正在等待 Office.js 和 Word 建立连接。</p>
+    <p id="fallback" class="note">需要浏览器对照页时，打开 AE 启动这份审阅时给出的专属地址。</p>
     <section id="review" hidden>
       <h2 id="title"></h2>
+      <p id="documentName"></p>
       <p id="reviewId"></p>
+      <p id="batch"></p>
+      <p id="receiver"></p>
+      <button id="refresh" type="button">刷新连接状态</button>
+      <button id="disconnect" type="button">重新选择审阅</button>
+      <p><a id="browser" target="_blank" rel="noopener noreferrer">打开浏览器对照页</a></p>
       <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。</p>
       <ul id="suggestions" aria-label="文字建议"></ul>
       <button id="inspect" type="button">读取选区与正文修订</button>
@@ -62,6 +69,8 @@
       byId("bind").disabled = !wordReady || busy || Boolean(binding);
       byId("token").disabled = byId("bind").disabled;
       byId("inspect").disabled = busy || !binding;
+      byId("refresh").disabled = busy || !binding;
+      byId("disconnect").disabled = busy || !binding;
       for (const button of byId("suggestions").querySelectorAll("button")) {
         button.disabled = busy || attempted.has(button.dataset.id);
       }
@@ -81,7 +90,7 @@
       }
     }
 
-    async function documentKey() {
+    async function documentPath() {
       const fileUrl = await new Promise((resolve, reject) => {
         Office.context.document.getFilePropertiesAsync(result => {
           if (result.status === Office.AsyncResultStatus.Succeeded) resolve(result.value.url);
@@ -91,29 +100,108 @@
       let path = fileUrl || "";
       if (/^file:\/\//i.test(path)) {
         const url = new URL(path);
-        if (url.hostname || url.search || url.hash) throw new Error("请打开已保存到本机的合成 DOCX。");
+        if (url.hostname || url.search || url.hash) throw new Error("请打开已保存到本机的 DOCX。");
         path = decodeURIComponent(url.pathname);
       }
-      if (!path.startsWith("/") || path.startsWith("//")) throw new Error("请打开已保存到本机的合成 DOCX。");
-      const bytes = new TextEncoder().encode(path.normalize("NFC"));
+      if (!path.startsWith("/") || path.startsWith("//")) throw new Error("请打开已保存到本机的 DOCX。");
+      return path.normalize("NFC");
+    }
+
+    async function documentKey(path) {
+      const bytes = new TextEncoder().encode(path === undefined ? await documentPath() : path);
       const digest = await crypto.subtle.digest("SHA-256", bytes);
       return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
     }
 
     async function request(path, token, body) {
-      const response = await fetch(path, {
-        method: "POST", mode: "same-origin", credentials: "omit", redirect: "error", cache: "no-store",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-        body: JSON.stringify(body)
-      });
+      let response;
+      try {
+        response = await fetch(path, {
+          method: "POST", mode: "same-origin", credentials: "omit", redirect: "error", cache: "no-store",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify(body)
+        });
+      } catch {
+        disconnect();
+        throw new Error("审阅服务已断开。请核对专属服务并重新连接，或从 AE 打开浏览器对照页。");
+      }
       const result = await response.json();
-      if (!response.ok) throw new Error("审阅服务拒绝请求（" + (result.error || response.status) + "）。请核对绑定码、文档和审阅服务。");
+      if (!response.ok) {
+        const reasons = {
+          "bad-binding": "未绑定。请核对 Word 文件的位置、审阅和本次启动的绑定码。",
+          "wrong-document": "当前文档位置已改变。请重新选择原件或为副本建立独立审阅。",
+          "document-changed": "文档需核对。请确认保存后的原件，让 AE 重建对照页、重启窗格服务，再输入新绑定码。",
+          "receiver-changed": "接收方已改绑。请核对新会话，重启专属服务及窗格服务，再重新绑定。",
+          "receiver-unsupported": "专属服务缺少接收方身份信息。请更新并重启 AE，或使用浏览器对照页。",
+          "receiver-unavailable": "接收方身份无法核对。请在 AE 检查接收方绑定。",
+          "review-unavailable": "专属审阅已停止或服务已更换。请从 AE 确认审阅并重新连接。"
+        };
+        if (Object.prototype.hasOwnProperty.call(reasons, result.error)) {
+          disconnect();
+          throw new Error(reasons[result.error]);
+        }
+        throw new Error("审阅服务拒绝请求（" + (result.error || response.status) + "）。");
+      }
       return result;
     }
 
     async function checkDocument() {
-      if (await documentKey() !== binding.key) throw new Error("当前文档与绑定时不同。请在原文档中打开窗格。");
+      const expectedKey = binding && binding.key;
+      try {
+        if (await documentKey() === expectedKey) return;
+      } catch (error) {
+        disconnect();
+        throw error;
+      }
+      disconnect();
+      throw new Error("当前文档与绑定时不同。请重新选择并核对原件或副本。");
     }
+
+    function disconnect() {
+      binding = null;
+      byId("token").value = "";
+      byId("review").hidden = true;
+      byId("connect").hidden = false;
+      byId("fallback").hidden = false;
+      byId("evidence").hidden = true;
+      byId("output").textContent = "";
+      byId("suggestions").replaceChildren();
+      byId("browser").removeAttribute("href");
+      refreshControls();
+    }
+
+    const stages = {pending: "等待接收", claimed: "初改中", drafted: "已初改", review: "等待复核",
+                    reviewing: "复核中", done: "已定稿", void: "已作废"};
+    const receiverStates = {idle: "未在等待", event: "事件接收", processing: "处理中", waiting: "等待中"};
+
+    function displayStatus(result) {
+      byId("title").textContent = result.title;
+      byId("documentName").textContent = "当前文档 " + result.documentName + " · " + binding.path;
+      byId("reviewId").textContent = "审阅标识 " + result.reviewId;
+      byId("batch").textContent = result.batch
+        ? "当前批次 #" + result.batch.seq + " · " + (stages[result.batch.status] || result.batch.status)
+        : "尚无提交批次";
+      const receiver = result.receiver;
+      binding.receiver = receiver;
+      byId("receiver").textContent = receiver.state === "unconfigured" ? "接收方未绑定"
+        : "接收方 " + receiver.harness + " · " + receiver.sessionId + " · " + receiverStates[receiver.state];
+      byId("browser").href = result.browserUrl;
+    }
+
+    async function refreshConnection() {
+      await checkDocument();
+      const result = await request("/api/status", binding.token, { documentKey: binding.key, reviewId: binding.reviewId });
+      await checkDocument();
+      displayStatus(result);
+    }
+
+    byId("disconnect").addEventListener("click", () => {
+      disconnect();
+      message("未绑定。请选择目标文档及对应的绑定码。");
+    });
+    byId("refresh").addEventListener("click", () => run(refreshConnection));
+    // Refresh on return to the pane; every explicit action also checks the current identity.
+    window.addEventListener("focus", () => { if (binding) run(refreshConnection); });
 
     const fields = ["id", "from", "to", "paragraph", "table", "row", "column", "bodyParagraph"];
 
@@ -145,14 +233,15 @@
       event.preventDefault();
       run(async () => {
         const token = byId("token").value.trim();
-        const key = await documentKey();
+        const path = await documentPath();
+        const key = await documentKey(path);
         const result = await request("/api/bind", token, { documentKey: key });
         if (await documentKey() !== key) throw new Error("绑定期间文档已更换。请重新绑定。");
-        binding = { token, key, reviewId: result.reviewId };
+        binding = { token, key, path, reviewId: result.reviewId };
         byId("token").value = "";
         byId("connect").hidden = true;
-        byId("title").textContent = result.title;
-        byId("reviewId").textContent = "审阅标识 " + result.reviewId;
+        byId("fallback").hidden = true;
+        displayStatus(result);
         displaySuggestions(result.suggestions);
         byId("review").hidden = false;
         message("已绑定当前文档。");
@@ -229,7 +318,7 @@
             before.text !== item.paragraph || matches.items.length !== 1 || matches.items[0].text !== item.from) {
           throw new Error("目标段落含已有修订、原文已变或原词定位不唯一。请在 Word 中核对。");
         }
-        await checkDocument();
+        await refreshConnection();
         attempted.add(item.id); // A sync error cannot tell us whether Word performed the write.
         try {
           matches.items[0].insertText(item.to, "Replace").select();
@@ -253,11 +342,7 @@
     }
 
     byId("inspect").addEventListener("click", () => run(async () => {
-      await checkDocument();
-      // Confirm the local service still recognizes this review before displaying document data.
-      const result = await request("/api/bind", binding.token, { documentKey: binding.key });
-      if (result.reviewId !== binding.reviewId) throw new Error("绑定审阅已更换。");
-      await checkDocument();
+      await refreshConnection();
       await Word.run(async context => {
         const selected = context.document.getSelection();
         const selectionText = readText(selected);
@@ -292,9 +377,10 @@
       const waiting = setTimeout(() => message("Word 尚未就绪。请检查桌面宿主、网络和 Office.js 加载状态。"), 12000);
       Office.onReady(info => {
         clearTimeout(waiting);
-        wordReady = info.host === Office.HostType.Word && Office.context.requirements.isSetSupported("WordApi", "1.6");
-        message(wordReady ? "请打开目标合成文档，输入对应的绑定码。"
-                          : "请使用支持 WordApi 1.6 的桌面 Word 打开此窗格。");
+        wordReady = info.host === Office.HostType.Word && info.platform === Office.PlatformType.Mac &&
+                    Office.context.requirements.isSetSupported("WordApi", "1.6");
+        message(wordReady ? "未绑定。请打开目标文档，输入对应的绑定码。"
+                          : "当前宿主未验证或缺少 WordApi 1.6。可在支持该接口的 macOS Word 中连接，或使用浏览器对照页。");
         refreshControls();
       });
     } else {

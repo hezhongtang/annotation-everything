@@ -78,6 +78,6 @@ python3 "$S/serve.py" stop "$DEMO/B/review"
 ## 接口和分发范围
 
 - 服务只监听 `127.0.0.1:43821`。读取白名单为 `/index.html` 与清单的三张 `/api/icon/*.png`。服务以 CLI 指定的审阅和源文件为界，按台账记录的专属端口核对 `/api/health`，并在本机调用已有的批注读取、段落定位及修订限制逻辑。
-- `POST /api/bind` 接受 `documentKey`，返回标题、审阅标识与可用建议。`POST /api/suggestion` 接受 `documentKey`、`reviewId` 和批注 `id`，在点击时重新读取待处理建议。两个接口都校验固定 Host、同源 Origin、JSON 请求体和 `Authorization: Bearer` 绑定码。文档位置取自 Word 的文件属性，传输前对本地绝对路径作 NFC 规范化和 SHA-256 哈希。在 macOS 上，只为已核实解析到同一文件的系统目录别名（`/tmp`、`/var`）补充等价路径摘要。HTTP 响应不附 CORS 授权。清单、磁盘路径、任意审阅端口和总览功能均不在接口清单中。
+- `POST /api/bind` 接受 `documentKey`，返回审阅名与标识、文件名、当前批次、接收方状态、该审阅的浏览器地址与可用建议。`POST /api/status` 接受 `documentKey` 和 `reviewId`，刷新当前连接状态。`POST /api/suggestion` 另要求批注 `id`，点击时重新核对建议。三个接口均校验固定 Host、同源 Origin、JSON 请求体和本次启动的 Bearer 绑定码。文档位置来自 Word 文件属性，本地绝对路径按 NFC 规范化后以 SHA-256 摘要传输。在 macOS 上仅接受经解析确认为同一文件的系统目录别名（`/tmp`、`/var`）。审阅服务实例、接收方绑定或源文件指纹改变后，旧绑定失效。恢复入口见[在 Word 中连接审阅](../skill/annotation-everything/references/word-native.zh-CN.md)。
 - 当前目标范围为顶层正文段落和普通表格中仅含一个段落的单元格，目标原词必须唯一。原型支持最大 16 MiB 的合成 DOCX。编辑动作由 Word 的 Range 生成原生修订。旧修订、跨段和不确定位置会触发限制，AE 批注保留待处理状态。固定来源一次服务一份已启动的审阅。要绑定 B，退出 A 的原型后用 B 的目录和文档重新启动。
 - 本机侧载用于开发验证。组织部署的候选渠道为 Microsoft 365 管理中心的“集成应用”，每台设备仍需部署本机服务和证书信任。面向公众的 Marketplace 有独立的跨平台验证与审核要求。本原型没有组织部署或商店通过记录。若设备策略阻止环回 HTTPS 或用户信任，下一次试验可由组织签发和下发本机证书，继续使用同一环回来源与绑定机制。[Microsoft 的分发渠道说明](https://learn.microsoft.com/en-us/office/dev/add-ins/publish/publish)
