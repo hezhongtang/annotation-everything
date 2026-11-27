@@ -12,6 +12,7 @@ import sys
 import notes_store as store
 import review_stop
 import wakeup
+import word_revisions
 
 API = "/api/word/"
 REQUEST_FIELDS = {
@@ -140,6 +141,7 @@ def return_suggestions(review, seq, suggestions, harness=None, session=None):
 def withdraw(review, item_id, authorize):
     with store.locked(review):
         authorize()
+        word_revisions.ensure_withdrawable(review, item_id)
         doc = store.handoff_load(review)
         for batch in doc["items"]:
             for item in batch.get("wordSuggestions", []):
@@ -220,6 +222,7 @@ def handle(binding, path, body):
         withdraw(binding.review, body["id"], binding.authorize_receiver)
     return {
         "suggestions": binding.suggestions(),
+        "revisionOperations": word_revisions.operations(binding),
         "pendingBatches": [
             b["seq"]
             for b in store.handoff_load(binding.review)["items"]
