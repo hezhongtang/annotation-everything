@@ -24,6 +24,7 @@ import notes_store
 import review_stop
 import serve
 import wakeup
+import word_comments
 import word_context
 
 PORT = 43821
@@ -178,7 +179,7 @@ class Binding:
 def index_page():
     html = (ASSETS / "index.html").read_text(encoding="utf-8")
     fragments = (ASSETS / name for name in ("context.pane.html", "comments.pane.html"))
-    inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments if file.exists())
+    inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments)
     evidence = (ASSETS / "word-evidence.js").read_text(encoding="utf-8")
     return html.replace("<!-- AE-PANE-FRAGMENTS -->", "<script>\n" + evidence + "</script>\n" + inline).encode()
 
@@ -231,6 +232,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 "/api/bind",
                 "/api/status",
                 "/api/suggestion",
+                *word_comments.REQUEST_FIELDS,
                 *word_context.REQUEST_FIELDS,
             ):
                 raise Refused(404, "not-found")
@@ -259,6 +261,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
             except (ValueError, RecursionError):
                 raise Refused(400, "bad-json") from None
             fields = {
+                **word_comments.REQUEST_FIELDS,
                 **{k: v | {"documentKey", "reviewId"} for k, v in word_context.REQUEST_FIELDS.items()},
                 "/api/bind": {"documentKey"},
                 "/api/status": {"documentKey", "reviewId"},
@@ -275,7 +278,9 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 raise Refused(409, "bad-binding")
             live = binding.check_live()
             binding.verified_bytes()
-            if self.path in word_context.REQUEST_FIELDS:
+            if self.path in word_comments.REQUEST_FIELDS:
+                self.send_payload(200, word_comments.handle(binding, self.path, body))
+            elif self.path in word_context.REQUEST_FIELDS:
                 self.send_payload(200, word_context.handle(binding, self.path, body))
             elif self.path == "/api/status":
                 self.send_payload(200, binding.status(live))
@@ -288,7 +293,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 self.send_payload(200, {"reviewId": binding.rid, "suggestion": suggestion})
         except word_context.ContextError as exc:
             self.send_payload(409, {"error": str(exc)})
-        except Refused as exc:
+        except (Refused, word_comments.CommentError) as exc:
             self.send_payload(exc.status, {"error": exc.code})
         except (OSError, ValueError, BuildError, ledger.LedgerError, TypeError, KeyError, AttributeError):
             self.send_payload(409, {"error": "review-unavailable"})

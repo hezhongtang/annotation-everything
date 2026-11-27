@@ -45,23 +45,6 @@ function xmlPassage(xml) {
   return result;
 }
 
-async function selectedThreads(context, range) {
-  if (window.aeWordComments) return window.aeWordComments.readThreads(context, range);
-  const collection = range.getComments();
-  collection.load("items/id,items/content,items/authorName,items/creationDate,items/resolved");
-  await context.sync();
-  const pending = collection.items.map(thread => {
-    const quote = thread.getRange();
-    quote.load("text");
-    thread.replies.load("items/id,items/content,items/authorName,items/creationDate");
-    return {thread, quote};
-  });
-  await context.sync();
-  const fields = c => ({id: c.id, content: c.content, authorName: c.authorName || "", creationDate: c.creationDate ? new Date(c.creationDate).toISOString() : ""});
-  return pending.map(({thread, quote}) => ({...fields(thread), range: {text: quote.text}, resolved: thread.resolved,
-    replies: thread.replies.items.map(fields)}));
-}
-
 async function captureWordSelection(context) {
   const selection = context.document.getSelection();
   const all = context.document.body.paragraphs;
@@ -98,7 +81,7 @@ async function captureWordSelection(context) {
     const passage = selectedPassage(readSelected(), xmlPassage(xml.value), live);
     if (!passage.original && !passage.current && !passage.revisions.length) continue;
     const full = selectedPassage(readWhole(), xmlPassage(fullXml.value), live);
-    result.push({n, digest: await documentKey(full.current), ...passage, threads: await selectedThreads(context, range)});
+    result.push({n, digest: await documentKey(full.current), ...passage, threads: await window.aeWordComments.readThreads(context, range)});
   }
   if (!result.length) throw new Error("请先在 Word 中选中要送审的文字。");
   return result;

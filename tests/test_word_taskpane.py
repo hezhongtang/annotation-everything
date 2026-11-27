@@ -193,7 +193,7 @@ class TaskpaneTests(unittest.TestCase):
                 {
                     "id": "t1",
                     "authorName": "乙",
-                    "creationDate": "",
+                    "creationDate": None,
                     "content": "五日够吗？",
                     "range": {"text": "五日"},
                     "resolved": False,
@@ -320,6 +320,21 @@ class TaskpaneTests(unittest.TestCase):
         review_stop.begin(self.review)
         self.assertEqual(self.request("/api/suggestion", body), (409, {"error": "review-unavailable"}))
 
+    def test_comment_journal_requests_stay_with_the_bound_document(self):
+        identity = {"reviewId": self.rid, "documentKey": self.key(self.file)}
+        intent = dict(identity, kind="publish", target="", location="a" * 64, bodyHash="b" * 64, preview="合成意见")
+        route = "/api/comment-operations/begin"
+        self.assertEqual(self.request(route, dict(intent, documentKey=self.key(self.other_file)))[0], 409)
+        self.assertEqual(self.request(route, dict(intent, reviewId=self.other_id))[0], 409)
+        self.assertEqual(self.request(route, dict(intent, kind="private"))[0], 400)
+        self.assertEqual(self.request("/api/comment-operations/list", identity), (200, {"operations": []}))
+        status, first = self.request(route, intent)
+        self.assertEqual(status, 200)
+        self.assertTrue(first["mayWrite"])
+        self.assertEqual(self.request(route, intent), (200, {"mayWrite": False, "id": first["id"]}))
+        for resource in ("/comments.pane.html", "/word-comments.json"):
+            self.assertEqual(self.request(resource, {}, method="GET")[0], 404)
+
     def test_reserved_port_is_left_available_for_its_existing_owner(self):
         import word_taskpane
 
@@ -356,4 +371,7 @@ class TaskpaneTests(unittest.TestCase):
         response = connection.getresponse()
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Referrer-Policy"), "same-origin")
-        self.assertIn(b"appsforoffice.microsoft.com", response.read())
+        html = response.read()
+        for expected in (b"appsforoffice.microsoft.com", b"function selectedPassage(", b'id="comment-post"'):
+            self.assertIn(expected, html)
+        self.assertNotIn(b"<!-- AE-PANE-FRAGMENTS -->", html)

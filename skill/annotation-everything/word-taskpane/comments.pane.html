@@ -1,0 +1,255 @@
+<section id="word-comments" hidden>
+  <h2>Word 批注</h2>
+  <p><label for="comment-draft">批注或回复内容</label>
+    <textarea id="comment-draft" rows="2" maxlength="2000" style="width:100%;box-sizing:border-box;font:inherit"></textarea></p>
+  <button type="button" id="comment-post">发为 Word 批注</button>
+  <button type="button" id="comment-refresh">刷新 Word 讨论</button>
+  <p class="note">新批注写到 Word 当前选中的文字上。回复请在下方选择原线程。</p>
+  <p id="comment-status" role="status"></p>
+  <ul id="comment-threads" aria-label="Word 批注线程"></ul>
+  <details id="comment-history" hidden>
+    <summary>本次审阅的批注操作</summary>
+    <ul id="comment-operations"></ul>
+  </details>
+</section>
+<script>
+(() => {
+  "use strict";
+  const labels = {publish: "发布", reply: "回复", resolve: "解决", reopen: "重开"};
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const error = text => new Error(text);
+  const uncertain = "需核对。请在 Word 原页检查目标、作者与讨论记录。";
+  let paneBinding = null;
+
+  function attributes(item) {
+    return {
+      id: item.id, content: item.content, authorName: item.authorName || "",
+      creationDate: item.creationDate ? new Date(item.creationDate).toISOString() : ""
+    };
+  }
+
+  async function loadThreads(context, scope = context.document.body) {
+    const comments = scope.getComments();
+    comments.load("items/id,items/content,items/authorName,items/creationDate,items/resolved");
+    await context.sync();
+    const ranges = comments.items.map(comment => {
+      comment.replies.load("items/id,items/content,items/authorName,items/creationDate");
+      return comment.getRange().load("text");
+    });
+    await context.sync();
+    return comments.items.map((object, i) => ({
+      object, range: ranges[i], data: {
+        ...attributes(object), resolved: object.resolved, range: {text: ranges[i].text},
+        replies: object.replies.items.map(attributes)
+      }
+    }));
+  }
+
+  window.aeWordComments = {
+    readThreads: async (context, range) => (await loadThreads(context, range)).map(entry => entry.data)
+  };
+
+  async function hash(value) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
+    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function locations(context, ranges) {
+    // A repeated word at a different position has a different preceding body range.
+    const prefixes = ranges.map(range => {
+      range.load("text");
+      return context.document.body.getRange("Start").expandTo(range.getRange("Start")).load("text");
+    });
+    await context.sync();
+    return Promise.all(ranges.map((range, i) => hash([prefixes[i].text, range.text])));
+  }
+
+  async function location(context, range) {
+    return (await locations(context, [range]))[0];
+  }
+
+  function api(action, data = {}) {
+    return request("/api/comment-operations/" + action, binding.token, {
+      documentKey: binding.key, reviewId: binding.reviewId, ...data
+    });
+  }
+
+  function findThread(entries, id) {
+    const matches = entries.filter(entry => entry.data.id === id);
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  async function stamp(context, thread, replyId) {
+    const data = thread.data;
+    const reply = replyId ? data.replies.find(item => item.id === replyId) : null;
+    if (replyId && !reply) return null;
+    return hash([data.id, data.content, data.authorName, data.creationDate,
+                 thread.location || await location(context, thread.range), reply]);
+  }
+
+  async function matchesReceipt(context, op, entries) {
+    if (!op.receipt) return false;
+    const thread = findThread(entries, op.receipt.threadId);
+    return Boolean(thread && await stamp(context, thread, op.receipt.replyId) === op.receipt.stamp);
+  }
+
+  function paragraph(text) {
+    const node = document.createElement("p");
+    node.textContent = text;
+    return node;
+  }
+
+  function threadButton(label, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => run(action));
+    return button;
+  }
+
+  function displayThreads(entries) {
+    const list = byId("comment-threads");
+    list.replaceChildren();
+    for (const {data, location} of entries) {
+      const li = document.createElement("li");
+      li.append(paragraph("“" + data.range.text + "” · " + (data.resolved ? "已解决" : "讨论中")),
+                paragraph(data.authorName + " · " + data.content));
+      for (const reply of data.replies) li.append(paragraph("↳ " + reply.authorName + " · " + reply.content));
+      if (!data.resolved) li.append(threadButton("回复此线程", () => submit("reply", data, location)));
+      const kind = data.resolved ? "reopen" : "resolve";
+      li.append(threadButton(labels[kind] + "此线程", () => submit(kind, data, location)));
+      list.append(li);
+    }
+  }
+
+  async function refresh() {
+    await refreshConnection();
+    const {operations} = await api("list");
+    await Word.run(async context => {
+      const entries = await loadThreads(context);
+      const anchors = await locations(context, entries.map(entry => entry.range));
+      entries.forEach((entry, i) => { entry.location = anchors[i]; });
+      const rows = [];
+      for (const op of operations) {
+        const matches = await matchesReceipt(context, op, entries);
+        let status = matches ? "已在 Word 回读" : "需核对";
+        if (matches && ["resolve", "reopen"].includes(op.kind)) {
+          const thread = findThread(entries, op.receipt.threadId);
+          if (thread.data.resolved !== (op.kind === "resolve")) status = "已回读，线程状态后来已变更";
+        }
+        const li = document.createElement("li");
+        li.textContent = labels[op.kind] + " · " + op.preview + " · " + status;
+        rows.push(li);
+      }
+      await checkDocument();
+      displayThreads(entries);
+      byId("comment-status").textContent = entries.length ? "已从 Word 读取 " + entries.length + " 个线程。" : "Word 正文中尚无批注。";
+      byId("comment-operations").replaceChildren(...rows);
+      byId("comment-history").hidden = !rows.length;
+      if (rows.some(row => row.textContent.endsWith("需核对"))) byId("comment-history").open = true;
+    });
+  }
+
+  async function submit(kind, shown, shownLocation) {
+    const text = ["publish", "reply"].includes(kind) ? byId("comment-draft").value.trim() : "";
+    if (["publish", "reply"].includes(kind) && !text) throw error("请先填写要发到 Word 的意见。");
+    await refreshConnection();
+    const {operations} = await api("list");
+    const bodyHash = await hash(text);
+    let started = false;
+    try {
+      await Word.run(async context => {
+        async function target() {
+          if (kind === "publish") {
+            const range = context.document.getSelection();
+            const key = await location(context, range);
+            if (!range.text.replace(/[\s\x00-\x1f\ufffc]/gu, "")) throw error("请先在 Word 原页选中要批注的文字。");
+            return {range, key};
+          }
+          const thread = findThread(await loadThreads(context), shown.id);
+          if (!thread || !same(shown, thread.data)) throw error("原线程已改变或不存在，请刷新 Word 讨论。");
+          const key = await location(context, thread.range);
+          if (key !== shownLocation) throw error("原线程的位置已改变，请刷新 Word 讨论。");
+          return {...thread, key};
+        }
+
+        let current = await target();
+        if (kind === "publish" || kind === "reply") {
+          const previous = operations.filter(op => op.kind === kind && op.bodyHash === bodyHash);
+          if (previous.length) {
+            const entries = await loadThreads(context);
+            for (const op of previous) {
+              // Undo, moved text or regenerated thread IDs can change the next intent's target.
+              if (kind === "reply" && op.target !== shown.id && findThread(entries, op.target)) continue;
+              if (!await matchesReceipt(context, op, entries)) throw error(uncertain);
+            }
+          }
+        }
+        const intent = {
+          kind, target: shown ? shown.id : "", location: current.key, bodyHash,
+          preview: (text || shown.content || shown.id).slice(0, 120)
+        };
+        const permission = await api("begin", intent);
+        if (!permission.mayWrite) throw error("此操作已有记录，请刷新 Word 讨论核对结果。");
+        started = true;
+        await refreshConnection();
+        current = await target();
+        if (current.key !== intent.location) throw error("目标文字的位置已改变。");
+        await checkDocument();
+        let written;
+        if (kind === "publish") written = current.range.insertComment(text);
+        else if (kind === "reply") written = current.object.reply(text);
+        else current.object.resolved = kind === "resolve";
+        if (written) written.load("id");
+        await context.sync();
+
+        const threadId = kind === "publish" ? written.id : shown.id;
+        const replyId = kind === "reply" ? written.id : "";
+        const after = findThread(await loadThreads(context), threadId);
+        if (!after || await location(context, after.range) !== intent.location) throw error("无法确认原文范围。");
+        if (kind === "publish") {
+          if (after.data.content !== text) throw error("批注原文无法确认。");
+        } else {
+          const expected = {...shown, resolved: kind === "resolve" || (kind === "reply" && shown.resolved)};
+          if (kind === "reply") {
+            const reply = after.data.replies.find(entry => entry.id === replyId && entry.content === text);
+            if (!reply) throw error("未能在原线程回读到回复。");
+            expected.replies = [...shown.replies, reply];
+          }
+          if (!same(after.data, expected)) throw error("原线程的作者、内容、回复或状态有变化。");
+        }
+        const receipt = {id: permission.id, threadId, replyId, stamp: await stamp(context, after, replyId)};
+        await checkDocument();
+        await api("confirm", receipt);
+      });
+    } catch (e) {
+      if (started) throw error(uncertain + " " + (e.message || e.code));
+      throw e;
+    }
+    if (text) byId("comment-draft").value = "";
+    await refresh();
+    message("已在当前 Word 文档回读" + labels[kind] + "结果。请在 Word 保存文档。");
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const section = byId("word-comments");
+    byId("review").append(section);
+    section.hidden = false;
+    byId("comment-post").addEventListener("click", () => run(() => submit("publish", null)));
+    byId("comment-refresh").addEventListener("click", () => run(refresh));
+    new MutationObserver(() => {
+      if (binding === paneBinding) return;
+      paneBinding = binding;
+      byId("comment-draft").value = "";
+      byId("comment-threads").replaceChildren();
+      byId("comment-operations").replaceChildren();
+      byId("comment-history").hidden = true;
+      byId("comment-status").textContent = "点“刷新 Word 讨论”核对当前线程和以前的操作。";
+      if (binding) {
+        const connected = binding;
+        setTimeout(() => { if (binding === connected) run(refresh); }, 0);
+      }
+    }).observe(byId("review"), {attributes: true, attributeFilter: ["hidden"]});
+  });
+})();
+</script>
