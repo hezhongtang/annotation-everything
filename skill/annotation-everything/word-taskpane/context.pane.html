@@ -4,6 +4,7 @@
 let wordPreview = null;
 // A disconnected preview retains only the digest of its approved payload and the request ID.
 const unconfirmedWordKeys = new Map();
+const recalledWordNotice = "这批已收回。再次送审时请重新预览当前选区。";
 const wordApi = (method, body = {}) => request("/api/word/" + method, binding.token, {
   documentKey: binding.key, reviewId: binding.reviewId, ...body
 });
@@ -225,14 +226,21 @@ byId("word-submit").addEventListener("click", () => run(async () => {
   const key = await documentKey(JSON.stringify([binding.reviewId, binding.key, binding.receiver.bindingId, paragraphs]));
   const submitId = unconfirmedWordKeys.get(key) || crypto.randomUUID();
   unconfirmedWordKeys.set(key, submitId);
-  const result = await wordApi("submit", {submitId, paragraphs});
+  let result;
+  try { result = await wordApi("submit", {submitId, paragraphs}); }
+  catch (error) {
+    if (error.code !== "word-batch-recalled") throw error;
+    unconfirmedWordKeys.delete(key);
+    clearWordPreview();
+    return message(recalledWordNotice);
+  }
   unconfirmedWordKeys.delete(key);
   clearWordPreview();
   // The receipt is visible even if the follow-up acknowledgement or refresh loses its connection.
   const notice = "已提交第 " + result.batch + " 批。" + (result.delivery === "unconfirmed" ? "接收方投递待核对。" : "");
   message(notice);
   try { await wordApi("ack", {batch: result.batch}); }
-  catch (error) { return message(notice + " " + error.message); }
+  catch (error) { return message(error.code === "word-batch-recalled" ? recalledWordNotice : notice + " " + error.message); }
   try { await refreshConnection(); }
   catch (error) { return message(notice + " " + error.message); }
   message(notice);
@@ -248,7 +256,13 @@ async function refreshWordList() {
   for (const batch of result.pendingBatches) {
     pending.append(actionButton("收回待接收的第 " + batch + " 批", async () => {
       await checkDocument();
-      await wordApi("recall", {batch}); await refreshConnection();
+      const receipt = await wordApi("recall", {batch});
+      const recalled = new Set(receipt.recalledSubmitIds);
+      for (const [key, id] of unconfirmedWordKeys) {
+        if (recalled.has(id)) unconfirmedWordKeys.delete(key);
+      }
+      clearWordPreview();
+      await refreshConnection();
       message("已收回第 " + batch + " 批。");
     }));
   }

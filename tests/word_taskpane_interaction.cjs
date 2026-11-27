@@ -224,34 +224,78 @@ async function resubmitAfterReconnect() {
   const Word = {run: action => action(context)};
   const receiver = {state: "waiting", bindingId: "receiver-A", sessionId: "s", harness: "Codex"};
   const attempts = [];
+  const batches = new Map(), recalled = new Set(), acknowledged = [];
   let lose = true;
   const other = revisionService([]);
   const fetch = async (path, request) => {
     const reply = data => ({ok: true, json: async () => data});
     if (path === "/api/bind" || path === "/api/status") return reply({reviewId: "R", sourceTailId: "1A000007", receiver, suggestions: []});
     if (path === "/api/word/submit") {
-      attempts.push(JSON.parse(request.body));
+      const attempt = JSON.parse(request.body);
+      attempts.push(attempt);
+      if (!batches.has(attempt.submitId)) batches.set(attempt.submitId, 5 + batches.size);
+      const batch = batches.get(attempt.submitId);
+      if (recalled.has(batch)) return {ok: false, status: 409, json: async () => ({error: "word-batch-recalled"})};
       if (lose) { lose = false; throw Error("Synthetic response lost after commit"); }
-      return reply({batch: 5});
+      return reply({batch});
     }
-    if (path === "/api/word/ack") return reply({});
+    if (path === "/api/word/ack") {
+      acknowledged.push(JSON.parse(request.body).batch);
+      return reply({});
+    }
+    if (path === "/api/word/list") {
+      return reply({suggestions: [], revisionOperations: [], pendingBatches: [...batches.values()].filter(n => !recalled.has(n))});
+    }
+    if (path === "/api/word/recall") {
+      const {batch} = JSON.parse(request.body);
+      recalled.add(batch);
+      return reply({recalledSubmitIds: [...batches].filter(([, n]) => n === batch).map(([id]) => id)});
+    }
     return other.fetch(path, request);
   };
   const nodes = await openPane(Word, fetch);
+  const reconnect = async () => {
+    nodes.token.value = "synthetic";
+    await nodes.connect.events.submit({preventDefault() {}});
+  };
   const submit = async () => {
     await nodes["word-preview"].events.click();
     await nodes["word-submit"].events.click();
   };
   await submit();
   assert.match(nodes.status.textContent, /已断开/);
-  nodes.token.value = "synthetic";
-  await nodes.connect.events.submit({preventDefault() {}});
+  await reconnect();
   await submit();
   await submit();
   assert.equal(attempts.length, 3);
   assert.deepEqual(attempts[0], attempts[1], "Rebinding and recreating the preview retry the same approved selection.");
   assert.notEqual(attempts[2].submitId, attempts[0].submitId, "A new explicit submission after receipt has its own ID.");
   assert.equal(bodyReads, 3, "One full body snapshot serves all selected paragraphs in each preview.");
+
+  const lastId = () => attempts[attempts.length - 1].submitId;
+  for (const localRecall of [true, false]) {
+    lose = true;
+    await submit();
+    const lostId = lastId(), batch = batches.get(lostId);
+    assert.match(nodes.status.textContent, /已断开/);
+    if (!localRecall) recalled.add(batch);   // Another pane received the recall receipt.
+    await reconnect();
+    if (localRecall) {
+      const button = nodes["word-pending"].children.find(b => b.textContent === "收回待接收的第 " + batch + " 批");
+      assert.ok(button);
+      await button.events.click();
+      assert.match(nodes.status.textContent, /已收回/);
+    } else {
+      await submit();
+      assert.equal(lastId(), lostId);
+      assert.match(nodes.status.textContent, /已收回/);
+      assert.doesNotMatch(nodes.status.textContent, /已提交/);
+    }
+    assert.ok(!acknowledged.includes(batch));
+    await submit();
+    assert.notEqual(lastId(), lostId, "After recall, previewing again submits a fresh batch.");
+    assert.equal(nodes.status.textContent, "已提交第 " + batches.get(lastId()) + " 批。");
+  }
   for (const attempt of attempts) {
     assert.deepEqual(attempt.paragraphs.map(p => [p.n, p.paraId, p.current, p.threads]), [
       [0, "1A000006", "五日", []], [2, "1A000001", "五日", []]

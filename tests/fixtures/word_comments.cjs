@@ -1,7 +1,7 @@
 // Synthetic Word and task pane boundaries. Click the shipped controls with tracking off.
 const assert = require("node:assert/strict");
 const {readFileSync} = require("node:fs");
-const {webcrypto} = require("node:crypto");
+const {createHash, webcrypto} = require("node:crypto");
 const vm = require("node:vm");
 
 class Element {
@@ -22,7 +22,11 @@ const document = {
 const text = "应于五日内回复。应于五日内回复。";
 const threads = [];
 const journal = [];
-let selection, losesReceipt = false, nextId = 10;
+const cancelled = new Set(), cancelRequests = [], storage = new Map();
+const sessionStorage = {
+  getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key)
+};
+let selection, afterBegin, documentFailure, cancelOffline = false, nativeThrows = false, losesReceipt = false, nextId = 10;
 function collection(items) { return {items, load() { return this; }}; }
 function wordRange(start, end) {
   return {
@@ -33,6 +37,7 @@ function wordRange(start, end) {
     insertComment(content) {
       const thread = comment(String(nextId++), content, "当前作者", this);
       threads.push(thread);
+      if (nativeThrows) throw Error("synthetic native error");
       return thread;
     }
   };
@@ -59,17 +64,43 @@ const wordDoc = {
   body: {getRange: () => wordRange(0, 0), getComments: () => collection(threads)}
 };
 const ctx = vm.createContext({
-  window: {}, document, byId, crypto: webcrypto, TextEncoder, setTimeout,
+  window: {sessionStorage}, document, byId, crypto: webcrypto, TextEncoder, setTimeout,
   MutationObserver: class { observe() {} },
-  binding: {reviewId: "synthetic", key: "file", token: "demo"},
-  run: async action => action(), message() {}, checkDocument: async () => {}, refreshConnection: async () => {},
+  binding: {reviewId: "synthetic", key: "file", canonicalKey: "canonical-file", token: "demo"},
+  run: async action => action(), message() {}, refreshConnection: async () => {},
+  checkDocument: async () => {
+    if (documentFailure) {
+      const fail = documentFailure;
+      documentFailure = null;
+      fail();
+    }
+  },
   Word: {run: async action => action({document: wordDoc, sync: async () => {}})},
-  async request(path, _, data) {
-    if (path.endsWith("/list")) return {operations: journal};
+  async request(path, token, data) {
+    if (path.endsWith("/list")) return {operations: [...journal]};
     if (path.endsWith("/begin")) {
-      const id = String(journal.length + 1);
+      const id = data.permitHash;
+      assert.match(id, /^[0-9a-f]{64}$/);
+      assert.ok(!cancelled.has(id));
       journal.push({...data, id, receipt: null});
+      if (afterBegin) {
+        const change = afterBegin;
+        afterBegin = null;
+        change();
+      }
       return {id, mayWrite: true};
+    }
+    if (path.endsWith("/cancel")) {
+      cancelRequests.push([token, data.reviewId, data.documentKey, data.id]);
+      if (cancelOffline) throw Error("synthetic offline");
+      assert.equal(createHash("sha256").update(data.permit).digest("hex"), data.id);
+      const index = journal.findIndex(op => op.id === data.id);
+      if (index !== -1) {
+        assert.equal(journal[index].receipt, null);
+        journal.splice(index, 1);
+      }
+      cancelled.add(data.id);
+      return {id: data.id};
     }
     if (path.endsWith("/confirm")) {
       if (losesReceipt) throw Error("synthetic connection loss");
@@ -80,7 +111,8 @@ const ctx = vm.createContext({
   }
 });
 const pane = readFileSync(process.argv[2], "utf8");
-vm.runInContext(pane.match(/<script>([\s\S]*?)<\/script>/)[1], ctx);
+const loadPane = () => vm.runInContext(pane.match(/<script>([\s\S]*?)<\/script>/)[1], ctx);
+loadPane();
 const button = (index, label) => byId("comment-threads").children[index].children.find(node => node.textContent === label);
 const draft = value => { byId("comment-draft").value = value; };
 const refresh = () => byId("comment-refresh").click();
@@ -93,14 +125,48 @@ const post = () => byId("comment-post").click();
   await assert.rejects(post, /选中/);
   assert.equal(journal.length, 0);
   selection = wordRange(10, 12);
+  afterBegin = () => { selection = wordRange(2, 4); };  // Identical text at the other occurrence.
+  await assert.rejects(post, /目标文字的位置已改变/);
+  assert.equal(threads.length, 1);
+  assert.equal(journal.length, 0);
+  selection = wordRange(10, 12);
+  afterBegin = () => { throw Error("synthetic lost begin response"); };
+  await assert.rejects(post, /lost begin response/);
+  assert.equal(journal.length, 0);
   await post();
   assert.equal(threads[1].getRange().text, "五日");
   assert.equal(threads[1].getRange().start, 10);
   assert.equal(threads[1].authorName, "当前作者");
   draft("给乙的回复");
+  const original = ctx.binding;
+  afterBegin = () => {
+    documentFailure = () => {
+      cancelOffline = true;
+      ctx.binding = null;
+      throw Error("synthetic disconnection");
+    };
+  };
+  await assert.rejects(button(0, "回复此线程").click, /未向 Word 提交/);
+  assert.equal(oldThread.replies.items.length, 1);
+  assert.equal(storage.size, 1);
+  assert.deepEqual(cancelRequests.at(-1).slice(0, 3), ["demo", "synthetic", "file"]);
+  const interrupted = journal.at(-1).id, cancellations = cancelRequests.length;
+  cancelOffline = false;
+  loadPane();  // Same Word pane session reloaded; no in-memory cancellation proof survives.
+  ctx.binding = {reviewId: "other", key: "file", canonicalKey: "canonical-file", token: "other-token"};
+  await refresh();
+  assert.equal(cancelRequests.length, cancellations);
+  ctx.binding = {...original, key: "file-alias", token: "new-demo"};
+  await refresh();
+  assert.deepEqual(cancelRequests.at(-1), ["new-demo", "synthetic", "file-alias", interrupted]);
+  assert.equal(storage.size, 0);
   await button(0, "回复此线程").click();
   assert.deepEqual(oldThread.replies.items.map(r => [r.content, r.authorName]), [["旧回复", "另一人"], ["给乙的回复", "当前作者"]]);
   assert.equal(threads[1].replies.items.length, 0);
+  afterBegin = () => { oldThread.resolved = true; };
+  await assert.rejects(button(0, "解决此线程").click, /原线程已改变/);
+  assert.ok(!journal.some(op => op.kind === "resolve"));
+  oldThread.resolved = false;
   await button(0, "解决此线程").click();
   assert.equal(oldThread.resolved, true);
   await button(0, "重开此线程").click();
@@ -110,6 +176,16 @@ const post = () => byId("comment-post").click();
   assert.ok(button(0, "重开此线程"));
   oldThread.resolved = false;
   await refresh();
+
+  const beforeNativeError = cancelRequests.length;
+  draft("原生调用中断");
+  nativeThrows = true;
+  await assert.rejects(post, /需核对/);
+  nativeThrows = false;
+  await assert.rejects(post, /需核对/);
+  assert.equal(cancelRequests.length, beforeNativeError);
+  assert.equal(threads.filter(thread => thread.content === "原生调用中断").length, 1);
+  threads.pop();
 
   losesReceipt = true;
   draft("仅发一条");

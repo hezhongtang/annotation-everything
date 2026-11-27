@@ -91,7 +91,7 @@
       for (const button of byId("suggestions").querySelectorAll("button")) {
         const op = binding?.operations?.get(button.dataset.id);
         const submitted = Boolean(op && op.status !== "unexecuted") ||
-          attempted.has(binding?.key + "/" + binding?.reviewId + "/" + button.dataset.id);
+          attempted.has(binding?.canonicalKey + "/" + binding?.reviewId + "/" + button.dataset.id);
         button.disabled = busy || (button.dataset.write === "true" && submitted);
       }
     }
@@ -168,15 +168,18 @@
           disconnect(true);
           throw new Error(reasons[result.error]);
         }
-        throw new Error("审阅服务拒绝请求（" + (result.error || response.status) + "）。");
+        const error = new Error("审阅服务拒绝请求（" + (result.error || response.status) + "）。");
+        error.code = result.error;
+        throw error;
       }
       return result;
     }
 
     async function checkDocument() {
-      const expectedKey = binding && binding.key;
+      const bound = binding;
       try {
-        if (await documentKey() === expectedKey) return;
+        const key = await documentKey();
+        if (bound && bound === binding && bound.documentKeys.has(key)) return;
       } catch (error) {
         disconnect(true);
         throw error;
@@ -294,7 +297,7 @@
         entry.append(label, text);
         const detail = document.createElement("p");
         detail.textContent = op && op.status !== "unexecuted" ? revisionLabels[op.status]
-          : binding.revisionErrors?.get(item.id) || (op ? revisionLabels[op.status] : "待处理");
+          : binding.revisionErrors?.get(item.id) || item.writeRestriction || (op ? revisionLabels[op.status] : "待处理");
         entry.append(detail);
         addWordSuggestionControls(entry, item);
         entry.append(button);
@@ -309,9 +312,10 @@
         const path = await documentPath();
         const key = await documentKey(path);
         const result = await request("/api/bind", token, { documentKey: key });
-        if (await documentKey() !== key) throw new Error("绑定期间文档已更换。请重新绑定。");
+        const documentKeys = new Set(result.documentKeys || [key]);
+        if (!documentKeys.has(key) || !documentKeys.has(await documentKey())) throw new Error("绑定期间文档已更换。请重新绑定。");
         byId("revision-disconnected").replaceChildren();
-        binding = { token, key, path, reviewId: result.reviewId };
+        binding = { token, key, path, reviewId: result.reviewId, documentKeys, canonicalKey: result.canonicalDocumentKey || key };
         byId("token").value = "";
         byId("connect").hidden = true;
         byId("fallback").hidden = true;

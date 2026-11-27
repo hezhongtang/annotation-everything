@@ -95,6 +95,7 @@ def submit(review, receiver_id, fingerprint, paragraphs, submit_id, authorize, d
         submit_id=submit_id,
         word_submission=snap,
     )
+    require(item["status"] != "void", "word-batch-recalled")
     return item["seq"]
 
 
@@ -117,6 +118,7 @@ def acknowledge(binding, document_key, seq):
             and snap.get("fingerprint") == binding.fingerprint,
             "word-receipt-changed",
         )
+        require(batch["status"] != "void", "word-batch-recalled")
         if batch.pop("wordAwaitingReceipt", False):
             store._handoff_commit(binding.review, doc, {"op": "word-ack", "seq": seq})
 
@@ -183,44 +185,59 @@ def recall(review, seq, authorize):
         authorize()
         doc = store.handoff_load(review)
         batch = find_batch(doc, seq)
-        if batch["status"] == "void":
-            return
-        require(batch["status"] == "pending", "word-batch-already-received")
-        batch.update(status="void", withdrawnAt=store.now_iso())
-        store._handoff_commit(review, doc, {"op": "word-recall", "seq": seq})
+        if batch["status"] != "void":
+            require(batch["status"] == "pending", "word-batch-already-received")
+            batch.pop("wordAwaitingReceipt", None)
+            batch.update(status="void", withdrawnAt=store.now_iso())
+            store._handoff_commit(review, doc, {"op": "word-recall", "seq": seq})
+        return [key for key in [batch.get("submitId"), *batch.get("wordRetryIds", [])] if key]
+
+
+def _unique_offset(text, quote):
+    start = text.find(quote)
+    return start if quote and start >= 0 and start == text.rfind(quote) else None
 
 
 def suggestions(binding):
+    # paragraph_locations exposes paraId only if it is unique in the entire saved document.
+    by_id = {loc["paraId"]: n for n, loc in binding.locations.items() if "paraId" in loc}
     result = []
     for batch in store.handoff_load(binding.review)["items"]:
+        document_key = batch.get("wordSubmission", {}).get("documentKey")
         for item in batch.get("wordSuggestions", []):
             if item["status"] == "withdrawn":
                 continue
-            n = item["n"]
-            location = binding.locations.get(n)
+            rebuilt = item["fp"] != binding.fingerprint
+            n = by_id.get(item.get("paraId")) if rebuilt else item["n"]
+            location = binding.locations.get(n, {})
             paragraph = binding.paragraphs[n].text if location else ""
-            restriction = ""
-            if item["fp"] != binding.fingerprint:
-                restriction = "原建议属于另一版本的文档，请重新送审。"
-            elif not location or binding.restrictions.get(n, set()) - {"revision"}:
-                restriction = "原段落包含不支持的结构，请在 Word 原页处理。"
+            digest_matches = hashlib.sha256(paragraph.encode()).hexdigest() == item["digest"]
+            needle = item["from"] or item["selection"]
+            view = {**item, **location, "n": n if n is not None else item["n"], "paragraph": paragraph}
+            if (rebuilt and not document_key) or (document_key and document_key != binding.canonical_document_key):
+                view["writeRestriction"] = "无法确认建议来自同一文档，请重新送审。"
             elif not item.get("paraId") or item["paraId"] != location.get("paraId"):
-                restriction = "无法核对送审选区与原文的段落标识，请在 Word 原页处理。"
-            valid = (
-                location
-                and item["fp"] == binding.fingerprint
-                and hashlib.sha256(paragraph.encode()).hexdigest() == item["digest"]
-                and paragraph.count(item["from"] or item["selection"]) == 1
-            )
-            result.append(
-                {
-                    **item,
-                    **(location or {}),
-                    **({"writeRestriction": restriction} if restriction else {}),
-                    "paragraph": paragraph,
-                    "status": item["status"] if valid else "needs-relocation",
-                }
-            )
+                view["writeRestriction"] = "无法核对送审选区与原文的段落标识，请在 Word 原页处理。"
+            elif binding.restrictions.get(n, set()) - {"revision"}:
+                view["writeRestriction"] = "原段落包含不支持的结构，请在 Word 原页处理。"
+            elif rebuilt:
+                selection_start = _unique_offset(paragraph, item["selection"])
+                if not digest_matches or selection_start is None:
+                    view["writeRestriction"] = "重建后无法核对原段落及送审选区，请重新送审。"
+                else:
+                    # Keep the submitted snapshot intact. Use today's coordinates and fingerprint for this write.
+                    view["fp"] = binding.fingerprint
+                    within_selection = _unique_offset(item["selection"], needle)
+                    if within_selection is not None:
+                        start = selection_start + within_selection
+                        view["sourceOffset"] = len(paragraph[:start].encode("utf-16-le")) // 2
+            if (
+                "writeRestriction" in view
+                or not digest_matches
+                or ("sourceOffset" not in view and _unique_offset(paragraph, needle) is None)
+            ):
+                view["status"] = "needs-relocation"
+            result.append(view)
     return result
 
 
@@ -246,11 +263,13 @@ def handle(binding, path, body):
     if path == API + "ack":
         acknowledge(binding, binding.canonical_document_key, body["batch"])
         return {}
+    receipt = {}
     if path == API + "recall":
-        recall(binding.review, body["batch"], binding.authorize_receiver)
+        receipt["recalledSubmitIds"] = recall(binding.review, body["batch"], binding.authorize_receiver)
     if path == API + "withdraw":
         withdraw(binding.review, body["id"], binding.authorize_receiver)
     return {
+        **receipt,
         "suggestions": binding.suggestions(),
         "revisionOperations": word_revisions.operations(binding),
         "pendingBatches": [

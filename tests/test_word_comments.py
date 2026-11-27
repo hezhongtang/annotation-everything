@@ -1,6 +1,7 @@
 """Word 批注操作的持久回执，全部内容来自合成样例。"""
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -33,6 +34,9 @@ class WordCommentOperations(unittest.TestCase):
     def call(self, action, **data):
         return self.handle(self.binding, "/api/comment-operations/" + action, data)
 
+    def proof(self, permit):
+        return {"id": hashlib.sha256(permit.encode("ascii")).hexdigest(), "permit": permit}
+
     def test_lost_receipt_never_issues_second_write_permission_after_reopen(self):
         started = self.call("begin", **self.intent)
         self.assertTrue(started["mayWrite"])
@@ -40,6 +44,8 @@ class WordCommentOperations(unittest.TestCase):
         self.assertEqual(len(reopened), 1)
         self.assertEqual(reopened[0]["id"], started["id"])
         self.assertIsNone(reopened[0]["receipt"])
+        with self.assertRaisesRegex(ValueError, "wrong-comment-permit"):
+            self.call("cancel", id=started["id"], permit="f" * 32)
         self.assertEqual(self.call("begin", **self.intent), {"mayWrite": False, "id": started["id"]})
 
     def test_confirmed_reply_keeps_word_ids_and_cannot_be_replayed_on_that_thread(self):
@@ -61,15 +67,46 @@ class WordCommentOperations(unittest.TestCase):
 
     def test_racing_panes_receive_one_write_permission(self):
         gate = threading.Barrier(2)
+        proofs = [self.proof(char * 32) for char in "12"]
 
-        def begin(_):
+        def begin(proof):
             gate.wait(timeout=3)
-            return self.call("begin", **self.intent)
+            return self.call("begin", **self.intent, permitHash=proof["id"])
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            pair = list(pool.map(begin, range(2)))
+            pair = list(pool.map(begin, proofs))
         self.assertEqual({result["mayWrite"] for result in pair}, {True, False})
         self.assertEqual(pair[0]["id"], pair[1]["id"])
+        winner, loser = proofs if pair[0]["mayWrite"] else reversed(proofs)
+        with self.assertRaisesRegex(ValueError, "wrong-comment-permit"):
+            self.call("cancel", id=winner["id"], permit=loser["permit"])
+        self.call("cancel", **loser)
+        self.assertEqual([op["id"] for op in self.call("list")["operations"]], [winner["id"]])
+        self.call("cancel", **winner)
+        self.assertEqual(self.call("list")["operations"], [])
+
+    def test_only_unused_attempt_is_released_and_delayed_messages_cannot_affect_its_retry(self):
+        first, second = (self.proof(pair * 16) for pair in ("a1", "b2"))
+        self.assertTrue(self.call("begin", **self.intent, permitHash=first["id"])["mayWrite"])
+        self.assertNotIn(first["permit"], str(self.call("list")))
+        self.call("cancel", **first)
+        self.assertTrue(self.call("begin", **self.intent, permitHash=second["id"])["mayWrite"])
+        self.call("cancel", **first)
+        self.assertEqual(self.call("list")["operations"][0]["id"], second["id"])
+        self.assertFalse(self.call("begin", **self.intent, permitHash=first["id"])["mayWrite"])
+        with self.assertRaisesRegex(ValueError, "no-comment-operation"):
+            self.call("confirm", id=first["id"], threadId="synthetic", replyId="", stamp="c" * 64)
+        self.call("confirm", id=second["id"], threadId="synthetic", replyId="", stamp="c" * 64)
+        with self.assertRaisesRegex(ValueError, "comment-permission-spent"):
+            self.call("cancel", **second)
+        self.assertFalse(self.call("begin", **self.intent)["mayWrite"])
+
+    def test_lost_begin_response_can_be_cancelled_even_if_requests_arrive_out_of_order(self):
+        proof = self.proof("c" * 32)
+        self.call("cancel", **proof)
+        self.assertFalse(self.call("begin", **self.intent, permitHash=proof["id"])["mayWrite"])
+        self.assertEqual(self.call("list")["operations"], [])
+        self.assertTrue(self.call("begin", **self.intent, permitHash=self.proof("d" * 32)["id"])["mayWrite"])
 
     def test_saved_receipt_does_not_block_a_second_valid_selection(self):
         first = self.call("begin", **self.intent)

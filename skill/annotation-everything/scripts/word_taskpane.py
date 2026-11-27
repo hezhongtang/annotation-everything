@@ -180,6 +180,8 @@ class Binding:
             "reviewId": self.rid,
             "sourceTailId": last.get("paraId") if "bodyParagraph" in last else None,
             "documentName": self.document.name,
+            "canonicalDocumentKey": self.canonical_document_key,
+            "documentKeys": sorted(self.document_keys),
             "batch": {k: latest[k] for k in ("seq", "status")} if latest else None,
             "browserUrl": f"http://127.0.0.1:{self.port}/",
         }
@@ -324,6 +326,8 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 "/api/status": {"documentKey", "reviewId"},
                 "/api/suggestion": {"documentKey", "reviewId", "id"},
             }[self.path]
+            if self.path == word_comments.PREFIX + "begin" and isinstance(body, dict) and "permitHash" in body:
+                fields = fields | {"permitHash"}
             if (
                 not isinstance(body, dict)
                 or set(body) != fields

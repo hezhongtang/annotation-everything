@@ -15,9 +15,11 @@ INTENT = {"kind", "target", "location", "bodyHash", "preview"}
 REQUEST_FIELDS = {
     PREFIX + "list": IDENTITY,
     PREFIX + "begin": IDENTITY | INTENT,
+    PREFIX + "cancel": IDENTITY | {"id", "permit"},
     PREFIX + "confirm": IDENTITY | {"id", "threadId", "replyId", "stamp"},
 }
 DIGEST = re.compile(r"[0-9a-f]{64}")
+PERMIT = re.compile(r"[0-9a-f]{32}")
 
 
 class CommentError(ValueError):
@@ -42,8 +44,10 @@ def handle(binding, path, body):
             return {"operations": operations}
         if path == PREFIX + "confirm":
             result = confirm(operations, body)
+        elif path == PREFIX + "cancel":
+            result = cancel(operations, data.setdefault("cancelled", []), body)
         elif path == PREFIX + "begin":
-            result = begin(operations, body)
+            result = begin(operations, data.get("cancelled", []), body)
             if not result["mayWrite"]:
                 return result
         else:
@@ -52,11 +56,15 @@ def handle(binding, path, body):
         return result
 
 
-def begin(operations, body):
+def begin(operations, cancelled, body):
     intent = {key: body[key] for key in INTENT}
     kind = intent["kind"]
+    # New panes keep the preimage private until they have abandoned an unsubmitted write.
+    # Older panes and existing journal entries have plain random IDs and cannot be cancelled.
+    op_id = body.get("permitHash")
     if (
         kind not in {"publish", "reply", "resolve", "reopen"}
+        or (op_id is not None and not DIGEST.fullmatch(op_id))
         or not DIGEST.fullmatch(intent["location"])
         or not DIGEST.fullmatch(intent["bodyHash"])
         or len(intent["target"]) > 256
@@ -64,7 +72,11 @@ def begin(operations, body):
         or not 0 < len(intent["preview"]) <= 160
     ):
         raise CommentError(400, "bad-comment-intent")
+    if op_id in cancelled:
+        return {"mayWrite": False, "id": op_id}
     for prior in reversed(operations):
+        if prior["id"] == op_id:
+            return {"mayWrite": False, "id": op_id}
         if prior["target"] != intent["target"]:
             continue
         if kind in {"resolve", "reopen"}:
@@ -78,9 +90,29 @@ def begin(operations, body):
             )
         if same:
             return {"mayWrite": False, "id": prior["id"]}
-    op_id = secrets.token_hex(16)
+    op_id = op_id or secrets.token_hex(16)
     operations.append({**intent, "id": op_id, "receipt": None})
     return {"mayWrite": True, "id": op_id}
+
+
+def cancel(operations, cancelled, body):
+    op_id, permit = body["id"], body["permit"]
+    if (
+        not PERMIT.fullmatch(permit)
+        or not DIGEST.fullmatch(op_id)
+        or not secrets.compare_digest(hashlib.sha256(permit.encode("ascii")).hexdigest(), op_id)
+    ):
+        raise CommentError(409, "wrong-comment-permit")
+    op = next((item for item in operations if item["id"] == op_id), None)
+    if op is not None:
+        if op["receipt"] is not None:
+            raise CommentError(409, "comment-permission-spent")
+        operations.remove(op)
+    # A lost response can let cancellation reach the journal before the original begin.
+    # Spending this ID also makes a delayed cancellation harmless after a fresh attempt.
+    if op_id not in cancelled:
+        cancelled.append(op_id)
+    return {"id": op_id}
 
 
 def confirm(operations, body):

@@ -4,7 +4,7 @@
   const fieldNames = ["id", "n", "from", "to", "paragraph", "bodyParagraph", "table", "row", "column", "digest",
                       "fp", "selection", "edge", "reason", "sourceBatch", "sourceOffset", "paraId", "status", "writeRestriction"];
   const unknownMessage = "结果需核对。请在 Word 原页检查修订及作者。";
-  const identity = item => binding.key + "/" + binding.reviewId + "/" + item.id;
+  const identity = item => binding.canonicalKey + "/" + binding.reviewId + "/" + item.id;
   const paragraphKey = item => Number.isInteger(item.table)
     ? ["cell", item.table, item.row, item.column].join("/") : "body/" + item.bodyParagraph;
   const tracked = doc => ["TrackAll", "TrackMineOnly"].includes(doc.changeTrackingMode);
@@ -132,7 +132,7 @@
     const start = offset + (!item.from && item.edge === "End" ? needle.length : 0);
     const end = start + item.from.length;
     const target = item.from ? match : match.getRange(item.edge);
-    return {paragraph, target, ranges, offset, plan: {id: item.id, documentKey: binding.key, reviewId: binding.reviewId, paragraphKey: paragraphKey(item), start, end, before,
+    return {paragraph, target, ranges, offset, plan: {id: item.id, documentKey: binding.canonicalKey, reviewId: binding.reviewId, paragraphKey: paragraphKey(item), start, end, before,
       expected: before.current.slice(0, start) + item.to + before.current.slice(end)}};
   }
 
@@ -159,7 +159,8 @@
         ["type", "text", "start", "author", "date"].every(k => r[k] === b.revisions[i][k]));
   }
 
-  function confirmed(plan, after) {
+  function confirmed(plan, after, receipt, justWrote = false) {
+    if (receipt ? !sameSnapshot(receipt, after) : !justWrote && !plan.writer) return false;
     const {before, expected, start, end} = plan;
     if (after.original !== before.original || after.current !== expected) return false;
     const delta = expected.length - before.current.length;
@@ -171,7 +172,8 @@
       if (index < 0) return false;
       fresh.splice(index, 1);
     }
-    if (!fresh.length || new Set(fresh.map(r => r.author)).size !== 1) return false;
+    if (!fresh.length || new Set(fresh.map(r => r.author)).size !== 1 ||
+        (plan.writer && fresh[0].author !== plan.writer)) return false;
     // Reject only the newly observed runs in memory. Their location, author, accepted and rejected
     // texts must all agree; Word may split a replacement or keep a shared prefix or suffix.
     let rejected = after.current;
@@ -187,12 +189,12 @@
     return rejected === before.current;
   }
 
-  async function readInContext(context, item, plan) {
-    ensure(plan.documentKey === binding.key && plan.reviewId === binding.reviewId &&
+  async function readInContext(context, item, plan, justWrote = false) {
+    ensure(plan.documentKey === binding.canonicalKey && plan.reviewId === binding.reviewId &&
       plan.id === item.id && plan.paragraphKey === paragraphKey(item), "回读位置与建议不符。");
     const after = (await snapshot(context, await targetParagraph(context, item))).value;
     await checkDocument();
-    const written = confirmed(plan, after);
+    const written = confirmed(plan, after, binding.operations?.get(item.id)?.receipt, justWrote);
     return {status: written ? "written" : "unknown", evidence: {target: describe(item), before: plan.before, after},
       message: written ? "已写入当前 Word 文档并回读修订署名。请用「所有标记」查看分页，并在 Word 中保存。" : unknownMessage};
   }
@@ -231,9 +233,8 @@
       await checkDocument();
       for (const op of group.reverse()) {
         const {item, plan, receipt} = op;
-        const written = after && plan.documentKey === binding.key && plan.reviewId === binding.reviewId &&
-          plan.id === item.id && plan.paragraphKey === paragraphKey(item) && confirmed(plan, after) &&
-          (!receipt || sameSnapshot(receipt, after));
+        const written = after && plan.documentKey === binding.canonicalKey && plan.reviewId === binding.reviewId &&
+          plan.id === item.id && plan.paragraphKey === paragraphKey(item) && confirmed(plan, after, receipt);
         results.set(item.id, {status: written ? "written" : "unknown", after: after || null});
         if (written) after = plan.before;
       }
@@ -244,6 +245,16 @@
   async function preflight(item, {previousPlans = []} = {}) {
     await latest(item);
     return Word.run(async context => (await prepare(context, item, previousPlans)).plan);
+  }
+
+  async function revisionWriter(context) {
+    try {
+      const me = context.document.coauthoring.me;
+      me.load("name");
+      await context.sync();
+      if (typeof me.name === "string" && me.name.trim() && me.name.length <= 512) return me.name;
+    } catch { /* Local documents do not always expose a coauthor. */ }
+    return "";
   }
 
   async function applyOne(item, {beforeWrite, previousPlans = [], anchor} = {}) {
@@ -259,7 +270,9 @@
       await context.sync();
       ensure(selected.value === "Equal", "当前 Word 选区已改变，建议已保留。");
       await latest(item);
-      if (beforeWrite) await beforeWrite(plan);
+      const writer = await revisionWriter(context);
+      const attempt = writer ? {...plan, writer} : plan;
+      if (beforeWrite) await beforeWrite(attempt);
       const checked = await prepare(context, item, previousPlans, anchor);
       const finalSelection = checked.target.compareLocationWith(context.document.getSelection());
       await context.sync();
@@ -272,7 +285,7 @@
         if (!item.to) checked.target.delete();
         else checked.target.insertText(item.to, item.from ? "Replace" : "Start");
         await context.sync();
-        return await readInContext(context, item, plan);
+        return await readInContext(context, item, attempt, true);
       } catch (error) { return {status: "unknown", message: unknownMessage + " " + error.message}; }
     });
   }

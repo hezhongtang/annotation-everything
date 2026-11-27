@@ -1,5 +1,6 @@
 // The pane speaks to two external boundaries: desktop Word and the bound review service.
 const assert = require("node:assert/strict");
+const {createHash} = require("node:crypto");
 const collection = items => ({items, load() {return this;}});
 const outsideControl = {isNullObject: true, load() {}};
 const current = runs => runs.filter(r => r.type !== "Deleted").map(r => r.text).join("");
@@ -12,7 +13,7 @@ function revisionService(items, options = {}) {
   async function fetch(path, request) {
     const body = JSON.parse(request.body);
     switch (path) {
-      case "/api/bind": return reply({...state, suggestions: items});
+      case "/api/bind": return reply({...state, suggestions: items, ...options.documentIdentity});
       case "/api/status": return reply(state);
       case "/api/suggestion": return reply({reviewId: "A", suggestion: items.find(i => i.id === body.id)});
       case "/api/word/list": return reply({suggestions: items, pendingBatches: [], revisionOperations: operations});
@@ -59,8 +60,8 @@ function paragraph(initial, word) {
         const removed = run.text.slice(start - offset, end - offset);
         const right = run.text.slice(end - offset);
         runs.splice(index, 1, ...[
-          {text: left}, {type: "Deleted", text: removed, author: "乙"},
-          {type: "Added", text, author: "乙"}, {text: right}
+          {text: left}, {type: "Deleted", text: removed, author: word.author},
+          {type: "Added", text, author: word.author}, {text: right}
         ].filter(r => r.text));
         word.writes.push([removed, text]);
         return;
@@ -126,7 +127,7 @@ function paragraph(initial, word) {
 }
 
 async function batchScenario(scenario, openPane) {
-  const word = {writes: []};
+  const word = {writes: [], author: "乙"};
   const body = paragraph("须在五日内通知甲方。", word);
   const cell = paragraph("保留纸本。", word);
   const items = [
@@ -142,15 +143,29 @@ async function batchScenario(scenario, openPane) {
     }
   };
   const context = {sync: async () => {}, document: {load() {}, changeTrackingMode: "TrackAll", isReadOnly: false,
+    coauthoring: {get me() {
+      if (scenario === "concurrent-no-writer") throw Error("No coauthor information for this local document.");
+      return {name: word.author, load() {}};
+    }},
     protectionType: "NoProtection", getSelection: () => word.selection,
     body: {paragraphs: collection([body, {}, cell]), tables: collection([table]), getRange: () => ({getComments: () => collection([])}),
       getOoxml: () => ({value: JSON.stringify({layout: ["1A000001", [["1A000003", "1A000002"]]]})})}
   }};
   const Word = {run: action => action(context)};
   const options = {};
+  const files = {url: "/synthetic/A/contract.docx"};
+  const macPath = "/private/tmp/synthetic/A/contract.docx", alias = "/tmp/synthetic/A/contract.docx";
+  if (scenario === "aliases") {
+    const key = path => createHash("sha256").update(path).digest("hex");
+    files.url = alias;
+    options.documentIdentity = {canonicalDocumentKey: key(macPath), documentKeys: [key(macPath), key(alias)]};
+    options.afterBegin = op => assert.equal(op.plan.documentKey, key(macPath));
+  }
   if (scenario.startsWith("concurrent-")) {
     options.concurrentBegin = () => {
-      if (scenario === "concurrent-written") body.getRange().search("五日").items[0].insertText("十个工作日", "Replace");
+      delete options.concurrentBegin;
+      if (scenario === "concurrent-foreign") word.author = "丙";
+      if (scenario !== "concurrent-unknown") body.getRange().search("五日").items[0].insertText("十个工作日", "Replace");
     };
   }
   if (scenario === "overlap") {
@@ -176,7 +191,7 @@ async function batchScenario(scenario, openPane) {
     };
   }
   const service = revisionService(items, options);
-  const reopen = () => openPane(Word, service.fetch);
+  const reopen = () => openPane(Word, service.fetch, files);
   let nodes = await reopen();
   function row(id) {
     const line = nodes.suggestions.children.find(li => li.querySelectorAll("input").some(i => i.dataset.id === id));
@@ -204,13 +219,35 @@ async function batchScenario(scenario, openPane) {
     assert.equal(row(id).choice.disabled, true, id);
     assert.equal(row(id).write.disabled, true, id);
   }
+  if (scenario === "aliases") {
+    await write(["days"]);
+    expectLocked("days", /已写入/);
+    files.url = macPath;
+    await nodes.refresh.events.click();
+    expectLocked("days", /已写入/);
+    nodes = await reopen();
+    expectLocked("days", /已写入/);
+    files.url = "/tmp/synthetic/B/contract.docx";
+    await nodes.refresh.events.click();
+    assert.match(nodes.status.textContent, /当前文档与绑定时不同/);
+    assert.deepEqual(word.writes, [["五日", "十个工作日"]]);
+    return;
+  }
   if (scenario.startsWith("concurrent-")) {
     await write(["days"]);
     const expected = scenario === "concurrent-written" ? /已写入/ : /需核对/;
     expectLocked("days", expected);
     assert.match(nodes.status.textContent, expected);
     assert.doesNotMatch(nodes.status.textContent, /未执行/);
-    assert.equal(word.writes.length, scenario === "concurrent-written" ? 1 : 0);
+    assert.equal(word.writes.length, scenario === "concurrent-unknown" ? 0 : 1);
+    nodes = await reopen();
+    expectLocked("days", expected);
+    if (scenario === "concurrent-foreign" || scenario === "concurrent-no-writer") {
+      await write(["copy"]);
+      expectLocked("days", /需核对/);
+      expectLocked("copy", /已写入/);
+      assert.deepEqual(word.writes, [["五日", "十个工作日"], ["纸本", "原件"]]);
+    }
     return;
   }
   if (scenario === "overlap") {

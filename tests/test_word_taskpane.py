@@ -52,9 +52,12 @@ class TaskpaneInteractionTests(unittest.TestCase):
         self.exercise_pane("reconnect")
 
     def test_competing_pane_cannot_mask_the_native_result_or_retry(self):
-        for scenario in ("concurrent-written", "concurrent-unknown"):
+        for scenario in ("concurrent-written", "concurrent-unknown", "concurrent-foreign", "concurrent-no-writer"):
             with self.subTest(scenario=scenario):
                 self.exercise_pane(scenario)
+
+    def test_revision_receipt_survives_a_validated_file_alias_but_not_a_same_named_copy(self):
+        self.exercise_pane("aliases")
 
     def test_rebind_and_repreview_retry_only_the_approved_selection(self):
         self.exercise_pane("resubmit")
@@ -387,6 +390,83 @@ class TaskpaneTests(unittest.TestCase):
         self.assertEqual((reopened["reviewId"], reopened["batch"]["seq"]), (self.rid, 1))
         self.assertEqual(reopened["suggestions"], before["suggestions"])
 
+    def test_rebuild_revalidates_the_untouched_word_selection_before_granting_a_write(self):
+        import build_viewer
+        import word_context
+        import word_taskpane
+
+        clause = "📎核对样机编号和封签编号。"
+        with patch.object(make_word_native, "TERMS", (clause,)):
+            review, source, rid, _ = self.review_fixture("c", session="word-reviewer")
+            xml = make_word_native.contract("C")
+        self.server = word_taskpane.TaskpaneServer(review, source, self.tls, port=0)
+        self.start(self.server)
+        identity = {"reviewId": rid, "documentKey": self.key(source)}
+        selections, changes = [], []
+        for text, selection, old, new in (("验收异议", "验收", "验收", "交付"), (clause, "封签编号", "编号", "序号")):
+            para = next(p for p in self.server.binding.paragraphs if p.text == text)
+            selections.append(
+                dict(
+                    n=para.n,
+                    paraId=para.pid,
+                    digest=hashlib.sha256(text.encode()).hexdigest(),
+                    original=selection,
+                    current=selection,
+                    revisions=[],
+                    threads=[],
+                )
+            )
+            changes.append({"n": para.n, "from": old, "to": new, "reason": "核对交接用词。"})
+        status, result = self.request(
+            "/api/word/submit", {**identity, "submitId": "before-save", "paragraphs": selections}
+        )
+        self.assertEqual(status, 200, result)
+        seq = result["batch"]
+        notes_store.handoff_claim(review, seq=seq)
+        first, second = word_context.return_suggestions(review, seq, changes, "Codex", "word-reviewer")
+
+        # Model a Word save with the first tracked replacement and a paragraph inserted before the second target.
+        run = make_word_native.Doc.r
+        saved = xml.replace(
+            run("验收异议"),
+            make_word_native.change("del", 20, "验收") + make_word_native.change("ins", 21, "交付") + run("异议"),
+        )
+        saved = saved.replace("<w:body>", '<w:body><w:p w14:paraId="07100001">' + run("交接说明") + "</w:p>", 1)
+        with patch.object(make_word_native, "contract", return_value=saved):
+            make_word_native.build(source, "C")
+        self.assertEqual(self.request("/api/word/list", identity)[1]["error"], "document-changed")
+        self.assertEqual(build_viewer.main(["--rebuild", str(review)]), 0)
+        self.server = word_taskpane.TaskpaneServer(review, source, self.tls, port=0)
+        self.start(self.server)
+        status, result = self.request("/api/word/list", identity)
+        self.assertEqual(status, 200, result)
+        updated = {s["id"]: s for s in result["suggestions"]}
+        self.assertIn("writeRestriction", updated[first["id"]])
+        item = updated[second["id"]]
+        self.assertNotIn("writeRestriction", item)
+        self.assertEqual((item["n"], item["paraId"], item["status"]), (second["n"] + 1, second["paraId"], "pending"))
+        self.assertEqual(item["fp"], self.server.binding.fingerprint)
+        offset = len(clause[: clause.rindex("编号")].encode("utf-16-le")) // 2
+        self.assertEqual(item["sourceOffset"], offset)
+        self.assertEqual(notes_store.handoff_load(review)["items"][0]["wordSuggestions"], [first, second])
+
+        status, batch = self.request("/api/revision-operations/plan", {**identity, "items": [item["id"]]})
+        self.assertEqual(status, 200, batch)
+        plan = {
+            **identity,
+            "id": item["id"],
+            "paragraphKey": f"body/{item['n']}",
+            "start": offset,
+            "end": offset + 2,
+            "before": {"original": clause, "current": clause, "revisions": []},
+            "expected": clause.replace("封签编号", "封签序号"),
+        }
+        status, grant = self.request(
+            "/api/revision-operations/begin", {**identity, **batch, "id": item["id"], "plan": plan}
+        )
+        self.assertEqual(status, 200, grant)
+        self.assertTrue(grant["mayWrite"])
+
     def test_second_live_review_cannot_be_selected_by_identity_document_or_note(self):
         key = self.key(self.file)
         self.assertEqual(self.request("/api/bind", {"documentKey": self.key(self.other_file)})[0], 409)
@@ -441,7 +521,8 @@ class TaskpaneTests(unittest.TestCase):
         plan = dict(
             identity, id=self.nid, paragraphKey="cell/0/0/1", start=2, end=4, before=before, expected="应于七日内回复"
         )
-        self.assertTrue(self.request(route + "begin", dict(base, plan=plan))[1]["mayWrite"])
+        grant = self.request(route + "begin", dict(base, plan=plan))[1]
+        self.assertTrue(grant["mayWrite"])
         self.server = word_taskpane.TaskpaneServer(self.review, self.file, self.tls, port=0)
         self.start(self.server)
         self.assertEqual(ops()[0]["status"], "unknown")
@@ -454,7 +535,10 @@ class TaskpaneTests(unittest.TestCase):
                 for kind, text in (("Deleted", "五日"), ("Added", "七日"))
             ],
         }
-        self.assertEqual(self.request(route + "observe", dict(base, status="written", after=after, permit=""))[0], 200)
+        self.assertEqual(self.request(route + "observe", dict(base, status="written", after=after, permit=""))[0], 409)
+        self.assertEqual(
+            self.request(route + "observe", dict(base, status="written", after=after, permit=grant["permit"]))[0], 200
+        )
         self.assertEqual(self.request(route + "observe", dict(base, status="unknown", after=before, permit=""))[0], 200)
         self.assertEqual((ops()[0]["status"], ops()[0]["receipt"]), ("unknown", after))
         self.assertEqual(
@@ -474,6 +558,23 @@ class TaskpaneTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(first["mayWrite"])
         self.assertEqual(self.request(route, intent), (200, {"mayWrite": False, "id": first["id"]}))
+        permit = "e1" * 16
+        op_id = hashlib.sha256(permit.encode("ascii")).hexdigest()
+        another = dict(intent, bodyHash="c" * 64, permitHash=op_id)
+        self.assertEqual(self.request(route, another), (200, {"mayWrite": True, "id": op_id}))
+        cancel = "/api/comment-operations/cancel"
+        proof = dict(identity, id=op_id, permit=permit)
+        self.assertEqual(self.request(cancel, dict(proof, documentKey=self.key(self.other_file)))[0], 409)
+        self.assertEqual(self.request(cancel, dict(proof, reviewId=self.other_id))[0], 409)
+        self.assertEqual(self.request(cancel, dict(proof, permit="f" * 32))[0], 409)
+        self.assertEqual(self.request(cancel, proof), (200, {"id": op_id}))
+        self.assertEqual(self.request(route, another), (200, {"mayWrite": False, "id": op_id}))
+        retry_id = hashlib.sha256(b"f" * 32).hexdigest()
+        self.assertEqual(
+            self.request(route, dict(another, permitHash=retry_id)), (200, {"mayWrite": True, "id": retry_id})
+        )
+        operations = self.request("/api/comment-operations/list", identity)[1]["operations"]
+        self.assertEqual([op["id"] for op in operations], [first["id"], retry_id])
         for resource in ("/comments.pane.html", "/word-comments.json"):
             self.assertEqual(self.request(resource, {}, method="GET")[0], 404)
 
@@ -500,9 +601,11 @@ class TaskpaneTests(unittest.TestCase):
                 self.server = server
                 alias_path = Path("/") / document.relative_to("/private")
                 self.assertEqual(alias_path.parts[1], alias)
+                status, bound = self.request("/api/bind", {"documentKey": self.key(alias_path)})
                 self.assertEqual(
-                    self.request("/api/bind", {"documentKey": self.key(alias_path)})[1].get("reviewId"), rid
+                    (status, bound["reviewId"], bound["canonicalDocumentKey"]), (200, rid, self.key(document))
                 )
+                self.assertEqual(set(bound["documentKeys"]), {self.key(alias_path), self.key(document)})
                 self.assertEqual(self.request("/api/bind", {"documentKey": self.key(other_path)})[0], 409)
 
     def test_office_can_supply_its_host_information_when_opening_the_static_pane(self):

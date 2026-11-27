@@ -56,6 +56,7 @@ class EditError(ValueError):
 
 class SelectionError(EditError):
     def __init__(self, errors: list[EditError]):
+        super().__init__("selection")
         self.errors = errors
 
 
@@ -65,7 +66,6 @@ class AmbiguousText(EditError):
     def __init__(self, paragraph: Paragraph):
         super().__init__("ambiguous")
         self.paragraph = paragraph
-        super().__init__("selection")
 
 
 @dataclass

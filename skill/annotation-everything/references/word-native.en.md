@@ -29,7 +29,7 @@ Select the intended text directly in Word. If “五日” appears in both the b
 
 Choose **刷新 Word 讨论** to see the original comment, authors, replies and thread state. Choose **回复此线程**, **解决此线程** or **重开此线程** on the intended thread. Refresh after changing the thread in Word. Comments, tracked revisions and AE batch status have independent lifecycles. Once the pane confirms the change in the current document, save in Word. A recipient can continue the discussion directly in Word.
 
-The service records each intent in `word-comments.json` inside the review directory before Word can act. On reconnection, expand **本次审阅的批注操作**. If an entry says **需核对**, check the selected text, authors and reply relationship in Word. After an undo, a moved anchor or a lost receipt, AE retains the record and prevents an uncertain replay. Keep this file with the review directory when moving the review.
+The service records each intent in `word-comments.json` inside the review directory before Word can act. If the selection changes before the pane calls Word, select the intended text again and retry. If the pane has already called Word and loses the receipt, it retains the record and blocks a duplicate. On reconnection, expand **本次审阅的批注操作**. If an entry says **需核对**, check the selected text, authors and reply relationship in Word. An undo or a moved anchor can also affect this check. Keep this file with the review directory when moving the review.
 
 ## After saving, switching files or stopping
 
@@ -51,7 +51,7 @@ The bound receiver uses its existing `notes.py claim` or `notes.py wait` workflo
 python3 "$S/word_context.py" return "$REVIEW" --batch 1 --input suggestions.json --harness "$HARNESS" --session "$SESSION"
 ```
 
-Refresh the connection to see the original wording, suggestion, reason and source batch. Choose **在 Word 定位** to select the passage in Word. A reviewer can recall a pending batch or withdraw a suggestion before its write is attempted. Changed paragraphs and repeated matches require verification. Select the intended text and submit a fresh batch.
+Refresh the connection to see the original wording, suggestion, reason and source batch. Choose **在 Word 定位** to select the passage in Word. A reviewer can recall a pending batch or withdraw a suggestion before its write is attempted. After saving the same original and explicitly rebuilding the review, you can continue with a suggestion if the paragraph ID is still unique, the paragraph text matches, and the submitted selection occurs once in that paragraph. If the pane requests a fresh submission, verify and reselect the original passage in Word.
 
 
 ## Write a suggestion as a Word revision
@@ -64,7 +64,7 @@ The pane reports a write to the open Word document after reading the revised tex
 
 Select one or more suggestions and choose **将所选建议写为修订**. The pane preflights the entire selection. Resolve each reported conflict by clearing its checkbox or relocating it. If someone edits a target during the batch, the pane stops and shows the remaining items as **未执行**.
 
-The review directory keeps write intents and native readbacks in `word-revisions.json`. Reconnect to compare attempts with Word’s current revisions and authors. Items confirmed in Word show the paragraph or table cell where they were written. Items marked **未执行** can be selected and checked again. Inspect items marked **需核对** in the document. Undo, acceptance and rejection can all change the native evidence. Word reports whether the document has been saved.
+The review directory keeps write intents and native readbacks in `word-revisions.json`. Reconnect to compare attempts with Word’s current revisions and authors. If the first receipt was lost, the pane also checks the Word author recorded before the write. An uncertain attribution remains marked **需核对**. Items confirmed in Word show the paragraph or table cell where they were written. Items marked **未执行** can be selected and checked again. Inspect items marked **需核对** in the document. Undo, acceptance and rejection can all change the native evidence. Word reports whether the document has been saved.
 
 ## Troubleshooting and distribution
 

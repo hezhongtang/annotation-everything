@@ -1,16 +1,22 @@
 """Selected synthetic Word material crosses the existing receiver queue."""
 
 import hashlib
+import io
 import json
+import os
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skill/annotation-everything/scripts"))
 
+import notes as notes_cli
 import notes_store
 import word_context
 import wakeup
@@ -63,6 +69,39 @@ class WordContextTests(unittest.TestCase):
         bound.restrictions = {}
         bound.locations[3]["paraId"] = "1A000004"
         self.assertIn("段落标识", word_context.suggestions(bound)[0]["writeRestriction"])
+
+    def test_rebuilt_word_suggestion_requires_the_same_document_digest_and_unique_selection(self):
+        original = "样机编号、附件编号。"
+        p = {**self.para, "digest": hashlib.sha256(original.encode()).hexdigest(), "current": "编号"}
+        seq = word_context.submit(
+            self.review, self.receiver, self.fp, [p], "before-save", lambda: None, "original-file"
+        )
+        notes_store.handoff_claim(self.review, seq=seq)
+        word_context.return_suggestions(
+            self.review,
+            seq,
+            [{"n": p["n"], "from": "编号", "to": "标识", "reason": "与清单一致。"}],
+            "Codex",
+            "synthetic-session",
+        )
+        for document_key, text, pid, refusal in (
+            ("another-file", original, p["paraId"], "同一文档"),
+            ("original-file", "样机编号。", p["paraId"], "原段落及送审选区"),
+            ("original-file", original, p["paraId"], "原段落及送审选区"),
+            ("original-file", original, None, "段落标识"),
+        ):
+            with self.subTest(document_key=document_key, text=text, para_id=pid):
+                binding = SimpleNamespace(
+                    review=self.review,
+                    canonical_document_key=document_key,
+                    fingerprint="f" * 64,
+                    locations={4: {"bodyParagraph": 4, **({"paraId": pid} if pid else {})}},
+                    paragraphs={4: SimpleNamespace(text=text)},
+                    restrictions={},
+                )
+                [item] = word_context.suggestions(binding)
+                self.assertIn(refusal, item["writeRestriction"])
+                self.assertEqual(item["status"], "needs-relocation")
 
     def test_recreated_preview_recovers_only_the_unacknowledged_identical_submission(self):
         binding = SimpleNamespace(
@@ -159,6 +198,155 @@ class WordContextTests(unittest.TestCase):
         self.assertIsNone(notes_store.handoff_claim(self.review, seq=seq))
         word_context.recall(self.review, seq, lambda: None)
         self.assertEqual(notes_store.handoff_load(self.review)["items"][0]["status"], "void")
+
+    def notes_command(self, command, *args):
+        output, errors = io.StringIO(), io.StringIO()
+        with (
+            patch.dict(os.environ, AE_HOME=str(self.review / "ledger")),
+            redirect_stdout(output),
+            redirect_stderr(errors),
+        ):
+            code = notes_cli.main([command, str(self.review), *args])
+        return code, output.getvalue(), errors.getvalue()
+
+    def test_shared_handoff_views_only_publish_word_batch_metadata(self):
+        thread = {
+            "id": "selected-thread",
+            "authorName": "合成讨论人",
+            "creationDate": None,
+            "content": "请核对样机清单。",
+            "range": {"text": "编号"},
+            "resolved": False,
+            "replies": [
+                {"id": "selected-reply", "authorName": "合成回复人", "creationDate": None, "content": "按附表核对。"}
+            ],
+        }
+        revision = {**self.para["revisions"][0], "author": "合成修订人"}
+        paragraph = {**self.para, "threads": [thread], "revisions": [revision, self.para["revisions"][1]]}
+        change = {"n": 3, "from": "编号", "to": "样机序号", "reason": "复核采用附表的命名。"}
+        seq = word_context.submit(self.review, self.receiver, self.fp, [paragraph], "private-submit", lambda: None)
+
+        def check_state(state, status):
+            self.assertEqual((state["latest"]["seq"], state["latest"]["status"]), (seq, status))
+            self.assertEqual(state[status], 1)
+            if status != "done":
+                self.assertEqual(state["open"][0]["seq"], seq)
+            encoded = json.dumps(state, ensure_ascii=False)
+            for private in (
+                "wordSubmission",
+                "wordSuggestions",
+                "wordReceipt",
+                "wordAwaitingReceipt",
+                "private-submit",
+                self.receiver,
+                self.fp,
+                paragraph["original"],
+                paragraph["current"],
+                revision["author"],
+                thread["authorName"],
+                thread["replies"][0]["content"],
+                change["to"],
+                change["reason"],
+            ):
+                self.assertNotIn(private, encoded)
+
+        check_state(notes_store.handoff_state(self.review, full=False), "pending")
+        code, output, err = self.notes_command(
+            "claim", "--seq", str(seq), "--harness", "Codex", "--session", "synthetic-session"
+        )
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(output)["wordSubmission"]["paragraphs"], [paragraph])
+        check_state(notes_store.handoff_state(self.review), "claimed")
+        [suggestion] = word_context.return_suggestions(self.review, seq, [change], "Codex", "synthetic-session")
+        self.assertEqual(suggestion["reason"], change["reason"])
+        check_state(notes_store.handoff_state(self.review, full=False), "done")
+        for cmd in (("show", "--json"), ("show", "--batch", str(seq), "--json"), ("batches", "--json")):
+            with self.subTest(cmd=cmd):
+                code, output, err = self.notes_command(*cmd)
+                self.assertEqual(code, 0, err)
+                payload = json.loads(output)
+                check_state(payload.get("handoff", payload), "done")
+
+    def test_generic_done_preserves_pending_and_claimed_word_batches(self):
+        first = word_context.submit(self.review, self.receiver, self.fp, [self.para], "old", lambda: None)
+        new_receiver = wakeup.bind_wait(self.review, "Codex", "new-session", replace=True)["bindingId"]
+        caller = ("--harness", "Codex", "--session", "new-session")
+        handoff_file = self.review / notes_store.HANDOFF_FILE
+
+        def check_refusal(seq):
+            before = handoff_file.read_bytes()
+            for target in ((), ("--seq", str(seq))):
+                with self.subTest(seq=seq, target=target):
+                    code, _, err = self.notes_command("done", *target, *caller, "--locale", "en", "--summary", "done")
+                    self.assertEqual(code, 1, err)
+                    self.assertIn("word_context.py return", err)
+                    self.assertEqual(handoff_file.read_bytes(), before)
+
+        check_refusal(first)
+        word_context.recall(self.review, first, lambda: None)
+        second = word_context.submit(self.review, new_receiver, self.fp, [self.para], "new", lambda: None)
+        code, _, err = self.notes_command("claim", "--seq", str(second), *caller)
+        self.assertEqual(code, 0, err)
+        check_refusal(second)
+        source = self.review / "empty.json"
+        source.write_text("[]", encoding="utf-8")
+        result = io.StringIO()
+        with redirect_stdout(result):
+            code = word_context.main(
+                ["return", str(self.review), "--batch", str(second), "--input", str(source), *caller]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(result.getvalue()), {"batch": second, "suggestions": []})
+        self.assertEqual(notes_store.handoff_load(self.review)["items"][-1]["status"], "done")
+        notes_store.handoff_submit(self.review, "普通批次")
+        code, _, err = self.notes_command("done", *caller, "--summary", "普通批次已完成")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(notes_store.handoff_state(self.review)["latest"]["summary"], "普通批次已完成")
+
+    def test_recalled_unacknowledged_word_submission_can_be_submitted_again(self):
+        def send(key):
+            return word_context.submit(self.review, self.receiver, self.fp, [self.para], key, lambda: None, "file")
+
+        original = send("original")
+        self.assertEqual(send("recovered-before-recall"), original)
+        self.assertEqual(
+            word_context.recall(self.review, original, lambda: None), ["original", "recovered-before-recall"]
+        )
+        doc = notes_store.handoff_load(self.review)
+        self.assertEqual(doc["items"][0]["status"], "void")
+        self.assertNotIn("wordAwaitingReceipt", doc["items"][0])
+        # Also exercise a stored recall from before the receipt flag was cleared.
+        doc["items"][0]["wordAwaitingReceipt"] = True
+        (self.review / notes_store.HANDOFF_FILE).write_text(json.dumps(doc), encoding="utf-8")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fresh, recovered = pool.map(send, ("fresh", "recovered-after-recall"))
+        self.assertNotEqual(fresh, original)
+        self.assertEqual(recovered, fresh)
+        bound = SimpleNamespace(
+            review=self.review,
+            receiver_id=self.receiver,
+            fingerprint=self.fp,
+            authorize_receiver=lambda: None,
+            canonical_document_key="file",
+        )
+        with (
+            patch.object(wakeup, "load_binding", return_value={"adapter": "codex-desktop"}),
+            patch.object(wakeup, "deliver") as delivery,
+        ):
+            for key in ("original", "recovered-before-recall"):
+                with self.assertRaisesRegex(word_context.ContextError, "word-batch-recalled"):
+                    word_context.handle(bound, "/api/word/submit", {"submitId": key, "paragraphs": [self.para]})
+            delivery.assert_not_called()
+        with self.assertRaisesRegex(word_context.ContextError, "word-batch-recalled"):
+            word_context.acknowledge(bound, "file", original)
+        self.assertIsNone(notes_store.handoff_claim(self.review, seq=original))
+        self.assertEqual([b["status"] for b in notes_store.handoff_load(self.review)["items"]], ["void", "pending"])
+        with patch.object(notes_store, "HANDOFF_KEEP", 1):
+            word_context.acknowledge(bound, "file", fresh)
+        self.assertEqual([b["seq"] for b in notes_store.handoff_load(self.review)["items"]], [fresh])
+        for key in ("fresh", "recovered-after-recall"):
+            self.assertEqual(send(key), fresh)
+        self.assertEqual(notes_store.handoff_claim(self.review, seq=fresh)["status"], "claimed")
 
     def test_scoped_native_evidence_reconciles_empty_deletions_and_ambiguous_authorship(self):
         import json

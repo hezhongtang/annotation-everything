@@ -19,6 +19,7 @@
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const error = text => new Error(text);
   const uncertain = "需核对。请在 Word 原页检查目标、作者与讨论记录。";
+  const unusedPermits = new Map();
   let paneBinding = null;
 
   function attributes(item) {
@@ -49,10 +50,12 @@
     readThreads: async (context, range) => (await loadThreads(context, range)).map(entry => entry.data)
   };
 
-  async function hash(value) {
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(value)));
+  async function hashText(text) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
     return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
   }
+
+  const hash = value => hashText(JSON.stringify(value));
 
   async function locations(context, ranges) {
     // A repeated word at a different position has a different preceding body range.
@@ -68,10 +71,41 @@
     return (await locations(context, [range]))[0];
   }
 
-  function api(action, data = {}) {
-    return request("/api/comment-operations/" + action, binding.token, {
-      documentKey: binding.key, reviewId: binding.reviewId, ...data
+  function api(action, data = {}, bound = binding) {
+    return request("/api/comment-operations/" + action, bound.token, {
+      documentKey: bound.key, reviewId: bound.reviewId, ...data
     });
+  }
+
+  function checkBinding(bound) {
+    if (!bound || binding !== bound) throw error("连接已改变，请重新连接原审阅。");
+  }
+
+  async function releaseUnused(bound, proof) {
+    const key = "ae-word-comments-unused:" + JSON.stringify([bound.reviewId, bound.canonicalKey || bound.key]);
+    if (!unusedPermits.has(key)) {
+      let pending = new Map();
+      try { pending = new Map(JSON.parse(window.sessionStorage.getItem(key) || "[]")); } catch {}
+      unusedPermits.set(key, pending);
+    }
+    const pending = unusedPermits.get(key);
+    function save() {
+      try {
+        if (pending.size) window.sessionStorage.setItem(key, JSON.stringify([...pending]));
+        else window.sessionStorage.removeItem(key);
+      } catch { /* The open pane can still retry when Word disallows session storage. */ }
+    }
+    if (proof) {
+      pending.set(proof.id, proof.permit);
+      save();
+    }
+    // Only aborted attempts enter this queue. A rebind supplies the new service token.
+    if (binding) checkBinding(bound);
+    for (const [id, permit] of pending) {
+      await api("cancel", {id, permit}, bound);
+      pending.delete(id);
+      save();
+    }
   }
 
   function findThread(entries, id) {
@@ -123,8 +157,11 @@
   }
 
   async function refresh() {
+    const bound = binding;
     await refreshConnection();
-    const {operations} = await api("list");
+    checkBinding(bound);
+    await releaseUnused(bound);
+    const {operations} = await api("list", {}, bound);
     await Word.run(async context => {
       const entries = await loadThreads(context);
       const anchors = await locations(context, entries.map(entry => entry.range));
@@ -142,6 +179,7 @@
         rows.push(li);
       }
       await checkDocument();
+      checkBinding(bound);
       displayThreads(entries);
       byId("comment-status").textContent = entries.length ? "已从 Word 读取 " + entries.length + " 个线程。" : "Word 正文中尚无批注。";
       byId("comment-operations").replaceChildren(...rows);
@@ -153,10 +191,13 @@
   async function submit(kind, shown, shownLocation) {
     const text = ["publish", "reply"].includes(kind) ? byId("comment-draft").value.trim() : "";
     if (["publish", "reply"].includes(kind) && !text) throw error("请先填写要发到 Word 的意见。");
+    const bound = binding;
     await refreshConnection();
-    const {operations} = await api("list");
+    checkBinding(bound);
+    await releaseUnused(bound);
+    const {operations} = await api("list", {}, bound);
     const bodyHash = await hash(text);
-    let started = false;
+    let opId, unusedPermit, nativeAttempted = false;
     try {
       await Word.run(async context => {
         async function target() {
@@ -189,14 +230,25 @@
           kind, target: shown ? shown.id : "", location: current.key, bodyHash,
           preview: (text || shown.content || shown.id).slice(0, 120)
         };
-        const permission = await api("begin", intent);
-        if (!permission.mayWrite) throw error("此操作已有记录，请刷新 Word 讨论核对结果。");
-        started = true;
+        checkBinding(bound);
+        unusedPermit = crypto.randomUUID().replace(/-/g, "");
+        opId = await hashText(unusedPermit);
+        const permission = await api("begin", {...intent, permitHash: opId}, bound);
+        if (!permission.mayWrite) {
+          if (permission.id !== opId) unusedPermit = null;
+          throw error("此操作已有记录，请刷新 Word 讨论核对结果。");
+        }
+        if (permission.id !== opId) throw error("审阅服务未能确认本次批注操作。");
+        checkBinding(bound);
         await refreshConnection();
         current = await target();
         if (current.key !== intent.location) throw error("目标文字的位置已改变。");
         await checkDocument();
+        checkBinding(bound);
         let written;
+        // Synchronous boundary: even a throwing native setter/method may have queued a write.
+        unusedPermit = null;
+        nativeAttempted = true;
         if (kind === "publish") written = current.range.insertComment(text);
         else if (kind === "reply") written = current.object.reply(text);
         else current.object.resolved = kind === "resolve";
@@ -218,12 +270,17 @@
           }
           if (!same(after.data, expected)) throw error("原线程的作者、内容、回复或状态有变化。");
         }
-        const receipt = {id: permission.id, threadId, replyId, stamp: await stamp(context, after, replyId)};
+        const receipt = {id: opId, threadId, replyId, stamp: await stamp(context, after, replyId)};
         await checkDocument();
-        await api("confirm", receipt);
+        checkBinding(bound);
+        await api("confirm", receipt, bound);
       });
     } catch (e) {
-      if (started) throw error(uncertain + " " + (e.message || e.code));
+      if (nativeAttempted) throw error(uncertain + " " + (e.message || e.code));
+      if (unusedPermit && opId) {
+        try { await releaseUnused(bound, {id: opId, permit: unusedPermit}); }
+        catch { throw error("未向 Word 提交。请重新连接原审阅再试。 " + (e.message || e.code)); }
+      }
       throw e;
     }
     if (text) byId("comment-draft").value = "";
