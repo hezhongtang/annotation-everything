@@ -64,7 +64,7 @@ The pane reports a write to the open Word document after reading the revised tex
 
 Select one or more suggestions and choose **将所选建议写为修订**. The pane preflights the entire selection. Resolve each reported conflict by clearing its checkbox or relocating it. If someone edits a target during the batch, the pane stops and shows the remaining items as **未执行**.
 
-The review directory keeps write intents and native readbacks in `word-revisions.json`. Reconnect to compare attempts with Word’s current revisions and authors. Items marked **未执行** can be selected and checked again. Inspect items marked **需核对** in the document. Undo, acceptance and rejection can all change the native evidence. Word reports whether the document has been saved.
+The review directory keeps write intents and native readbacks in `word-revisions.json`. Reconnect to compare attempts with Word’s current revisions and authors. Items confirmed in Word show the paragraph or table cell where they were written. Items marked **未执行** can be selected and checked again. Inspect items marked **需核对** in the document. Undo, acceptance and rejection can all change the native evidence. Word reports whether the document has been saved.
 
 ## Troubleshooting and distribution
 

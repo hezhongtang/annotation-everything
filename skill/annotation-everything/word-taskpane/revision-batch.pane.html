@@ -42,7 +42,8 @@ function earlierPlans(item) {
   let text = item.paragraph;
   const plans = [];
   for (const op of (binding.operations || new Map()).values()) {
-    if (op.status === "written" && op.plan.paragraphKey === key && op.plan.before.current === text) {
+    if (op.status === "written" && op.item.paraId === item.paraId && op.plan.paragraphKey === key &&
+        op.plan.before.current === text) {
       plans.push(op.plan);
       text = op.plan.expected;
     }

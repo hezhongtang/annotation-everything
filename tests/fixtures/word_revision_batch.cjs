@@ -36,7 +36,7 @@ function revisionService(items, options = {}) {
       }
       case "/api/revision-operations/observe": {
         const op = operations.find(o => o.batch === body.batch && o.id === body.id);
-        options.beforeObserve?.(op, body);
+        options.beforeObserve?.(op, body, operations);
         Object.assign(op, {status: body.status, receipt: body.status === "written" ? body.after : op.receipt});
         return reply({});
       }
@@ -159,9 +159,13 @@ async function batchScenario(scenario, openPane) {
   }
   if (scenario === "reconnect") {
     items.push({...items[0], id: "must", from: "须", to: "应"});
-    options.beforeObserve = (_op, observation) => {
+    options.beforeObserve = (op, observation, operations) => {
       if (observation.status === "written") {
         delete options.beforeObserve;
+        // An earlier review at this same position need not identify today's paragraph.
+        for (const [id, paraId] of [["legacy", undefined], ["previous-paragraph", "1A000004"]]) {
+          operations.unshift({...op, id, batch: id, item: {...op.item, id, paraId}, plan: {...op.plan, id}});
+        }
         throw Error("Synthetic network loss before the service receives the first Word receipt.");
       }
     };
@@ -178,6 +182,7 @@ async function batchScenario(scenario, openPane) {
     const line = nodes.suggestions.children.find(li => li.querySelectorAll("input").some(i => i.dataset.id === id));
     assert.ok(line, "Suggestion row for " + id + ": " + nodes.status.textContent);
     return {
+      location: line.querySelectorAll("strong")[0].textContent,
       text: line.querySelectorAll("p").map(p => p.textContent).join(" "),
       choice: line.querySelectorAll("input").find(i => i.dataset.id === id && i.type === "checkbox"),
       write: line.querySelectorAll("button").find(b => b.dataset.write === "true")
@@ -248,6 +253,7 @@ async function batchScenario(scenario, openPane) {
     assert.deepEqual(word.writes, [["五日", "十个工作日"]]);
     nodes = await reopen();
     expectLocked("days", /已写入/);
+    for (const id of ["legacy", "previous-paragraph"]) expectLocked(id, /需核对/);
     for (const id of ["party", "copy", "must"]) {
       assert.match(row(id).text, /未执行/);
       assert.equal(row(id).choice.disabled, false);
@@ -266,6 +272,11 @@ async function batchScenario(scenario, openPane) {
     assert.equal(cell.current, "保留原件。");
     assert.deepEqual(cell.revisions, [["Deleted", "纸本", "乙"], ["Added", "原件", "乙"]]);
     assert.deepEqual(word.writes, [["五日", "十个工作日"], ["须", "应"], ["甲方", "乙方"], ["纸本", "原件"]]);
+    // After Word saves, the rebuilt document no longer contains the replaced phrase.
+    items[2] = {id: "copy", from: "纸本", to: "原件", status: "needs-relocation", n: 2};
+    nodes = await reopen();
+    expectLocked("copy", /已写入/);
+    assert.equal(row("copy").location, "写入位置 · 表 1，第 1 行，第 2 列");
     return;
   }
   assert.equal(body.current, "须在十个工作日内通知乙方。", nodes.status.textContent);

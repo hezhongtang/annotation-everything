@@ -263,7 +263,14 @@
       for (const item of items) {
         const entry = document.createElement("li");
         const location = document.createElement("strong");
-        location.textContent = item.status === "needs-relocation" ? "需重新定位 · 第 " + (item.n + 1) + " 段" : describe(item);
+        const op = binding.operations?.get(item.id);
+        if (op?.status === "written") {
+          location.textContent = "写入位置 · " + describe(op.item);
+        } else if (item.status === "needs-relocation") {
+          location.textContent = "需重新定位 · 第 " + (item.n + 1) + " 段";
+        } else {
+          location.textContent = describe(item);
+        }
         const text = document.createElement("p");
         text.textContent = item.from + " → " + item.to;
         const button = document.createElement("button");
@@ -272,7 +279,6 @@
         button.dataset.id = item.id;
         button.dataset.write = "true";
         button.addEventListener("click", () => run(() => apply(item)));
-        const op = binding.operations?.get(item.id);
         const label = document.createElement("label");
         const input = document.createElement("input");
         input.type = "checkbox";

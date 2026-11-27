@@ -211,9 +211,15 @@
     const results = new Map();
     for (const op of operations) {
       if (!op.plan || op.status === "unexecuted") continue;
-      const group = groups.get(op.plan.paragraphKey) || [];
+      if (!op.item.paraId) {
+        results.set(op.id, {status: "unknown", after: null});
+        continue;
+      }
+      // Older operations may refer to a different paragraph at the same body or table position.
+      const key = JSON.stringify([op.item.paraId, op.plan.paragraphKey]);
+      const group = groups.get(key) || [];
       group.push(op);
-      groups.set(op.plan.paragraphKey, group);
+      groups.set(key, group);
     }
     for (const group of groups.values()) {
       await checkDocument();
