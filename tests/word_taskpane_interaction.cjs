@@ -14,7 +14,7 @@ class DOMParser {
     const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     const pkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
     function node(localName, children = [], attrs = {}, namespaceURI = w) {
-      const result = {localName, namespaceURI, textContent: "", getAttributeNS: (_ns, key) => attrs[key],
+      const result = {localName, namespaceURI, children, textContent: "", getAttributeNS: (_ns, key) => attrs[key],
         getElementsByTagNameNS(ns, name) {
           return children.flatMap(c => [
             ...((ns === "*" || ns === c.namespaceURI) && (name === "*" || name === c.localName) ? [c] : []),
@@ -25,14 +25,21 @@ class DOMParser {
       children.forEach(c => { c.parentElement = result; });
       return result;
     }
-    const {runs: segments, paraId} = JSON.parse(json);
+    const pkgPart = (name, blocks) => node("part", [node("document", [node("body", blocks)])], {name}, pkg);
+    const {runs: segments, paraId, layout} = JSON.parse(json);
+    if (layout) {
+      const paragraph = id => node("p", [], {paraId: id});
+      const blocks = layout.map(block => Array.isArray(block) ? node("tbl", block.map(row =>
+        node("tr", row.map(id => node("tc", [paragraph(id)]))))) : paragraph(block));
+      return node("package", [pkgPart("/word/header1.xml", [paragraph("1A000001")]), pkgPart("/word/document.xml", blocks)], {}, pkg);
+    }
     const runs = segments.map(({type, text, author}) => {
       const value = node(type === "Deleted" ? "delText" : "t");
       value.textContent = text;
       const run = node("r", [value]);
       return !type ? run : node(type === "Deleted" ? "del" : "ins", [run], {author, date: "2026-11-27"});
     });
-    return node("package", [node("part", [node("body", [node("p", runs, {paraId})])], {name: "/word/document.xml"}, pkg)], {}, pkg);
+    return node("package", [pkgPart("/word/document.xml", [node("p", runs, {paraId})])], {}, pkg);
   }
 }
 
@@ -87,8 +94,9 @@ async function openPane(Word, fetch, files = {url: "/synthetic/A/contract.docx"}
   return nodes;
 }
 
-async function applyInWord({ incompleteCell = false, outsideOnly = false, fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false, liveParaId = suggestion.paraId }) {
+async function applyInWord({ incompleteCell = false, outsideOnly = false, fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false, liveParaId = suggestion.paraId, duplicateId = false, extraXmlParagraph = false }) {
   const item = {...suggestion, paragraph: (old ? "邮件" : "") + suggestion.paragraph, ...(table && {table: 0, row: 0, column: 1}), ...replacement};
+  if (table) delete item.bodyParagraph;
   const writes = [];
   const collection = items => ({items, load() {}});
   const prefix = [{text: "应于"}];
@@ -121,11 +129,12 @@ async function applyInWord({ incompleteCell = false, outsideOnly = false, fileCh
       relation: oldRelation, compareLocationWith: () => ({value: location})
     })};
   }
+  const start = {compareLocationWith: other => ({value: other === start ? "Equal" : "Before"})};
   const paragraph = {
     parentContentControlOrNullObject: outsideControl, parentTableCellOrNullObject: outsideControl,
-    getRange: () => ({
+    getRange: edge => edge === "Start" ? start : ({
       ...plainRange(projection(segments(), "Original"), projection(segments(), "Current")),
-      getOoxml: () => ({value: JSON.stringify({runs: segments(), paraId: liveParaId})}),
+      getOoxml: () => ({value: JSON.stringify({runs: segments(), paraId: "53B2FA15"})}),
       getRange: () => ({expandTo: () => plainRange("", projection(prefix, "Current"))}),
       search: () => collection([target])
     }),
@@ -142,11 +151,15 @@ async function applyInWord({ incompleteCell = false, outsideOnly = false, fileCh
     getSelection: () => wrongSelection ? {} : selected,
     changeTrackingMode: tracking, isReadOnly: readOnly, protectionType: protectedDoc ? "AllowOnlyReading" : "NoProtection", load() {},
     body: {
+      getOoxml: () => ({value: JSON.stringify({layout: [
+        ...(table ? [[["1B000010", liveParaId]]] : [liveParaId]), ...(duplicateId || extraXmlParagraph ? [liveParaId] : [])
+      ]})}),
       getTrackedChanges: () => collection(segments().filter(r => r.type).map(r =>
         nativeChange(r, outsideOnly && r.type === "Added" ? "Before" : "InsideStart"))
         .concat(nativeChange({type: "Added", text: "七日", author: "乙"}, "After"))),
-      tables: collection([{load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: outsideControl, getCell: () => ({body: {paragraphs: collection([paragraph])}})}]),
-      paragraphs: collection([paragraph]), getRange: () => ({getComments: () => collection(comments)})
+      tables: collection(table ? [{load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: outsideControl, getCell: () => ({body: {paragraphs: collection([paragraph])}})}] : []),
+      paragraphs: collection([...(table ? [{}, paragraph] : [paragraph]), ...(duplicateId ? [{}] : [])]),
+      getRange: () => ({getComments: () => collection(comments)})
     }
   }};
   const Word = {run: action => action(context)};
@@ -171,9 +184,33 @@ async function applyInWord({ incompleteCell = false, outsideOnly = false, fileCh
 }
 
 async function resubmitAfterReconnect() {
-  const paragraph = {n: 2, paraId: "1A000002", digest: "e".repeat(64), original: "五日", current: "五日", revisions: [],
-    threads: [{id: "T", content: "未勾选的讨论", authorName: "甲", range: {text: "日"}, resolved: false, replies: []}]};
-  const Word = {run: async () => [paragraph]};
+  const collection = items => ({items, load() {}});
+  const empty = {isNullObject: true, load() {}};
+  let bodyReads = 0;
+  function paragraph(text, comments = []) {
+    const start = {compareLocationWith: other => ({value: other === start ? "Equal" : "Before"})};
+    const range = {text, load() {return this;}, getReviewedText: () => ({value: text}),
+      getOoxml: () => ({value: JSON.stringify({runs: [{text}], paraId: "53B2FA15"})}),
+      intersectWith() {return this;}, getTrackedChanges: () => collection([]), getComments: () => collection(comments)};
+    return {getRange: edge => edge === "Start" ? start : range,
+      parentTableCellOrNullObject: empty, parentContentControlOrNullObject: empty};
+  }
+  const comment = {id: "T", content: "未勾选的讨论", authorName: "甲", replies: collection([]),
+    getRange: () => ({text: "日", load() {return this;}})};
+  const first = paragraph("五日", [comment]);
+  const outside = paragraph("仅在本机的未选文字");
+  const cell = paragraph("五日");
+  const table = {load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: empty,
+    getCell: () => ({body: {paragraphs: collection([cell])}})};
+  const context = {sync: async () => {}, document: {
+    getSelection: () => ({paragraphs: collection([first, cell])}),
+    body: {paragraphs: collection([first, outside, cell]), tables: collection([table]),
+      getOoxml() {
+        bodyReads++;
+        return {value: JSON.stringify({layout: ["1A000006", "1A000003", [["1A000001"]]]})};
+      }}
+  }};
+  const Word = {run: action => action(context)};
   const receiver = {state: "waiting", bindingId: "receiver-A", sessionId: "s", harness: "Codex"};
   const attempts = [];
   let lose = true;
@@ -203,7 +240,13 @@ async function resubmitAfterReconnect() {
   assert.equal(attempts.length, 3);
   assert.deepEqual(attempts[0], attempts[1], "Rebinding and recreating the preview retry the same approved selection.");
   assert.notEqual(attempts[2].submitId, attempts[0].submitId, "A new explicit submission after receipt has its own ID.");
-  for (const attempt of attempts) assert.deepEqual(attempt.paragraphs[0].threads, []);
+  assert.equal(bodyReads, 3, "One full body snapshot serves all selected paragraphs in each preview.");
+  for (const attempt of attempts) {
+    assert.deepEqual(attempt.paragraphs.map(p => [p.n, p.paraId, p.current, p.threads]), [
+      [0, "1A000006", "五日", []], [2, "1A000001", "五日", []]
+    ]);
+    assert.ok(!JSON.stringify(attempt).includes("仅在本机"));
+  }
 }
 
 (async () => {
@@ -216,6 +259,11 @@ async function resubmitAfterReconnect() {
   const protectedResult = await applyInWord({readOnly: true});
   assert.deepEqual(protectedResult.writes, [], "read-only Word must retain the suggestion");
   for (const table of [true, false]) {
+    for (const structure of [{duplicateId: true}, {extraXmlParagraph: true}]) {
+      const result = await applyInWord({table, ...structure});
+      assert.deepEqual(result.writes, [], "An ambiguous ID or differing Word paragraph count must stop the write.");
+      assert.match(result.status, /段落/);
+    }
     for (const liveParaId of ["1A00000F", null]) {
       const moved = await applyInWord({table, liveParaId, manual: true});
       assert.deepEqual(moved.writes, [], "An identical paragraph at the former index must never receive the edit.");

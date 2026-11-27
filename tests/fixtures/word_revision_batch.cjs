@@ -46,8 +46,9 @@ function revisionService(items, options = {}) {
   return {fetch};
 }
 
-function paragraph(initial, word, paraId) {
+function paragraph(initial, word) {
   let runs = [{text: initial}];
+  const paragraphStart = {compareLocationWith: other => ({value: other === paragraphStart ? "Equal" : "Before"})};
   function replace(start, end, text) {
     let offset = 0;
     for (const [index, run] of runs.entries()) {
@@ -92,9 +93,10 @@ function paragraph(initial, word, paraId) {
     parentContentControlOrNullObject: outsideControl, parentTableCellOrNullObject: outsideControl,
     get current() {return current(runs);},
     get revisions() {return runs.filter(r => r.type).map(r => [r.type, r.text, r.author]);},
-    getRange() {
+    getRange(edge) {
+      if (edge === "Start") return paragraphStart;
       const text = current(runs);
-      return {...range(0, text.length, original(runs), text), getOoxml: () => ({value: JSON.stringify({runs, paraId})}),
+      return {...range(0, text.length, original(runs), text), getOoxml: () => ({value: JSON.stringify({runs, paraId: "20407D75"})}),
         search(needle) {
           const found = [];
           for (let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length)) {
@@ -125,8 +127,8 @@ function paragraph(initial, word, paraId) {
 
 async function batchScenario(scenario, openPane) {
   const word = {writes: []};
-  const body = paragraph("须在五日内通知甲方。", word, "1A000001");
-  const cell = paragraph("保留纸本。", word, "1A000002");
+  const body = paragraph("须在五日内通知甲方。", word);
+  const cell = paragraph("保留纸本。", word);
   const items = [
     {id: "days", from: "五日", to: "十个工作日", paragraph: body.current, bodyParagraph: 0, paraId: "1A000001"},
     {id: "party", from: "甲方", to: "乙方", paragraph: body.current, bodyParagraph: 0, paraId: "1A000001"},
@@ -141,7 +143,8 @@ async function batchScenario(scenario, openPane) {
   };
   const context = {sync: async () => {}, document: {load() {}, changeTrackingMode: "TrackAll", isReadOnly: false,
     protectionType: "NoProtection", getSelection: () => word.selection,
-    body: {paragraphs: collection([body]), tables: collection([table]), getRange: () => ({getComments: () => collection([])})}
+    body: {paragraphs: collection([body, {}, cell]), tables: collection([table]), getRange: () => ({getComments: () => collection([])}),
+      getOoxml: () => ({value: JSON.stringify({layout: ["1A000001", [["1A000003", "1A000002"]]]})})}
   }};
   const Word = {run: action => action(context)};
   const options = {};

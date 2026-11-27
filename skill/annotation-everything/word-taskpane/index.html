@@ -316,26 +316,23 @@
       });
     });
 
-    async function targetParagraph(context, item) {
-      const body = context.document.body;
+    async function targetParagraph(context, item, structure) {
+      structure = structure || await readWordStructure(context);
+      const n = structure.unique.get(item.paraId);
+      const where = Number.isInteger(n) && structure.locations[n];
+      if (!where || ["bodyParagraph", "table", "row", "column"].some(k => where[k] !== item[k]))
+        throw new Error("原段落标识已改变或无法核对，请在 Word 原页处理。");
+      const paragraph = structure.paragraphs[n];
       if (!Number.isInteger(item.table)) {
-        const paragraphs = body.paragraphs;
-        paragraphs.load("items");
-        await context.sync();
-        const paragraph = paragraphs.items[item.bodyParagraph];
-        if (!paragraph) throw new Error("原定位的正文段落已不存在。");
         const cell = paragraph.parentTableCellOrNullObject;
         const control = paragraph.parentContentControlOrNullObject;
         cell.load("$none");
         control.load("$none");
         await context.sync();
         if (!cell.isNullObject || !control.isNullObject) throw new Error("原正文位置已变为表格或内容控件。");
-        return verifyParagraphId(context, paragraph, item);
+        return paragraph;
       }
-      const tables = body.tables;
-      tables.load("items");
-      await context.sync();
-      const table = tables.items[item.table];
+      const table = structure.tables[item.table];
       if (!table) throw new Error("原定位的表格已不存在。");
       table.load("isUniform,nestingLevel");
       const tableControl = table.parentContentControlOrNullObject;
@@ -345,19 +342,12 @@
       await context.sync();
       if (paragraphs.items.length !== 1) throw new Error("目标单元格的段落结构已改变。");
       const control = paragraphs.items[0].parentContentControlOrNullObject;
+      const relation = paragraphs.items[0].getRange("Start").compareLocationWith(paragraph.getRange("Start"));
       control.load("$none");
       await context.sync();
-      if (!table.isUniform || table.nestingLevel !== 1 || !tableControl.isNullObject || !control.isNullObject)
+      if (!table.isUniform || table.nestingLevel !== 1 || !tableControl.isNullObject || !control.isNullObject || relation.value !== "Equal")
         throw new Error("目标表格含不支持的结构。");
-      return verifyParagraphId(context, paragraphs.items[0], item);
-    }
-
-    async function verifyParagraphId(context, paragraph, item) {
-      const raw = paragraph.getRange("Content").getOoxml();
-      await context.sync();
-      if (!item.paraId || wordRangeParagraphId(raw.value) !== item.paraId)
-        throw new Error("原段落标识已改变或无法核对，请在 Word 原页处理。");
-      return paragraph;
+      return paragraphs.items[0];
     }
 
     // Queue all three observations together so that Word uses the same range.

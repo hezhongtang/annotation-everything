@@ -14,16 +14,50 @@ function clearWordPreview() {
   byId("word-submit").hidden = true;
 }
 
-// Read only word/document.xml from the selected range's Flat OPC. The package never leaves Word.
-function wordRangeParagraphId(xml) {
+// A copied range gets a fresh paragraph ID on Mac. Only the full body's main part preserves identity.
+async function readWordStructure(context) {
+  const body = context.document.body;
+  const raw = body.getOoxml();
+  const paragraphs = body.paragraphs;
+  const tables = body.tables;
+  paragraphs.load("items/$none");
+  tables.load("items/$none");
+  await context.sync();
   const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
   const pkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
   const w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
-  const doc = new DOMParser().parseFromString(xml, "application/xml");
-  const main = Array.from(doc.getElementsByTagNameNS(pkg, "part")).filter(el => el.getAttributeNS(pkg, "name") === "/word/document.xml");
-  const paragraphs = main.length === 1 && main[0].getElementsByTagNameNS(w, "body")[0]?.getElementsByTagNameNS(w, "p");
-  const id = paragraphs?.length === 1 && paragraphs[0].getAttributeNS(w14, "paraId");
-  return id && /^[0-9a-f]{8}$/i.test(id) && id !== "00000000" ? id.toUpperCase() : null;
+  const children = (el, name) => Array.from(el.children).filter(c => c.namespaceURI === w && c.localName === name);
+  const requireStructure = ok => { if (!ok) throw new Error("无法核对 Word 全文中的段落与表格顺序，请在原页处理。"); };
+  const doc = new DOMParser().parseFromString(raw.value, "application/xml");
+  const parts = Array.from(doc.getElementsByTagNameNS(pkg, "part")).filter(p => p.getAttributeNS(pkg, "name") === "/word/document.xml");
+  requireStructure(parts.length === 1);
+  const main = parts[0].getElementsByTagNameNS(w, "document");
+  requireStructure(main.length === 1);
+  const bodies = children(main[0], "body");
+  requireStructure(bodies.length === 1);
+  const root = bodies[0];
+  const ordered = Array.from(root.getElementsByTagNameNS(w, "p"));
+  const xmlTables = children(root, "tbl");
+  requireStructure(ordered.length === paragraphs.items.length && xmlTables.length === tables.items.length &&
+    root.getElementsByTagNameNS(w, "tbl").length === xmlTables.length);
+  const coordinates = new Map(children(root, "p").map(p => [p, {}]));
+  xmlTables.forEach((table, t) => {
+    const irregular = ["gridSpan", "vMerge", "hMerge", "gridBefore", "gridAfter"].some(k => table.getElementsByTagNameNS(w, k).length);
+    children(table, "tr").forEach((row, r) => children(row, "tc").forEach((cell, c) => {
+      const inside = children(cell, "p");
+      for (const p of inside) coordinates.set(p, irregular || inside.length !== 1 ? null : {table: t, row: r, column: c});
+    }));
+  });
+  requireStructure(ordered.every(p => coordinates.has(p)));
+  const unique = new Map();
+  const locations = ordered.map((p, n) => {
+    const id = (p.getAttributeNS(w14, "paraId") || "").toUpperCase();
+    const where = coordinates.get(p);
+    const location = where && {paraId: id, ...(where.table === undefined ? {bodyParagraph: n} : where)};
+    if (/^[0-9A-F]{8}$/.test(id) && id !== "00000000") unique.set(id, unique.has(id) ? null : n);
+    return location;
+  });
+  return {paragraphs: paragraphs.items, tables: tables.items, locations, unique};
 }
 
 function xmlPassage(xml, strict = false) {
@@ -71,18 +105,16 @@ function xmlPassage(xml, strict = false) {
 
 async function captureWordSelection(context) {
   const selection = context.document.getSelection();
-  const all = context.document.body.paragraphs;
   const chosen = selection.paragraphs;
-  all.load("items/$none");
   chosen.load("items/$none");
-  await context.sync();
+  const structure = await readWordStructure(context);
   if (!chosen.items.length || chosen.items.length > 32) throw new Error("一次请选择 1 至 32 段。");
   const result = [];
   for (const p of chosen.items) {
     const whole = p.getRange("Content");
     const range = whole.intersectWith(selection);
     const start = p.getRange("Start");
-    const locations = all.items.map(x => x.getRange("Start").compareLocationWith(start));
+    const locations = structure.paragraphs.map(x => x.getRange("Start").compareLocationWith(start));
     const readSelected = readText(range);
     const readWhole = readText(whole);
     const xml = range.getOoxml();
@@ -91,7 +123,10 @@ async function captureWordSelection(context) {
     changes.load("items/type,items/text,items/author,items/date");
     await context.sync();
     const n = locations.findIndex(r => r.value === "Equal");
-    if (n < 0) throw new Error("选区不属于可定位的正文。");
+    if (n < 0 || locations.filter(r => r.value === "Equal").length !== 1 || !structure.locations[n])
+      throw new Error("选区不属于可定位的正文或普通单元格。");
+    const where = structure.locations[n];
+    await targetParagraph(context, where, structure);
     const live = [];
     for (const change of changes.items) {
       const target = change.getRange();
@@ -105,7 +140,7 @@ async function captureWordSelection(context) {
     const passage = selectedPassage(readSelected(), xmlPassage(xml.value), live);
     if (!passage.original && !passage.current && !passage.revisions.length) continue;
     const full = selectedPassage(readWhole(), xmlPassage(fullXml.value), live);
-    result.push({n, paraId: wordRangeParagraphId(fullXml.value), digest: await documentKey(full.current),
+    result.push({n, paraId: where.paraId, digest: await documentKey(full.current),
       ...passage, threads: await window.aeWordComments.readThreads(context, range)});
   }
   if (!result.length) throw new Error("请先在 Word 中选中要送审的文字。");
@@ -147,6 +182,7 @@ function showWordPreview(paragraphs) {
 }
 
 byId("word-preview").addEventListener("click", () => run(async () => {
+  clearWordPreview();
   await refreshConnection();
   const paragraphs = await Word.run(captureWordSelection);
   await checkDocument();
