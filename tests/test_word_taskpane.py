@@ -180,7 +180,7 @@ class TaskpaneTests(unittest.TestCase):
                 {
                     "id": "t1",
                     "authorName": "乙",
-                    "creationDate": "",
+                    "creationDate": None,
                     "content": "五日够吗？",
                     "range": {"text": "五日"},
                     "resolved": False,
