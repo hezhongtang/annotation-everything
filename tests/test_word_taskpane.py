@@ -223,4 +223,5 @@ class TaskpaneTests(unittest.TestCase):
         connection.request("GET", "/index.html?_host_Info=Word%24Mac")
         response = connection.getresponse()
         self.assertEqual(response.status, 200)
+        self.assertEqual(response.getheader("Referrer-Policy"), "same-origin")
         self.assertIn(b"appsforoffice.microsoft.com", response.read())
