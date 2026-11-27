@@ -2246,7 +2246,7 @@ SNAP_MAX = 50 * 1024 * 1024
 def snapshot(d: Path, item: dict[str, Any], label: str) -> Path | None:
     """两段批次：把报告与讲稿源文件存进审阅目录 .snapshots/batch-N/<label>/（仅本机、目录 0700、文件 0600）。
     单段批次不存。读不到源文件、遇到符号链接或其他错误只警告，不影响批次状态（批次已经接收 / 收尾了）。"""
-    if "videoSubmission" in item or not store.two_stage(item):
+    if "wordSubmission" in item or "videoSubmission" in item or not store.two_stage(item):
         return None
     try:
         return _snapshot(d, int(item["seq"]), label)
@@ -2465,7 +2465,7 @@ def claim_next(
         # 先决定全局队首；阶段与事件参数只能限制能否领取，不能改变排队顺序。
         batches = [item for item in store.handoff_load(d)["items"] if item.get("status") in store.CLAIM_STATUSES["any"]]
         batch = None
-        for candidate in batches:
+        for candidate in store.receiver_batches(d, batches):
             if batch is None or not _submitted_before(batch, candidate):
                 batch = candidate
         rounds = analysis_store.queue(d)
@@ -2871,6 +2871,7 @@ def wait(
                         return 2
                 try:
                     doc = store.handoff_load(d)
+                    doc["items"] = store.receiver_batches(d, doc["items"])
                 except (OSError, ValueError):
                     doc = {"items": []}
             if claim and mark is not None and binding:
@@ -2928,6 +2929,13 @@ def wait(
         for sig, h in old_handlers.items():
             with contextlib.suppress(ValueError, OSError):
                 signal.signal(sig, h)
+    if "wordSubmission" in item:
+        if not claim:
+            print(json.dumps({"batch": item["seq"], "status": item["status"]}))
+            return 0
+        print(json.dumps(handoff_claim_payload(d, item), ensure_ascii=False))
+        print("Return suggestions with word_context.py return REVIEW --batch N --input suggestions.json")
+        return 0
     manifest = load_manifest(d)
     _refuse_newer_format(manifest)
     try:
