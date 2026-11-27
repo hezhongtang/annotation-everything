@@ -590,6 +590,7 @@ HANDOFF_ERROR_KEYS: dict[str, str] = {
     "final-forbidden": "cli.hand.error.finalForbidden",
     "subagents-forbidden": "cli.hand.error.subagentsForbidden",
     "review-not-claimed": "cli.hand.error.reviewNotClaimed",
+    "word-return-required": "cli.hand.error.wordReturnRequired",
     "already-done": "cli.hand.error.alreadyDone",
     "note-in-flight": "cli.hand.error.noteInFlight",
     "note-not-open": "cli.hand.error.noteNotOpen",

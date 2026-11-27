@@ -1289,7 +1289,7 @@ def _publish_video_commit(review_dir: Path, journal: Path, changes: dict) -> Non
 def _commit_video_pair(review_dir: Path, notes: dict, handoff: dict, note_event: dict, batch_event: dict) -> None:
     now = now_iso()
     notes.update(rev=notes["rev"] + 1, updatedAt=now, version=SCHEMA_VERSION)
-    handoff.update(version=1, updatedAt=now, items=handoff["items"][-HANDOFF_KEEP:])
+    handoff.update(version=1, updatedAt=now, items=_retained_handoffs(handoff["items"]))
     changes = {
         "reviewId": ledger.read_manifest(review_dir).get("reviewId"),
         NOTES_FILE: notes,
@@ -2121,10 +2121,30 @@ def handoff_load(review_dir: Path) -> dict[str, Any]:
     return doc
 
 
+def _word_awaits_receipt(batch: dict) -> bool:
+    # Earlier versions left the receipt flag on recalled batches.
+    return batch.get("wordAwaitingReceipt") is True and batch.get("status") != "void"
+
+
+def _retained_handoffs(items: list[dict]) -> list[dict]:
+    """Keep older Word work accessible until its receiver and reviewer have finished with it."""
+    older = [
+        batch
+        for batch in items[:-HANDOFF_KEEP]
+        if "wordSubmission" in batch
+        and (
+            batch["status"] in {"pending", "claimed"}
+            or _word_awaits_receipt(batch)
+            or any(item.get("status") != "withdrawn" for item in batch.get("wordSuggestions", []))
+        )
+    ]
+    return older + items[-HANDOFF_KEEP:]
+
+
 def _handoff_commit(review_dir: Path, doc: dict[str, Any], log: dict[str, Any]) -> dict[str, Any]:
     doc["version"] = 1
     doc["updatedAt"] = now_iso()
-    doc["items"] = doc["items"][-HANDOFF_KEEP:]
+    doc["items"] = _retained_handoffs(doc["items"])
     _atomic_write(review_dir / HANDOFF_FILE, _dumps(doc, indent=2) + "\n")
     _append_log(review_dir, {"ts": doc["updatedAt"], **log})
     return doc
@@ -2306,6 +2326,12 @@ def _in_flight_ids(items: list[dict[str, Any]], notes: list[dict[str, Any]]) -> 
     }
 
 
+def _word_batch_summary(item: dict[str, Any]) -> dict[str, Any]:
+    """The shared review history needs only the Word handoff's identity, status and timestamps."""
+    fields = ("seq", "status", "at", "by", "openCount", "claimedAt", "claimedBy", "doneAt", "doneBy", "withdrawnAt")
+    return {key: item[key] for key in fields if key in item}
+
+
 def handoff_state(
     review_dir: Path,
     *,
@@ -2343,6 +2369,9 @@ def handoff_state(
     # 新的在前；pos 是批次在 items 里的位置，下一批（pos + 1）的接收时间是时间窗上界（同 _next_start）
     for pos in range(last, (0 if full else max(last, 0)) - 1, -1):
         it = items[pos]
+        if "wordSubmission" in it:
+            history.append(_word_batch_summary(it))
+            continue
         next_start = items[pos + 1].get("claimedAt") if pos < last else None
         h = {k: v for k, v in it.items() if k not in ("openIds", "videoSubmission")}
         h["userMessage"] = handoff_user_message(it)
@@ -2366,7 +2395,9 @@ def handoff_state(
         "inFlightIds": sorted(in_flight_set),
         # 在途与停在待复核的批次及用户要求（show / 接手中断的代理据此知道要做到哪一步、能不能派子代理）
         "open": [
-            {
+            _word_batch_summary(i)
+            if "wordSubmission" in i
+            else {
                 **{k: i.get(k) for k in ("seq", "status", "target", "allowSubagents", "fullCheck", "message")},
                 "userMessage": handoff_user_message(i),
             }
@@ -2449,6 +2480,7 @@ def handoff_submit(
     validate_submission: Callable[[dict], None] | None = None,
     note_ids: list[str] | None = None,
     submit_id: str | None = None,
+    word_submission: dict | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
@@ -2473,13 +2505,45 @@ def handoff_submit(
         items = doc["items"]
         manifest = ledger.read_manifest(review_dir)
         video = manifest.get("video") if _is_video_review(manifest) else None
-        existing = next((i for i in items if submit_id is not None and i.get("submitId") == submit_id), None)
+        existing = next(
+            (
+                i
+                for i in items
+                if submit_id is not None and (i.get("submitId") == submit_id or submit_id in i.get("wordRetryIds", []))
+            ),
+            None,
+        )
+        if existing is not None and (word_submission is not None or "wordSubmission" in existing):
+            if existing.get("wordSubmission") != word_submission:
+                raise HandoffError("送审标识已用于其他选区", code="word-submission-changed")
+            return doc, existing, True
+        if word_submission is not None:
+            # A recreated pane may have lost the response as well as its in-memory request ID.
+            # Only an identical, still-unacknowledged submission to this receiver is a retry.
+            previous = next(
+                (i for i in reversed(items) if _word_awaits_receipt(i) and i.get("wordSubmission") == word_submission),
+                None,
+            )
+            if previous is not None:
+                # A delayed retry with this ID still belongs to the same batch after an ACK or recall.
+                if submit_id is not None:
+                    previous.setdefault("wordRetryIds", []).append(submit_id)
+                    _handoff_commit(review_dir, doc, {"op": "word-retry", "seq": previous["seq"]})
+                return doc, previous, True
         if existing is not None and (video is not None or existing.get("status") != "pending"):
             return doc, existing, True
         if validate_submission is not None:
             validate_submission(manifest)
         latest = items[-1] if items else None
-        merge_into = latest if video is None and latest and latest.get("status") == "pending" else None
+        merge_into = (
+            latest
+            if video is None
+            and word_submission is None
+            and latest
+            and "wordSubmission" not in latest
+            and latest.get("status") == "pending"
+            else None
+        )
         if video is not None:
             target = "review"
             pending = _in_flight_ids(items, notes)
@@ -2505,8 +2569,18 @@ def handoff_submit(
             "allowSubagents": bool(allow_subagents),
             "fullCheck": full_check_value,
             "alwaysSkills": always_skills(review_dir),
-            **(_selected_snapshot(notes, note_ids) if note_ids is not None else _open_snapshot(notes)),
+            **(
+                _open_snapshot([])
+                if word_submission is not None
+                else _selected_snapshot(notes, note_ids)
+                if note_ids is not None
+                else _open_snapshot(notes)
+            ),
         }
+        if word_submission is not None:
+            snap["wordSubmission"] = word_submission
+            snap["wordAwaitingReceipt"] = True
+            snap["selected"] = True
         if video is not None:
             by_id = {n["id"]: n for n in notes}
             snap["videoSubmission"] = {
@@ -2646,6 +2720,20 @@ def _can_resume_video_repair(review_dir: Path, item: dict) -> bool:
     return True
 
 
+def receiver_batches(review_dir, items):
+    """A Word selection was submitted to the specific receiver shown in its pane."""
+    if not any("wordSubmission" in item for item in items):
+        return items
+    import wakeup
+
+    receiver = (wakeup.load_binding(review_dir) or {}).get("bindingId")
+    return [
+        item
+        for item in items
+        if "wordSubmission" not in item or (receiver and item["wordSubmission"].get("bindingId") == receiver)
+    ]
+
+
 def handoff_claim(
     review_dir: Path,
     *,
@@ -2666,7 +2754,12 @@ def handoff_claim(
         if _legacy_video_stages(doc) and _is_video_review(ledger.read_manifest(review_dir)):
             _restore_legacy_video_stages(review_dir, doc)
         item = next(
-            (i for i in doc["items"] if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)), None
+            (
+                i
+                for i in receiver_batches(review_dir, doc["items"])
+                if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)
+            ),
+            None,
         )
         if item is None:
             return None
@@ -2744,12 +2837,18 @@ def handoff_done(
             item = active[0] if active else next((i for i in reversed(items) if i.get("status") == "pending"), None)
             if item is None:
                 raise NotFound("没有待处理的提交")
+        n_seq = int(item["seq"])
+        if "wordSubmission" in item:
+            raise HandoffError(
+                f"第 {n_seq} 批由绑定接收方领取后用 word_context.py return 交回建议。无建议时输入空数组 []。",
+                code="word-return-required",
+                seq=n_seq,
+            )
         status = item.get("status")
         if is_video and status == "claimed":
             _video_claim_receiver(review_dir, item)
         ndoc = load(review_dir) if is_video else _load_notes_or_none(review_dir)
         notes = ndoc["notes"] if ndoc else None
-        n_seq = int(item["seq"])
         mine = [n for n in notes or [] if n.get("status") == "drafted" and n.get("draftBatch") == n_seq]
         document_drafts = [n for n in mine if not _is_video_review(manifest, n)]
         changed = False

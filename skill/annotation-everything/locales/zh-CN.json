@@ -1295,6 +1295,7 @@
     "cli.hand.error.finalForbidden": "用户要求第 {seq} 批做到「已初改·待复核」为止：不能直接定稿（用户可在页面上定稿）",
     "cli.hand.error.subagentsForbidden": "第 {seq} 批由你直接处理到定稿（用户没有允许派发子代理）：直接 notes.py done",
     "cli.hand.error.reviewNotClaimed": "第 {seq} 批在等复核：要复核先 notes.py claim --stage review（或用户在页面请求复核）；要直接定稿由用户在页面上点「直接定稿」",
+    "cli.hand.error.wordReturnRequired": "第 {seq} 批由绑定接收方领取后用 word_context.py return 交回建议。无建议时输入空数组 []。",
     "cli.hand.error.alreadyDone": "第 {seq} 批已经定稿了",
     "cli.hand.error.batchState": "第 {seq} 批（{status}）",
     "cli.hand.error.noReviewBatch": "没有对应的复核批次",

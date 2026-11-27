@@ -7,6 +7,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -191,6 +192,24 @@ class WritebackTests(unittest.TestCase):
     def test_ambiguous_text_is_refused_without_offsets(self):
         self.document(para("乙乙"))
         self.assert_refused("ambiguous")
+
+    def test_cli_ambiguous_quote_is_localized_and_explicit_offsets_select_one_match(self):
+        self.document(para("乙乙"))
+        command = [sys.executable, de.__file__]
+        replace = [*command, "replace", str(self.review), "--paragraph", "0", "--from", "乙", "--to", "新"]
+        for locale, message in (("zh-CN", "无法唯一定位"), ("en", "Several paragraphs or text ranges match")):
+            with self.subTest(locale=locale):
+                run = subprocess.run([*replace, "--locale", locale], capture_output=True, text=True, timeout=10)
+                self.assertEqual(run.returncode, 2, run.stderr)
+                self.assertIn(message, run.stderr)
+                self.assertEqual(self.source.read_bytes(), self.original)
+        located = self.note(full="乙乙", start=1, end=2)
+        run = subprocess.run(
+            [*command, "apply", str(self.review), "--id", located, "--json"], capture_output=True, text=True, timeout=10
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["ids"], [located])
+        self.assertEqual(ET.fromstring(member(self.source.read_bytes())).find(".//" + dr.W + "t").text, "乙新")
 
     def test_selection_with_collapsed_whitespace_does_not_edit_another_exact_match(self):
         self.document(para("甲 乙；甲  乙"))

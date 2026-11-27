@@ -56,8 +56,16 @@ class EditError(ValueError):
 
 class SelectionError(EditError):
     def __init__(self, errors: list[EditError]):
-        self.errors = errors
         super().__init__("selection")
+        self.errors = errors
+
+
+class AmbiguousText(EditError):
+    """The source paragraph is verified but contains more than one matching range."""
+
+    def __init__(self, paragraph: Paragraph):
+        super().__init__("ambiguous")
+        self.paragraph = paragraph
 
 
 @dataclass
@@ -215,7 +223,7 @@ def _matches(text: str, before: str) -> list[tuple[int, int]]:
     return out
 
 
-def _locate(paras: list[Paragraph], edit: dict, restrictions: dict[int, set[str]]) -> tuple[Paragraph, int, int]:
+def locate_edit(paras: list[Paragraph], edit: dict, restrictions: dict[int, set[str]]) -> tuple[Paragraph, int, int]:
     anchor = edit.get("anchor")
     if anchor is not None:
         if not dr.usable_anchor(anchor) or anchor.get("changed"):
@@ -258,8 +266,10 @@ def _locate(paras: list[Paragraph], edit: dict, restrictions: dict[int, set[str]
         matches = [preferred]
     else:
         matches = _matches(p.text, edit["from"])
-    if len(matches) != 1:
-        raise EditError("ambiguous" if matches else "notFound")
+    if len(matches) > 1:
+        raise AmbiguousText(p)
+    if not matches:
+        raise EditError("notFound")
     start, end = matches[0]
     # 非 w:t 字符（制表符、符号等）和换行结构不在本次字节修改能力内。
     covered = sum(max(0, min(end, t.offset + len(t.text)) - max(start, t.offset)) for t in p.elements)
@@ -277,7 +287,7 @@ def edit_document(raw: bytes, edits: list[dict], restrictions: dict[int, set[str
             if not isinstance(edit.get("from"), str) or not isinstance(edit.get("to"), str):
                 raise EditError("arguments")
             _xml_text(edit["to"])
-            p, start, end = _locate(paras, edit, restrictions)
+            p, start, end = locate_edit(paras, edit, restrictions)
             previous = grouped.setdefault(p.n, [])
             if any(start < b and a < end for a, b, _text, _id in previous):
                 raise EditError("overlap")
@@ -350,7 +360,7 @@ def _package_parts(zf: zipfile.ZipFile) -> tuple[str, str, str]:
     return main, settings, styles
 
 
-def _gates(zf: zipfile.ZipFile, allow_untracked: bool) -> tuple[str, bytes, dict[int, set[str]], bool]:
+def inspect_package(zf: zipfile.ZipFile, allow_untracked: bool) -> tuple[str, bytes, dict[int, set[str]], bool]:
     infos = zf.infolist()
     names = zf.namelist()
     if len(set(names)) != len(names) or any(i.flag_bits & 1 for i in infos):
@@ -532,6 +542,25 @@ def _backup(review: Path, batch: int, raw: bytes, *, writeback: str, suffix: str
     return Path(name)
 
 
+def annotation_edit(note: dict) -> dict:
+    """Return an eligible pending DOCX edit, shared by disk writeback and the Word preview."""
+    nid, ed, anchor = note["id"], note.get("edit") or {}, note.get("docx")
+    if (
+        note.get("status", "open") != "open"
+        or note.get("orphan")
+        or note.get("hold")
+        or ed.get("op") not in ("delete", "replace")
+        or note.get("quoteFrom", "报告") != "报告"
+        or note.get("target", "报告") not in ("报告", "报告和讲稿")
+        or not isinstance(ed.get("from"), str)
+        or not ed.get("from")
+    ):
+        raise EditError("note", item=nid)
+    if not dr.usable_anchor(anchor):
+        raise EditError("anchor", item=nid)
+    return {"id": nid, "anchor": anchor, "from": ed["from"], "to": "" if ed["op"] == "delete" else ed.get("to", "")}
+
+
 def _selection(review: Path, batch: int | None, ids: list[str] | None) -> list[dict]:
     doc = store.load(review)
     if batch is not None:
@@ -548,24 +577,10 @@ def _selection(review: Path, batch: int | None, ids: list[str] | None) -> list[d
             continue
         if batch is not None and (note.get("status") == "resolved" or not note.get("edit")):
             continue
-        ed, a = note.get("edit") or {}, note.get("docx")
-        if (
-            note.get("status", "open") != "open"
-            or note.get("orphan")
-            or note.get("hold")
-            or ed.get("op") not in ("delete", "replace")
-            or note.get("quoteFrom", "报告") != "报告"
-            or note.get("target", "报告") not in ("报告", "报告和讲稿")
-            or not isinstance(ed.get("from"), str)
-            or not ed.get("from")
-        ):
-            errors.append(EditError("note", item=nid))
-        elif not dr.usable_anchor(a):
-            errors.append(EditError("anchor", item=nid))
-        else:
-            selected.append(
-                {"id": nid, "anchor": a, "from": ed["from"], "to": "" if ed["op"] == "delete" else ed.get("to", "")}
-            )
+        try:
+            selected.append(annotation_edit(note))
+        except EditError as exc:
+            errors.append(exc)
     if errors:
         raise SelectionError(errors)
     return selected
@@ -612,7 +627,7 @@ def writeback(
         if stale:
             raise SelectionError(stale)
         with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-            main, xml, restrictions, tracked = _gates(zf, allow_untracked)
+            main, xml, restrictions, tracked = inspect_package(zf, allow_untracked)
         document, expected = edit_document(xml, edits, restrictions)
         packed = repack(raw, main, document)
         destination = Path(output).absolute() if output else source

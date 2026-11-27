@@ -507,6 +507,17 @@ def prompt(binding, event, seq, message_id):
             "(conflicting conclusions between analyses). Do not rewrite annotation text or restore resolved "
             "status as part of this check. Do not revise a previously processed draft automatically.\n"
         )
+    if "wordSubmission" in item:
+        respond = fsutil.join_cli([py, str(scripts / "word_context.py"), "return", str(review), "--batch", str(seq)])
+        return (
+            "The reviewer has submitted selected Word passages and threads for suggestions.\n"
+            f"Event metadata: {metadata}\nFirst acknowledge receipt: {ack}\nThen claim this exact batch: {claim}\n"
+            f"{queue_hint}Use only wordSubmission.paragraphs in the claim. Preserve uncertain attribution. "
+            "Quote the selected discussion where relevant. Draft a JSON array of {n,from,to,reason}. "
+            "For insertion set from to an empty string and edge to Start or End of the selected text. "
+            f"Return the array with {respond} --input FILE.json. The reviewer controls all Word changes.\n"
+            f"Delivery marker: ae:{binding['reviewId']}:{event}:{seq}:{message_id}"
+        )
     if is_video:
         receipt_cmd = fsutil.join_cli(
             [
@@ -584,6 +595,8 @@ def deliver(review, event, seq, *, expected_binding=_ANY_BINDING):
         items = finder(review) if finder else store.handoff_load(review)["items"]
         target = next((x for x in items if x.get("seq") == seq), None)
         expected = entry["awaiting"]
+        if target and "wordSubmission" in target and target["wordSubmission"].get("bindingId") != binding["bindingId"]:
+            return {"state": "skipped", "reason": "word-receiver-changed"}
         if not target or target.get("status") != expected:
             return {"state": "skipped", "reason": "batch-not-awaiting-receipt"}
         previous = _deliveries(review)["items"].get(key, {})

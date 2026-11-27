@@ -1,0 +1,301 @@
+<script>
+"use strict";
+
+let wordPreview = null;
+// A disconnected preview retains only the digest of its approved payload and the request ID.
+const unconfirmedWordKeys = new Map();
+const recalledWordNotice = "这批已收回。再次送审时请重新预览当前选区。";
+const wordApi = (method, body = {}) => request("/api/word/" + method, binding.token, {
+  documentKey: binding.key, reviewId: binding.reviewId, ...body
+});
+
+function clearWordPreview() {
+  wordPreview = null;
+  byId("word-selection").replaceChildren();
+  byId("word-submit").hidden = true;
+}
+
+// A copied range gets a fresh paragraph ID on Mac. Only the full body's main part preserves identity.
+async function readWordStructure(context) {
+  const body = context.document.body;
+  const raw = body.getOoxml();
+  const paragraphs = body.paragraphs;
+  const tables = body.tables;
+  paragraphs.load("items/$none");
+  tables.load("items/$none");
+  await context.sync();
+  const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const pkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
+  const w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+  const children = (el, name) => Array.from(el.children).filter(c => c.namespaceURI === w && c.localName === name);
+  const requireStructure = (ok, detail) => {
+    if (!ok) throw new Error("无法核对 Word 全文中的段落与表格顺序。" + detail + " 请在原页处理。");
+  };
+  const doc = new DOMParser().parseFromString(raw.value, "application/xml");
+  const parts = Array.from(doc.getElementsByTagNameNS(pkg, "part")).filter(p => p.getAttributeNS(pkg, "name") === "/word/document.xml");
+  requireStructure(parts.length === 1, "找到 " + parts.length + " 个主文档部件。");
+  const main = parts[0].getElementsByTagNameNS(w, "document");
+  requireStructure(main.length === 1, "主部件内找到 " + main.length + " 个 document 元素。");
+  const bodies = children(main[0], "body");
+  requireStructure(bodies.length === 1, "主文档内找到 " + bodies.length + " 个 body 元素。");
+  const root = bodies[0];
+  const ordered = Array.from(root.getElementsByTagNameNS(w, "p"));
+  const xmlTables = children(root, "tbl");
+  const allTables = root.getElementsByTagNameNS(w, "tbl").length;
+  const counts = "Word 段落 " + paragraphs.items.length + "，XML 段落 " + ordered.length +
+    "；Word 表格 " + tables.items.length + "，XML 顶层表格 " + xmlTables.length + "，全部表格 " + allTables + "。";
+  const coordinates = new Map(children(root, "p").map(p => [p, {}]));
+  xmlTables.forEach((table, t) => {
+    const irregular = ["gridSpan", "vMerge", "hMerge", "gridBefore", "gridAfter"].some(k => table.getElementsByTagNameNS(w, k).length);
+    children(table, "tr").forEach((row, r) => children(row, "tc").forEach((cell, c) => {
+      const inside = children(cell, "p");
+      for (const p of inside) coordinates.set(p, irregular || inside.length !== 1 ? null : {table: t, row: r, column: c});
+    }));
+  });
+  const unmapped = ordered.find(p => !coordinates.has(p));
+  const wrapper = unmapped ? "第 " + (ordered.indexOf(unmapped) + 1) + " 段的父元素为 " + unmapped.parentElement.localName + "。" : "";
+  if (ordered.length !== paragraphs.items.length) {
+    const tail = ordered[ordered.length - 1];
+    const previous = ordered[ordered.length - 2];
+    const id = p => p.getAttributeNS(w14, "paraId") || "无标识";
+    const text = p => Array.from(p.getElementsByTagNameNS(w, "t")).map(t => t.textContent).join("");
+    const live = paragraphs.items.slice(-2).map(p => p.getRange("Content").getReviewedText("Current"));
+    await context.sync();
+    const details = " XML 末三段（标识/父元素/文字长度）" +
+      ordered.slice(-3).map(p => [id(p), p.parentElement.localName, text(p).length].join("/")).join("、") +
+      "。Word 末两段文字长度 " + live.map(r => r.value.length).join("、") + "。";
+    // Mac can append an empty paragraph when exporting the body. Keep real trailing blank paragraphs ambiguous.
+    const plain = p => p && p.parentElement === root && Array.from(p.children).every(c => c.namespaceURI === w &&
+      (c.localName === "pPr" || (c.localName === "r" && Array.from(c.children).every(r => r.namespaceURI === w &&
+        ["rPr", "t"].includes(r.localName)))));
+    const lastText = live[live.length - 1]?.value;
+    const extraBlank = ordered.length === paragraphs.items.length + 1 && plain(tail) && !text(tail) &&
+      plain(previous) && lastText && text(previous) === lastText && id(previous).toUpperCase() === binding.sourceTailId &&
+      (!tail.getAttributeNS(w14, "paraId") || !ordered.slice(0, -1).some(p => id(p).toUpperCase() === id(tail).toUpperCase()));
+    requireStructure(extraBlank, counts + wrapper + details);
+    ordered.pop();
+  }
+  requireStructure(xmlTables.length === tables.items.length && allTables === xmlTables.length && !unmapped, counts + wrapper);
+  const unique = new Map();
+  const locations = ordered.map((p, n) => {
+    const id = (p.getAttributeNS(w14, "paraId") || "").toUpperCase();
+    const where = coordinates.get(p);
+    const location = where && {paraId: id, ...(where.table === undefined ? {bodyParagraph: n} : where)};
+    if (/^[0-9A-F]{8}$/.test(id) && id !== "00000000") unique.set(id, unique.has(id) ? null : n);
+    return location;
+  });
+  return {paragraphs: paragraphs.items, tables: tables.items, locations, unique};
+}
+
+function xmlPassage(xml, strict = false) {
+  const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const body = doc.getElementsByTagNameNS(w, "body")[0];
+  const paragraphs = body && body.getElementsByTagNameNS(w, "p");
+  if (!paragraphs || paragraphs.length !== 1) return null;
+  if (strict) {
+    const ns = "http://schemas.microsoft.com/office/2006/xmlPackage";
+    const part = Array.from(doc.getElementsByTagNameNS(ns, "part")).find(el => el.getAttributeNS(ns, "name") === "/word/document.xml");
+    if (!part || part.getElementsByTagNameNS(w, "body")[0] !== body) return null;
+    const unsupported = new Set(["hyperlink", "bookmarkStart", "bookmarkEnd", "fldSimple", "customXml", "smartTag",
+      "sdt", "math", "delInstrText", "permStart", "permEnd", "pict", "vanish", "webHidden", "footnoteReference",
+      "endnoteReference", "altChunk", "br", "cr", "ptab", "drawing", "object", "sym"]);
+    const nodes = Array.from(paragraphs[0].getElementsByTagNameNS("*", "*"));
+    if (nodes.some(el => el.namespaceURI !== w || unsupported.has(el.localName) || /Change$|^move/.test(el.localName))) return null;
+  }
+  const result = {original: "", current: "", revisions: []};
+  const nodes = Array.from(paragraphs[0].getElementsByTagNameNS(w, "*"));
+  if (nodes.some(n => ["drawing","object","fldChar","instrText","moveFrom","moveTo","sdt","sym","AlternateContent"].includes(n.localName))) return null;
+  const groups = new Map();
+  for (const node of nodes) {
+    const kind = node.localName;
+    if (kind === "del" || kind === "ins") {
+      const change = {type: kind === "del" ? "Deleted" : "Added", author: node.getAttributeNS(w, "author") || "", text: ""};
+      if (strict) Object.assign(change, {start: result.current.length, date: node.getAttributeNS(w, "date") || ""});
+      groups.set(node, change);
+      result.revisions.push(change);
+      continue;
+    }
+    const spacing = {tab: "\t", br: "\n", cr: "\n", noBreakHyphen: "‑", softHyphen: "­"};
+    const text = kind === "t" || kind === "delText" ? node.textContent : spacing[kind];
+    if (text === undefined) continue;
+    let change;
+    for (let owner = node.parentElement; owner && owner !== paragraphs[0]; owner = owner.parentElement) {
+      if (groups.has(owner)) { change = groups.get(owner); break; }
+    }
+    if (change) change.text += text;
+    if (!change || change.type !== "Added") result.original += text;
+    if (!change || change.type !== "Deleted") result.current += text;
+  }
+  return result;
+}
+
+async function captureWordSelection(context) {
+  const selection = context.document.getSelection();
+  const chosen = selection.paragraphs;
+  chosen.load("items/$none");
+  const structure = await readWordStructure(context);
+  if (!chosen.items.length || chosen.items.length > 32) throw new Error("一次请选择 1 至 32 段。");
+  const result = [];
+  for (const p of chosen.items) {
+    const whole = p.getRange("Content");
+    const range = whole.intersectWith(selection);
+    const start = p.getRange("Start");
+    const locations = structure.paragraphs.map(x => x.getRange("Start").compareLocationWith(start));
+    const readSelected = readText(range);
+    const readWhole = readText(whole);
+    const xml = range.getOoxml();
+    const fullXml = whole.getOoxml();
+    const changes = range.getTrackedChanges();
+    changes.load("items/type,items/text,items/author,items/date");
+    await context.sync();
+    const n = locations.findIndex(r => r.value === "Equal");
+    if (n < 0 || locations.filter(r => r.value === "Equal").length !== 1 || !structure.locations[n])
+      throw new Error("选区不属于可定位的正文或普通单元格。");
+    const where = structure.locations[n];
+    await targetParagraph(context, where, structure);
+    const live = [];
+    for (const change of changes.items) {
+      const target = change.getRange();
+      const relation = target.compareLocationWith(range);
+      const read = readText(target);
+      await context.sync();
+      live.push({type: change.type, author: change.author || "", text: change.text || "",
+        date: change.date ? new Date(change.date).toISOString() : "", range: read(),
+        inside: ["Equal", "Inside", "InsideStart", "InsideEnd"].includes(relation.value)});
+    }
+    const passage = selectedPassage(readSelected(), xmlPassage(xml.value), live);
+    if (!passage.original && !passage.current && !passage.revisions.length) continue;
+    const full = selectedPassage(readWhole(), xmlPassage(fullXml.value), live);
+    result.push({n, paraId: where.paraId, digest: await documentKey(full.current),
+      ...passage, threads: await window.aeWordComments.readThreads(context, range)});
+  }
+  if (!result.length) throw new Error("请先在 Word 中选中要送审的文字。");
+  return result;
+}
+
+function actionButton(label, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => run(onClick));
+  return button;
+}
+
+function showWordPreview(paragraphs) {
+  clearWordPreview();
+  wordPreview = {paragraphs, binding};
+  const container = byId("word-selection");
+  for (const p of paragraphs) {
+    const text = document.createElement("p");
+    text.textContent = "第 " + (p.n+1) + " 段 · 原文「" + p.original + "」 · 改后「" + p.current + "」";
+    container.append(text);
+    for (const change of p.revisions) {
+      const line = document.createElement("p");
+      line.textContent = [change.type, change.author, change.verified ? change.text : "文字归属需核对"].join(" · ");
+      container.append(line);
+    }
+    for (const thread of p.threads) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox"; input.style.width = "auto"; input.dataset.thread = thread.id;
+      input.dataset.paragraph = String(p.n);
+      const history = [thread, ...thread.replies].map(c => c.authorName + "：" + c.content).join(" / ");
+      label.append(input, document.createTextNode(" 附上" + (thread.resolved ? "已解决" : "未解决") + "线程「" + thread.range.text + "」 " + history));
+      container.append(label);
+    }
+  }
+  byId("word-submit").hidden = false;
+}
+
+byId("word-preview").addEventListener("click", () => run(async () => {
+  clearWordPreview();
+  await refreshConnection();
+  const paragraphs = await Word.run(captureWordSelection);
+  await checkDocument();
+  showWordPreview(paragraphs);
+  message("请核对选中文字，勾选本次要提交的讨论。");
+}));
+
+byId("word-submit").addEventListener("click", () => run(async () => {
+  if (!wordPreview || wordPreview.binding !== binding) throw new Error("请重新预览当前选区。");
+  const checked = Array.from(byId("word-selection").querySelectorAll("input:checked"));
+  const paragraphs = wordPreview.paragraphs.map(p => ({...p, threads: p.threads.filter(
+    t => checked.some(el => el.dataset.thread === t.id && el.dataset.paragraph === String(p.n)))}));
+  await checkDocument();
+  const key = await documentKey(JSON.stringify([binding.reviewId, binding.key, binding.receiver.bindingId, paragraphs]));
+  const submitId = unconfirmedWordKeys.get(key) || crypto.randomUUID();
+  unconfirmedWordKeys.set(key, submitId);
+  let result;
+  try { result = await wordApi("submit", {submitId, paragraphs}); }
+  catch (error) {
+    if (error.code !== "word-batch-recalled") throw error;
+    unconfirmedWordKeys.delete(key);
+    clearWordPreview();
+    return message(recalledWordNotice);
+  }
+  unconfirmedWordKeys.delete(key);
+  clearWordPreview();
+  // The receipt is visible even if the follow-up acknowledgement or refresh loses its connection.
+  const notice = "已提交第 " + result.batch + " 批。" + (result.delivery === "unconfirmed" ? "接收方投递待核对。" : "");
+  message(notice);
+  try { await wordApi("ack", {batch: result.batch}); }
+  catch (error) { return message(error.code === "word-batch-recalled" ? recalledWordNotice : notice + " " + error.message); }
+  try { await refreshConnection(); }
+  catch (error) { return message(notice + " " + error.message); }
+  message(notice);
+}));
+
+async function refreshWordList() {
+  await checkDocument();
+  const result = await wordApi("list");
+  await checkDocument();
+  await refreshRevisionRows(result);
+  const pending = byId("word-pending");
+  pending.replaceChildren();
+  for (const batch of result.pendingBatches) {
+    pending.append(actionButton("收回待接收的第 " + batch + " 批", async () => {
+      await checkDocument();
+      const receipt = await wordApi("recall", {batch});
+      const recalled = new Set(receipt.recalledSubmitIds);
+      for (const [key, id] of unconfirmedWordKeys) {
+        if (recalled.has(id)) unconfirmedWordKeys.delete(key);
+      }
+      clearWordPreview();
+      await refreshConnection();
+      message("已收回第 " + batch + " 批。");
+    }));
+  }
+}
+
+async function locateWordSuggestion(item) {
+  await window.aeWordRevisions.locate(item);
+  message("已定位到建议引用处。");
+}
+
+function addWordSuggestionControls(entry, item) {
+  if (item.sourceBatch) {
+    const reason = document.createElement("p");
+    reason.textContent = "第 " + item.sourceBatch + " 批 · " + item.reason;
+    entry.append(reason);
+  }
+  entry.append(actionButton("在 Word 定位", async () => {
+    try { await locateWordSuggestion(item); }
+    catch (error) {
+      const warning = entry.querySelector(".relocation") || document.createElement("p");
+      warning.className = "relocation";
+      warning.textContent = "需重新定位 · " + item.id;
+      entry.append(warning);
+      throw new Error(warning.textContent + "。" + error.message);
+    }
+  }));
+  entry.append(actionButton("用当前选区重新定位", async () => {
+    await window.aeWordRevisions.relocate(item);
+    message("已核对新选区。点击「写为修订」后才会修改文字。");
+  }));
+  if (item.sourceBatch && (!binding.operations?.has(item.id) || binding.operations.get(item.id).status === "unexecuted")) entry.append(actionButton("撤回建议", async () => {
+    await checkDocument(); await wordApi("withdraw", {id: item.id}); await refreshWordList();
+    message("已撤回该条建议。");
+  }));
+}
+</script>
