@@ -156,7 +156,7 @@ async function refreshWordList() {
   await checkDocument();
   const result = await wordApi("list");
   await checkDocument();
-  displaySuggestions(result.suggestions);
+  await refreshRevisionRows(result);
   const pending = byId("word-pending");
   pending.replaceChildren();
   for (const batch of result.pendingBatches) {
@@ -193,7 +193,7 @@ function addWordSuggestionControls(entry, item) {
     await window.aeWordRevisions.relocate(item);
     message("已核对新选区。点击「写为修订」后才会修改文字。");
   }));
-  if (item.sourceBatch) entry.append(actionButton("撤回建议", async () => {
+  if (item.sourceBatch && (!binding.operations?.has(item.id) || binding.operations.get(item.id).status === "unexecuted")) entry.append(actionButton("撤回建议", async () => {
     await checkDocument(); await wordApi("withdraw", {id: item.id}); await refreshWordList();
     message("已撤回该条建议。");
   }));

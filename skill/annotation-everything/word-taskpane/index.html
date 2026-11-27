@@ -13,6 +13,7 @@
     label { display: block; }
     input, button { box-sizing: border-box; font: inherit; padding: .45rem .6rem; }
     input { width: 100%; margin: .25rem 0 .6rem; }
+    input[type="checkbox"] { width: auto; margin-right: .4rem; }
     button { cursor: pointer; }
     button:disabled { cursor: default; }
     ul { padding: 0; list-style: none; }
@@ -32,6 +33,7 @@
       <button id="bind" type="submit" disabled>绑定当前文档</button>
     </form>
     <p id="status" role="status" aria-live="polite">未绑定。正在等待 Office.js 和 Word 建立连接。</p>
+    <div id="revision-disconnected"></div>
     <p id="fallback" class="note">需要浏览器对照页时，打开 AE 启动这份审阅时给出的专属地址。</p>
     <section id="review" hidden>
       <h2 id="title"></h2>
@@ -44,6 +46,7 @@
       <p><a id="browser" target="_blank" rel="noopener noreferrer">打开浏览器对照页</a></p>
       <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。已有批注覆盖目标或紧邻其边界时，窗格会保留建议，保护原讨论。</p>
       <button id="enable-tracking" type="button">启用 Word 修订跟踪</button>
+      <button id="write-selected" type="button">将所选建议写为修订</button>
       <ul id="suggestions" aria-label="文字建议"></ul>
       <section id="wordSubmission">
         <h2>送审当前选区</h2>
@@ -80,8 +83,16 @@
       byId("inspect").disabled = busy || !binding;
       byId("refresh").disabled = busy || !binding;
       byId("disconnect").disabled = busy || !binding;
+      byId("write-selected").disabled = busy || !binding?.selected?.size;
+      for (const input of byId("suggestions").querySelectorAll("input")) {
+        const op = binding?.operations?.get(input.dataset.id);
+        input.disabled = busy || Boolean(op && op.status !== "unexecuted");
+      }
       for (const button of byId("suggestions").querySelectorAll("button")) {
-        button.disabled = busy || (button.dataset.write === "true" && attempted.has(binding?.key + "/" + binding?.reviewId + "/" + button.dataset.id));
+        const op = binding?.operations?.get(button.dataset.id);
+        const submitted = Boolean(op && op.status !== "unexecuted") ||
+          attempted.has(binding?.key + "/" + binding?.reviewId + "/" + button.dataset.id);
+        button.disabled = busy || (button.dataset.write === "true" && submitted);
       }
     }
 
@@ -139,7 +150,7 @@
           body: JSON.stringify(body)
         });
       } catch {
-        disconnect();
+        disconnect(true);
         throw new Error("审阅服务已断开。请核对专属服务并重新连接，或从 AE 打开浏览器对照页。");
       }
       const result = await response.json();
@@ -154,7 +165,7 @@
           "review-unavailable": "专属审阅已停止或服务已更换。请从 AE 确认审阅并重新连接。"
         };
         if (Object.prototype.hasOwnProperty.call(reasons, result.error)) {
-          disconnect();
+          disconnect(true);
           throw new Error(reasons[result.error]);
         }
         throw new Error("审阅服务拒绝请求（" + (result.error || response.status) + "）。");
@@ -167,14 +178,26 @@
       try {
         if (await documentKey() === expectedKey) return;
       } catch (error) {
-        disconnect();
+        disconnect(true);
         throw error;
       }
-      disconnect();
-      throw new Error("当前文档与绑定时不同。请重新选择并核对原件或副本。");
+      disconnect(true);
+      throw new Error("当前文档与绑定时不同，已有修订需核对。请重新选择原件或副本。");
     }
 
-    function disconnect() {
+    function disconnect(interrupted = false) {
+      const saved = byId("revision-disconnected");
+      saved.replaceChildren();
+      if (interrupted && binding) {
+        const affected = new Map();
+        for (const op of (binding.operations || new Map()).values()) affected.set(op.id, op.status);
+        for (const [id, status] of binding.queuedRevisions || []) affected.set(id, status);
+        for (const [id, status] of affected) {
+          const row = document.createElement("p");
+          row.textContent = id + (status === "unexecuted" ? " · 未执行" : " · 需核对，重新绑定原件后检查修订。");
+          saved.append(row);
+        }
+      }
       binding = null;
       byId("token").value = "";
       byId("review").hidden = true;
@@ -233,6 +256,8 @@
     }
 
     function displaySuggestions(items) {
+      binding.items = items;
+      if (!binding.selected) binding.selected = new Set();
       byId("suggestions").replaceChildren();
       for (const item of items) {
         const entry = document.createElement("li");
@@ -246,7 +271,23 @@
         button.dataset.id = item.id;
         button.dataset.write = "true";
         button.addEventListener("click", () => run(() => apply(item)));
-        entry.append(location, text);
+        const op = binding.operations?.get(item.id);
+        const label = document.createElement("label");
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.id = item.id;
+        if (op && op.status !== "unexecuted") binding.selected.delete(item.id);
+        input.checked = binding.selected.has(item.id);
+        input.addEventListener("change", () => {
+          if (input.checked) binding.selected.add(item.id);
+          else binding.selected.delete(item.id);
+          refreshControls();
+        });
+        label.append(input, location);
+        entry.append(label, text);
+        const detail = document.createElement("p");
+        detail.textContent = binding.revisionErrors?.get(item.id) || (op ? revisionLabels[op.status] : "待处理");
+        entry.append(detail);
         addWordSuggestionControls(entry, item);
         entry.append(button);
         byId("suggestions").append(entry);
@@ -261,6 +302,7 @@
         const key = await documentKey(path);
         const result = await request("/api/bind", token, { documentKey: key });
         if (await documentKey() !== key) throw new Error("绑定期间文档已更换。请重新绑定。");
+        byId("revision-disconnected").replaceChildren();
         binding = { token, key, path, reviewId: result.reviewId };
         byId("token").value = "";
         byId("connect").hidden = true;
@@ -375,9 +417,7 @@
     }
 
     async function apply(item) {
-      const result = await window.aeWordRevisions.applyOne(item);
-      if (result.evidence) showEvidence(result.evidence);
-      message(result.message);
+      await writeSelected([item]);
     }
 
     byId("inspect").addEventListener("click", () => run(async () => {

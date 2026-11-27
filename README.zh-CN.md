@@ -37,7 +37,7 @@ README 随 `main` 分支更新；自动更新只安装正式版本标签。升�
 
 - **对着材料写意见**：报告与讲稿按页对照；选中文字即可引用、删除或改写，也能在报告上放点、框选区域。对应句子可提示两侧一起改。
 - **Word 文档直接审阅**：`.docx` 不用先转 HTML，按 Word 保存的原分页和页面方向生成对照页；分页可信度与只能近似显示的结构在页面和命令行都标明；批注记录所在段落和文字位置，Word 重排后重建对照页，批注仍跟着原段落。支持的纯文字删除／替换可按批次或批注回写 `.docx`，先校验和备份，再原子替换；只读结构会说明限制。
-- **桌面 Word 原页审阅**。在支持 WordApi 1.6 的 macOS Word 中连接新建或已有的 DOCX 审阅，Mac 16.115.2 已实测开发侧载，Windows 入口待真机验收。核对文件、审阅标识、批次与接收会话后可在原页应用跟踪修订；保存重开后重新核对段落定位。[从 skill 打开与重连](skill/annotation-everything/references/word-native.zh-CN.md) · [原型实测步骤](docs/word-taskpane-prototype.md)
+- **桌面 Word 原页审阅**。在支持 WordApi 1.6 的 macOS Word 中连接新建或已有的 DOCX 审阅，Mac 16.115.2 已实测开发侧载，Windows 入口待真机验收。核对文档及接收会话后，勾选建议并预检全部所选项，再在原页写为修订。重连后逐项核对 Word 原生修订。[从 skill 打开与重连](skill/annotation-everything/references/word-native.zh-CN.md) · [原型实测步骤](docs/word-taskpane-prototype.md) · [收件人验收矩阵](docs/word-recipient-acceptance.md)
 - **PPT 演示文稿直接审阅**：`.pptx` 也不用先转图，一张幻灯片生成一页对照页，保留原始尺寸、方向与顺序；幻灯片由本机 LibreOffice 与 Poppler 渲染成图（缺工具、转换失败给出明确诊断，不会拿文字预览冒充视觉审阅）；演讲者备注进讲稿侧。在幻灯片下方的「元素文本」区拖选普通文本，批注保留元素身份、段落和字符偏移；画布上的元素点选、标点和框选保持可用。元素文本区按内容排版，幻灯片的视觉核对以渲染图为准。批注带幻灯片定位——幻灯片身份、元素目标、逻辑段落与码点偏移、归一化区域坐标——重建和页面重排后仍指向原来的幻灯片与元素。图表、SmartArt、图片、组合内部、媒体等只读结构可以选中批注，但明确标为只读元素。支持的文本与备注修改以及白名单内的几何、样式修改经整组预检回写，先存 0600 快照再原子替换；转换前后的字体证据与逐页视觉核验始终显式记录，不以结构成功代替视觉通过。[查看文本选择示例](docs/assets/pptx-text.zh.png)。
 - **按帧和片段审阅视频**。可以直接批注本地 MP4，也可以从 Remotion 或 HyperFrames 工程开始。把选中的意见交给接收会话，改稿后从原批注对照前后画面、分别试听片段，再逐条通过或写明理由退回。也可勾选已核对的条目批量通过，通过后不可撤销。加载失败时，点击「重新加载成片」或从批注再次跳转即可重试。[视频操作与验收记录](docs/video-acceptance.zh-CN.md)。
 - **一键交给 Agent 改稿**：批注自动保存。绑定接收会话后，显式提交这一批意见，Agent 同步修改报告和讲稿、重建对照页，并逐条记录处理结果。
@@ -511,6 +511,7 @@ skill/annotation-everything/       技能本体，安装时整体复制
 │   ├── docx_review.py             逐页渲染 DOCX，记录分页可信度与结构诊断，按段落重定位批注
 │   ├── docx_edit.py               按批注字节级回写 DOCX，校验、备份与原子替换
 │   ├── word_taskpane.py           Word 任务窗格的同源 HTTPS 连接与身份核对
+│   ├── word_revisions.py          所选 Word 修订、逐项写入许可与原生回读
 │   ├── pptx_reader.py             PPTX 包安全读取：OOXML 元素模型、能力矩阵与幻灯片身份
 │   ├── pptx_report.py             PPTX 对照页构建：本机 LibreOffice/Poppler 渲染与字体证据
 │   ├── pptx_edit.py               回写 PPTX 文本、备注与白名单几何/样式：预检、快照与原子替换

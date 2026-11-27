@@ -32,15 +32,33 @@ import wakeup
 
 @unittest.skipUnless(shutil.which("node"), "taskpane interaction test requires Node.js")
 class TaskpaneInteractionTests(unittest.TestCase):
-    def test_overlapping_or_unreadable_threads_keep_suggestions_pending_and_separate_ranges_can_be_edited(self):
+    def exercise_pane(self, *scenarios):
         import word_taskpane
 
         subprocess.run(
-            ["node", str(ROOT / "tests/word_taskpane_interaction.cjs")],
+            ["node", str(ROOT / "tests/word_taskpane_interaction.cjs"), *scenarios],
             input=word_taskpane.index_page(),
             check=True,
             timeout=10,
         )
+
+    def test_selected_body_and_table_edits_are_verified_as_word_revisions(self):
+        self.exercise_pane("batch")
+
+    def test_preflight_reports_every_conflict_before_writing_any_selection(self):
+        self.exercise_pane("overlap")
+
+    def test_reconnect_reads_a_lost_receipt_and_can_apply_only_remaining_suggestions(self):
+        self.exercise_pane("reconnect")
+
+    def test_undo_in_word_marks_the_attempt_uncertain_and_blocks_another_write(self):
+        self.exercise_pane("undo")
+
+    def test_manual_edit_between_items_interrupts_the_batch_and_preserves_remaining_suggestions(self):
+        self.exercise_pane("manual")
+
+    def test_overlapping_or_unreadable_threads_keep_suggestions_pending_and_separate_ranges_can_be_edited(self):
+        self.exercise_pane()
 
 
 @unittest.skipUnless(shutil.which("openssl"), "HTTPS test certificate requires openssl")
@@ -360,6 +378,44 @@ class TaskpaneTests(unittest.TestCase):
 
         review_stop.begin(self.review)
         self.assertEqual(self.request("/api/suggestion", body), (409, {"error": "review-unavailable"}))
+
+    def test_legacy_suggestion_keeps_its_native_receipt_after_reopen_and_undo(self):
+        import word_taskpane
+
+        identity = {"reviewId": self.rid, "documentKey": self.key(self.file)}
+        route = "/api/revision-operations/"
+
+        def ops():
+            return self.request("/api/word/list", identity)[1]["revisionOperations"]
+
+        self.assertEqual(ops(), [])
+        status, selection = self.request(route + "plan", dict(identity, items=[self.nid]))
+        self.assertEqual(status, 200)
+        base = dict(identity, **selection, id=self.nid)
+        before = {"original": "应于五日内回复", "current": "应于五日内回复", "revisions": []}
+        plan = dict(
+            identity, id=self.nid, paragraphKey="cell/0/0/1", start=2, end=4, before=before, expected="应于七日内回复"
+        )
+        self.assertTrue(self.request(route + "begin", dict(base, plan=plan))[1]["mayWrite"])
+        self.server = word_taskpane.TaskpaneServer(self.review, self.file, self.tls, port=0)
+        self.start(self.server)
+        self.assertEqual(ops()[0]["status"], "unknown")
+        self.assertFalse(self.request(route + "begin", dict(base, plan=plan))[1]["mayWrite"])
+        after = {
+            "original": before["original"],
+            "current": plan["expected"],
+            "revisions": [
+                {"type": kind, "text": text, "author": "乙", "start": 2, "date": ""}
+                for kind, text in (("Deleted", "五日"), ("Added", "七日"))
+            ],
+        }
+        self.assertEqual(self.request(route + "observe", dict(base, status="written", after=after, permit=""))[0], 200)
+        self.assertEqual(self.request(route + "observe", dict(base, status="unknown", after=before, permit=""))[0], 200)
+        self.assertEqual((ops()[0]["status"], ops()[0]["receipt"]), ("unknown", after))
+        self.assertEqual(
+            self.request(route + "observe", dict(base, status="unexecuted", after=None, permit=""))[0], 409
+        )
+        self.assertEqual(self.request(route + "plan", dict(identity, items=[self.nid]))[0], 409)
 
     def test_comment_journal_requests_stay_with_the_bound_document(self):
         identity = {"reviewId": self.rid, "documentKey": self.key(self.file)}

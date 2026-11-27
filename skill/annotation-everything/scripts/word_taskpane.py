@@ -28,6 +28,7 @@ import serve
 import wakeup
 import word_comments
 import word_context
+import word_revisions
 
 PORT = 43821
 ASSETS = Path(__file__).resolve().parents[1] / "word-taskpane"
@@ -188,7 +189,10 @@ class Binding:
 
 def index_page():
     html = (ASSETS / "index.html").read_text(encoding="utf-8")
-    fragments = (ASSETS / name for name in ("context.pane.html", "revisions.pane.html", "comments.pane.html"))
+    fragments = (
+        ASSETS / name
+        for name in ("context.pane.html", "revisions.pane.html", "revision-batch.pane.html", "comments.pane.html")
+    )
     inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments)
     evidence = (ASSETS / "word-evidence.js").read_text(encoding="utf-8")
     return html.replace("<!-- AE-PANE-FRAGMENTS -->", "<script>\n" + evidence + "</script>\n" + inline).encode()
@@ -259,6 +263,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 "/api/suggestion",
                 *word_comments.REQUEST_FIELDS,
                 *word_context.REQUEST_FIELDS,
+                *word_revisions.REQUEST_FIELDS,
             ):
                 raise Refused(404, "not-found")
             if self.headers.get_all("Origin") != ["https://" + host] or self.headers.get(
@@ -278,7 +283,8 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 or not lengths[0].isdecimal()
             ):
                 raise Refused(400, "bad-length")
-            limit = word_context.MAX_BYTES if self.path == "/api/word/submit" else 4096
+            large_request = self.path == "/api/word/submit" or self.path in word_revisions.REQUEST_FIELDS
+            limit = word_context.MAX_BYTES if large_request else 4096
             if len(lengths[0]) > len(str(limit)) or int(lengths[0]) > limit:
                 raise Refused(413, "too-large")
             try:
@@ -287,6 +293,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 raise Refused(400, "bad-json") from None
             fields = {
                 **word_comments.REQUEST_FIELDS,
+                **word_revisions.REQUEST_FIELDS,
                 **{k: v | {"documentKey", "reviewId"} for k, v in word_context.REQUEST_FIELDS.items()},
                 "/api/bind": {"documentKey"},
                 "/api/status": {"documentKey", "reviewId"},
@@ -295,7 +302,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
             if (
                 not isinstance(body, dict)
                 or set(body) != fields
-                or not all(isinstance(body[k], str) for k in fields - {"paragraphs", "batch"})
+                or not all(isinstance(body[k], str) for k in fields - {"paragraphs", "batch", "items", "plan", "after"})
             ):
                 raise Refused(400, "bad-request")
             binding = self.server.binding
@@ -305,6 +312,8 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
             binding.verified_bytes()
             if self.path in word_comments.REQUEST_FIELDS:
                 self.send_payload(200, word_comments.handle(binding, self.path, body))
+            elif self.path in word_revisions.REQUEST_FIELDS:
+                self.send_payload(200, word_revisions.handle(binding, self.path, body))
             elif self.path in word_context.REQUEST_FIELDS:
                 self.send_payload(200, word_context.handle(binding, self.path, body))
             elif self.path == "/api/status":
@@ -316,7 +325,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 if suggestion is None:
                     raise Refused(404, "no-suggestion")
                 self.send_payload(200, {"reviewId": binding.rid, "suggestion": suggestion})
-        except word_context.ContextError as exc:
+        except (word_context.ContextError, word_revisions.RevisionError) as exc:
             self.send_payload(409, {"error": str(exc)})
         except (Refused, word_comments.CommentError) as exc:
             self.send_payload(exc.status, {"error": exc.code})

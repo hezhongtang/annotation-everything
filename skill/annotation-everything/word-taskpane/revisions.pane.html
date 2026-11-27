@@ -61,8 +61,8 @@
     return {value: xml, ranges};
   }
 
-  function baseFor(item, previousPlans) {
-    const manual = binding.relocations?.get(item.id);
+  function baseFor(item, previousPlans, anchor) {
+    const manual = anchor || binding.relocations?.get(item.id);
     let current = manual ? manual.current : item.paragraph;
     let offset = manual?.offset;
     for (const prior of previousPlans) {
@@ -74,11 +74,11 @@
     return {current, offset};
   }
 
-  async function resolve(context, item, previousPlans, manual = false) {
+  async function resolve(context, item, previousPlans, manual = false, anchor) {
     const paragraph = await targetParagraph(context, item);
     const whole = paragraph.getRange("Content");
     const {value: before, ranges} = await snapshot(context, paragraph);
-    const baseline = baseFor(item, previousPlans);
+    const baseline = baseFor(item, previousPlans, anchor);
     const needle = item.from || item.selection;
     const matches = whole.search(needle, {matchCase: true, matchWildcards: false});
     matches.load("items/text");
@@ -120,16 +120,27 @@
       expected: before.current.slice(0, start) + item.to + before.current.slice(end)}};
   }
 
-  async function prepare(context, item, previousPlans) {
+  async function prepare(context, item, previousPlans, anchor) {
     await checkRevisionPermission(context);
     ensure(tracked(context.document), "跟踪已关闭。请点击「启用 Word 修订跟踪」，再写入建议。");
-    const resolved = await resolve(context, item, previousPlans);
+    const resolved = await resolve(context, item, previousPlans, false, anchor);
+    if (anchor) {
+      const prior = previousPlans.filter(p => p.paragraphKey === resolved.plan.paragraphKey);
+      const expected = prior.length ? prior[prior.length - 1].after : anchor.before;
+      ensure(sameSnapshot(expected, resolved.plan.before), "预检后段落或修订已改变，建议已保留。");
+    }
     const relations = resolved.ranges.map(range => resolved.target.compareLocationWith(range));
     await context.sync();
     ensure(relations.every(r => ["Before", "After"].includes(r.value)),
       "目标与旧修订重叠或紧邻其边界，建议已保留，请在 Word 原页核对。");
     await protectCommentThreads(context, resolved.target);
     return resolved;
+  }
+
+  function sameSnapshot(a, b) {
+    return a && b && a.original === b.original && a.current === b.current &&
+      a.revisions.length === b.revisions.length && a.revisions.every((r, i) =>
+        ["type", "text", "start", "author", "date"].every(k => r[k] === b.revisions[i][k]));
   }
 
   function confirmed(plan, after) {
@@ -177,17 +188,48 @@
     } catch (error) { return {status: "unknown", message: unknownMessage + " " + error.message}; }
   }
 
+  // Walk the paragraph backwards through verified native changes. Later edits in the same
+  // paragraph shift earlier ranges. Project only operations whose complete readback matches.
+  async function reconcile(operations) {
+    const groups = new Map();
+    const results = new Map();
+    for (const op of operations) {
+      if (!op.plan || op.status === "unexecuted") continue;
+      const group = groups.get(op.plan.paragraphKey) || [];
+      group.push(op);
+      groups.set(op.plan.paragraphKey, group);
+    }
+    for (const group of groups.values()) {
+      await checkDocument();
+      let after;
+      try {
+        after = await Word.run(async context =>
+          (await snapshot(context, await targetParagraph(context, group[0].item))).value);
+      } catch { /* This location is no longer readable. Keep every attempt locked. */ }
+      await checkDocument();
+      for (const op of group.reverse()) {
+        const {item, plan, receipt} = op;
+        const written = after && plan.documentKey === binding.key && plan.reviewId === binding.reviewId &&
+          plan.id === item.id && plan.paragraphKey === paragraphKey(item) && confirmed(plan, after) &&
+          (!receipt || sameSnapshot(receipt, after));
+        results.set(item.id, {status: written ? "written" : "unknown", after: after || null});
+        if (written) after = plan.before;
+      }
+    }
+    return results;
+  }
+
   async function preflight(item, {previousPlans = []} = {}) {
     await latest(item);
     return Word.run(async context => (await prepare(context, item, previousPlans)).plan);
   }
 
-  async function applyOne(item, {beforeWrite, previousPlans = []} = {}) {
+  async function applyOne(item, {beforeWrite, previousPlans = [], anchor} = {}) {
     await latest(item);
     const key = identity(item);
     ensure(!attempted.has(key), "本次已向 Word 提交此建议，请先核对修订。");
     return Word.run(async context => {
-      const {target, plan} = await prepare(context, item, previousPlans);
+      const {target, plan} = await prepare(context, item, previousPlans, anchor);
       target.select();
       await context.sync();
       const selection = context.document.getSelection();
@@ -196,7 +238,7 @@
       ensure(selected.value === "Equal", "当前 Word 选区已改变，建议已保留。");
       await latest(item);
       if (beforeWrite) await beforeWrite(plan);
-      const checked = await prepare(context, item, previousPlans);
+      const checked = await prepare(context, item, previousPlans, anchor);
       const finalSelection = checked.target.compareLocationWith(context.document.getSelection());
       await context.sync();
       ensure(finalSelection.value === "Equal" && JSON.stringify(checked.plan) === JSON.stringify(plan),
@@ -244,6 +286,6 @@
     });
     message("修订跟踪已启用。请选中建议后写入，并在「审阅」中选择「所有标记」。");
   }));
-  window.aeWordRevisions = {preflight, applyOne, readback, locate: item => point(item, false), relocate: item => point(item, true)};
+  window.aeWordRevisions = {preflight, applyOne, readback, reconcile, paragraphKey, locate: item => point(item, false), relocate: item => point(item, true)};
 })();
 </script>

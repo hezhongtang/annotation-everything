@@ -35,6 +35,13 @@ class DOMParser {
   }
 }
 
+function matches(node, selector) {
+  const tag = selector.match(/^\w+/)?.[0];
+  return (!tag || node.tag === tag) && (!selector.includes(":checked") || node.checked) &&
+    (!selector.includes("[data-id]") || node.dataset.id) &&
+    (!selector.includes("[type=checkbox]") || node.type === "checkbox");
+}
+
 function element(tag) {
   return {
     tag, dataset: {}, children: [], events: {}, value: "",
@@ -43,16 +50,20 @@ function element(tag) {
     replaceChildren(...nodes) { this.children = nodes; },
     removeAttribute(name) { delete this[name]; },
     querySelectorAll(name) {
-      return this.children.flatMap(node => [ ...(node.tag === name ? [node] : []), ...node.querySelectorAll(name) ]);
+      return this.children.filter(node => typeof node !== "string")
+        .flatMap(node => [ ...(matches(node, name) ? [node] : []), ...node.querySelectorAll(name) ]);
     }
   };
 }
 
-async function applyInWord({ fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false }) {
-  const item = {...suggestion, paragraph: (old ? "邮件" : "") + suggestion.paragraph, ...(table && {table: 0, row: 0, column: 1}), ...replacement};
-  const nodes = {};
+const {revisionService, batchScenario} = require("./fixtures/word_revision_batch.cjs");
+
+async function openPane(Word, fetch, files = {url: "/synthetic/A/contract.docx"}) {
+  const nodes = Object.fromEntries(
+    Array.from(page.matchAll(/<(\w+)\b[^>]*?\bid="([^"]+)"/g), ([, tag, id]) => [id, element(tag)])
+  );
   const document = {
-    getElementById: id => nodes[id] ||= element(id),
+    getElementById: id => nodes[id] || null,
     addEventListener() {},
     createElement: element
   };
@@ -62,9 +73,21 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
     context: {
       platform: "Mac",
       requirements: {isSetSupported: () => true}, diagnostics: {},
-      document: {getFilePropertiesAsync: callback => callback({status: "ok", value: {url: file}})}
+      document: {getFilePropertiesAsync: callback => callback({status: "ok", value: {url: files.url}})}
     }
   };
+  const pane = vm.createContext({
+    DOMParser, Office: office, window: {Office: office, addEventListener() {}}, Word, document, fetch,
+    crypto: webcrypto, TextEncoder, setTimeout, clearTimeout
+  });
+  for (const script of scripts) vm.runInContext(script, pane);
+  nodes.token.value = "synthetic";
+  await nodes.connect.events.submit({preventDefault() {}});
+  return nodes;
+}
+
+async function applyInWord({ fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false }) {
+  const item = {...suggestion, paragraph: (old ? "邮件" : "") + suggestion.paragraph, ...(table && {table: 0, row: 0, column: 1}), ...replacement};
   const writes = [];
   const collection = items => ({items, load() {}});
   const prefix = [{text: "应于"}];
@@ -117,24 +140,8 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
     }
   }};
   const Word = {run: action => action(context)};
-  const state = {reviewId: "A", title: "合成 A", documentName: "contract.docx", receiver: {state: "unconfigured"}};
-  const responses = {
-    "/api/bind": {...state, suggestions: [item]},
-    "/api/status": state,
-    "/api/suggestion": {reviewId: "A", suggestion: item},
-    "/api/word/list": {suggestions: [item], pendingBatches: []}
-  };
-  const fetch = async path => {
-    assert.ok(Object.hasOwn(responses, path), path);
-    return {ok: true, json: async () => responses[path]};
-  };
-  const pane = vm.createContext({
-    DOMParser, Office: office, window: {Office: office, addEventListener() {}}, Word, document, fetch,
-    crypto: webcrypto, TextEncoder, setTimeout, clearTimeout
-  });
-  for (const script of scripts) vm.runInContext(script, pane);
-  nodes.token.value = "synthetic";
-  await nodes.connect.events.submit({preventDefault() {}});
+  const service = revisionService([item]);
+  const nodes = await openPane(Word, service.fetch, {get url() { return file; }});
   if (fileChanged) file = "/synthetic/B/contract.docx";
   const writeButton = () => nodes.suggestions.querySelectorAll("button").find(button => button.dataset.write === "true");
   if (enable) {
@@ -154,6 +161,7 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
 }
 
 (async () => {
+  if (process.argv[2]) return batchScenario(process.argv[2], openPane);
   const protectedResult = await applyInWord({readOnly: true});
   assert.deepEqual(protectedResult.writes, [], "read-only Word must retain the suggestion");
   for (const table of [true, false]) {
