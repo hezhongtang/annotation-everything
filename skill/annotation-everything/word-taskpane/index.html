@@ -19,7 +19,7 @@
     li { padding: .7rem 0; border-top: 1px solid #9999; overflow-wrap: anywhere; }
     li p { margin: .25rem 0; }
     .note, #reviewId { font-size: .88rem; }
-    pre { overflow-wrap: anywhere; white-space: pre-wrap; font-size: .82rem; }
+    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; font-size: .82rem; }
   </style>
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 </head>
@@ -35,13 +35,14 @@
     <section id="review" hidden>
       <h2 id="title"></h2>
       <p id="reviewId"></p>
-      <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。</p>
+      <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。已有批注覆盖目标或紧邻其边界时，窗格会保留建议，保护原讨论。</p>
       <ul id="suggestions" aria-label="文字建议"></ul>
       <button id="inspect" type="button">读取选区与正文修订</button>
       <p class="note">可在 Word 中选中已有修订的整段，再读取原文、改后文字和作者。读数只显示在本窗格。</p>
       <details id="evidence" hidden>
         <summary>Word API 回读</summary>
-        <pre id="output"></pre>
+        <textarea id="output" rows="14" readonly aria-label="Word API 回读 JSON"></textarea>
+        <button id="copy" type="button">复制回读</button>
       </details>
     </section>
   </main>
@@ -143,7 +144,7 @@
 
     byId("connect").addEventListener("submit", event => {
       event.preventDefault();
-      run(async () => {
+      return run(async () => {
         const token = byId("token").value.trim();
         const key = await documentKey();
         const result = await request("/api/bind", token, { documentKey: key });
@@ -191,7 +192,7 @@
 
     function showEvidence(data) {
       const host = Office.context.diagnostics;
-      byId("output").textContent = JSON.stringify({
+      byId("output").value = JSON.stringify({
         reviewId: binding.reviewId,
         observedAt: new Date().toISOString(),
         host: { name: host.host, platform: host.platform, version: host.version },
@@ -199,6 +200,40 @@
       }, null, 2);
       byId("evidence").hidden = false;
       byId("evidence").open = true;
+    }
+
+    byId("copy").addEventListener("click", async () => {
+      const output = byId("output");
+      if (!output.value) return;
+      output.focus();
+      output.select();
+      try {
+        if (!document.execCommand("copy")) await navigator.clipboard.writeText(output.value);
+        message("已将完整回读复制到本机剪贴板。");
+      } catch {
+        message("已选中完整回读。请按 ⌘C 复制。");
+      }
+    });
+
+    async function protectCommentThreads(context, target) {
+      let touchesThread;
+      try {
+        const associated = target.getComments();
+        const comments = context.document.body.getRange().getComments();
+        associated.load("items/id");
+        comments.load("items/id");
+        await context.sync();
+        touchesThread = associated.items.length > 0;
+        if (!touchesThread) {
+          const positions = comments.items.map(comment => target.compareLocationWith(comment.getRange()));
+          await context.sync();
+          // Touching an anchor boundary can move it into the tracked replacement.
+          touchesThread = positions.some(position => !["Before", "After", "Unrelated"].includes(position.value));
+        }
+      } catch {
+        throw new Error("Word 无法核对目标文字与原批注的位置。未写入修订，建议已保留。");
+      }
+      if (touchesThread) throw new Error("此处已有 Word 批注。接受或拒绝替换可能移除原批注及回复。未写入修订，建议已保留。");
     }
 
     async function apply(item) {
@@ -229,6 +264,7 @@
             before.text !== item.paragraph || matches.items.length !== 1 || matches.items[0].text !== item.from) {
           throw new Error("目标段落含已有修订、原文已变或原词定位不唯一。请在 Word 中核对。");
         }
+        await protectCommentThreads(context, matches.items[0]);
         await checkDocument();
         attempted.add(item.id); // A sync error cannot tell us whether Word performed the write.
         try {

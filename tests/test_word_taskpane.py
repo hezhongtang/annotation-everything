@@ -26,6 +26,20 @@ import notes_store
 import serve
 
 
+@unittest.skipUnless(shutil.which("node"), "taskpane interaction test requires Node.js")
+class TaskpaneInteractionTests(unittest.TestCase):
+    def test_overlapping_or_unreadable_threads_keep_suggestions_pending_and_separate_ranges_can_be_edited(self):
+        subprocess.run(
+            [
+                "node",
+                str(ROOT / "tests/word_taskpane_interaction.cjs"),
+                str(ROOT / "skill/annotation-everything/word-taskpane/index.html"),
+            ],
+            check=True,
+            timeout=10,
+        )
+
+
 @unittest.skipUnless(shutil.which("openssl"), "HTTPS test certificate requires openssl")
 class TaskpaneTests(unittest.TestCase):
     @classmethod
