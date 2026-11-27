@@ -1289,7 +1289,7 @@ def _publish_video_commit(review_dir: Path, journal: Path, changes: dict) -> Non
 def _commit_video_pair(review_dir: Path, notes: dict, handoff: dict, note_event: dict, batch_event: dict) -> None:
     now = now_iso()
     notes.update(rev=notes["rev"] + 1, updatedAt=now, version=SCHEMA_VERSION)
-    handoff.update(version=1, updatedAt=now, items=handoff["items"][-HANDOFF_KEEP:])
+    handoff.update(version=1, updatedAt=now, items=_retained_handoffs(handoff["items"]))
     changes = {
         "reviewId": ledger.read_manifest(review_dir).get("reviewId"),
         NOTES_FILE: notes,
@@ -2121,10 +2121,25 @@ def handoff_load(review_dir: Path) -> dict[str, Any]:
     return doc
 
 
+def _retained_handoffs(items: list[dict]) -> list[dict]:
+    """Keep older Word work accessible until its receiver and reviewer have finished with it."""
+    older = [
+        batch
+        for batch in items[:-HANDOFF_KEEP]
+        if "wordSubmission" in batch
+        and (
+            batch["status"] in {"pending", "claimed"}
+            or batch.get("wordAwaitingReceipt")
+            or any(item.get("status") != "withdrawn" for item in batch.get("wordSuggestions", []))
+        )
+    ]
+    return older + items[-HANDOFF_KEEP:]
+
+
 def _handoff_commit(review_dir: Path, doc: dict[str, Any], log: dict[str, Any]) -> dict[str, Any]:
     doc["version"] = 1
     doc["updatedAt"] = now_iso()
-    doc["items"] = doc["items"][-HANDOFF_KEEP:]
+    doc["items"] = _retained_handoffs(doc["items"])
     _atomic_write(review_dir / HANDOFF_FILE, _dumps(doc, indent=2) + "\n")
     _append_log(review_dir, {"ts": doc["updatedAt"], **log})
     return doc
@@ -2479,6 +2494,15 @@ def handoff_submit(
             if existing.get("wordSubmission") != word_submission:
                 raise HandoffError("送审标识已用于其他选区", code="word-submission-changed")
             return doc, existing, True
+        if word_submission is not None:
+            # A recreated pane may have lost the response as well as its in-memory request ID.
+            # Only an identical, still-unacknowledged submission to this receiver is a retry.
+            previous = next(
+                (i for i in reversed(items) if i.get("wordAwaitingReceipt") and i["wordSubmission"] == word_submission),
+                None,
+            )
+            if previous is not None:
+                return doc, previous, True
         if existing is not None and (video is not None or existing.get("status") != "pending"):
             return doc, existing, True
         if validate_submission is not None:
@@ -2528,6 +2552,7 @@ def handoff_submit(
         }
         if word_submission is not None:
             snap["wordSubmission"] = word_submission
+            snap["wordAwaitingReceipt"] = True
             snap["selected"] = True
         if video is not None:
             by_id = {n["id"]: n for n in notes}

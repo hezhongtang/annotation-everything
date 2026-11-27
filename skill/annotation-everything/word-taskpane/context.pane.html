@@ -2,6 +2,8 @@
 "use strict";
 
 let wordPreview = null;
+// A disconnected preview retains only the digest of its approved payload and the request ID.
+const unconfirmedWordKeys = new Map();
 const wordApi = (method, body = {}) => request("/api/word/" + method, binding.token, {
   documentKey: binding.key, reviewId: binding.reviewId, ...body
 });
@@ -13,6 +15,17 @@ function clearWordPreview() {
 }
 
 // Read only word/document.xml from the selected range's Flat OPC. The package never leaves Word.
+function wordRangeParagraphId(xml) {
+  const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const pkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
+  const w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const main = Array.from(doc.getElementsByTagNameNS(pkg, "part")).filter(el => el.getAttributeNS(pkg, "name") === "/word/document.xml");
+  const paragraphs = main.length === 1 && main[0].getElementsByTagNameNS(w, "body")[0]?.getElementsByTagNameNS(w, "p");
+  const id = paragraphs?.length === 1 && paragraphs[0].getAttributeNS(w14, "paraId");
+  return id && /^[0-9a-f]{8}$/i.test(id) && id !== "00000000" ? id.toUpperCase() : null;
+}
+
 function xmlPassage(xml, strict = false) {
   const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
   const doc = new DOMParser().parseFromString(xml, "application/xml");
@@ -92,7 +105,8 @@ async function captureWordSelection(context) {
     const passage = selectedPassage(readSelected(), xmlPassage(xml.value), live);
     if (!passage.original && !passage.current && !passage.revisions.length) continue;
     const full = selectedPassage(readWhole(), xmlPassage(fullXml.value), live);
-    result.push({n, digest: await documentKey(full.current), ...passage, threads: await window.aeWordComments.readThreads(context, range)});
+    result.push({n, paraId: wordRangeParagraphId(fullXml.value), digest: await documentKey(full.current),
+      ...passage, threads: await window.aeWordComments.readThreads(context, range)});
   }
   if (!result.length) throw new Error("请先在 Word 中选中要送审的文字。");
   return result;
@@ -108,7 +122,7 @@ function actionButton(label, onClick) {
 
 function showWordPreview(paragraphs) {
   clearWordPreview();
-  wordPreview = {paragraphs, key: crypto.randomUUID(), binding};
+  wordPreview = {paragraphs, binding};
   const container = byId("word-selection");
   for (const p of paragraphs) {
     const text = document.createElement("p");
@@ -146,10 +160,20 @@ byId("word-submit").addEventListener("click", () => run(async () => {
   const paragraphs = wordPreview.paragraphs.map(p => ({...p, threads: p.threads.filter(
     t => checked.some(el => el.dataset.thread === t.id && el.dataset.paragraph === String(p.n)))}));
   await checkDocument();
-  const result = await wordApi("submit", {submitId: wordPreview.key, paragraphs});
+  const key = await documentKey(JSON.stringify([binding.reviewId, binding.key, binding.receiver.bindingId, paragraphs]));
+  const submitId = unconfirmedWordKeys.get(key) || crypto.randomUUID();
+  unconfirmedWordKeys.set(key, submitId);
+  const result = await wordApi("submit", {submitId, paragraphs});
+  unconfirmedWordKeys.delete(key);
   clearWordPreview();
-  await refreshConnection();
-  message("已提交第 " + result.batch + " 批。" + (result.delivery === "unconfirmed" ? "接收方投递待核对。" : ""));
+  // The receipt is visible even if the follow-up acknowledgement or refresh loses its connection.
+  const notice = "已提交第 " + result.batch + " 批。" + (result.delivery === "unconfirmed" ? "接收方投递待核对。" : "");
+  message(notice);
+  try { await wordApi("ack", {batch: result.batch}); }
+  catch (error) { return message(notice + " " + error.message); }
+  try { await refreshConnection(); }
+  catch (error) { return message(notice + " " + error.message); }
+  message(notice);
 }));
 
 async function refreshWordList() {

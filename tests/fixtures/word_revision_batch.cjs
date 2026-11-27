@@ -25,6 +25,10 @@ function revisionService(items, options = {}) {
       }
       case "/api/revision-operations/begin": {
         const op = operations.find(o => o.batch === body.batch && o.id === body.id);
+        if (options.concurrentBegin) {
+          Object.assign(op, {plan: body.plan, status: "unknown"});
+          options.concurrentBegin();
+        }
         if (op.status !== "unexecuted") return reply({mayWrite: false});
         Object.assign(op, {plan: body.plan, status: "unknown"});
         options.afterBegin?.(op);
@@ -42,7 +46,7 @@ function revisionService(items, options = {}) {
   return {fetch};
 }
 
-function paragraph(initial, word) {
+function paragraph(initial, word, paraId) {
   let runs = [{text: initial}];
   function replace(start, end, text) {
     let offset = 0;
@@ -90,7 +94,7 @@ function paragraph(initial, word) {
     get revisions() {return runs.filter(r => r.type).map(r => [r.type, r.text, r.author]);},
     getRange() {
       const text = current(runs);
-      return {...range(0, text.length, original(runs), text), getOoxml: () => ({value: JSON.stringify(runs)}),
+      return {...range(0, text.length, original(runs), text), getOoxml: () => ({value: JSON.stringify({runs, paraId})}),
         search(needle) {
           const found = [];
           for (let i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length)) {
@@ -121,12 +125,12 @@ function paragraph(initial, word) {
 
 async function batchScenario(scenario, openPane) {
   const word = {writes: []};
-  const body = paragraph("须在五日内通知甲方。", word);
-  const cell = paragraph("保留纸本。", word);
+  const body = paragraph("须在五日内通知甲方。", word, "1A000001");
+  const cell = paragraph("保留纸本。", word, "1A000002");
   const items = [
-    {id: "days", from: "五日", to: "十个工作日", paragraph: body.current, bodyParagraph: 0},
-    {id: "party", from: "甲方", to: "乙方", paragraph: body.current, bodyParagraph: 0},
-    {id: "copy", from: "纸本", to: "原件", paragraph: cell.current, table: 0, row: 0, column: 1}
+    {id: "days", from: "五日", to: "十个工作日", paragraph: body.current, bodyParagraph: 0, paraId: "1A000001"},
+    {id: "party", from: "甲方", to: "乙方", paragraph: body.current, bodyParagraph: 0, paraId: "1A000001"},
+    {id: "copy", from: "纸本", to: "原件", paragraph: cell.current, table: 0, row: 0, column: 1, paraId: "1A000002"}
   ];
   const table = {
     load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: outsideControl,
@@ -141,6 +145,11 @@ async function batchScenario(scenario, openPane) {
   }};
   const Word = {run: action => action(context)};
   const options = {};
+  if (scenario.startsWith("concurrent-")) {
+    options.concurrentBegin = () => {
+      if (scenario === "concurrent-written") body.getRange().search("五日").items[0].insertText("十个工作日", "Replace");
+    };
+  }
   if (scenario === "overlap") {
     items.push({...items[0], id: "period", from: "五日内", to: "本周"});
     items.push({...items[2], id: "missing", from: "附件", to: "清单"});
@@ -186,6 +195,15 @@ async function batchScenario(scenario, openPane) {
     assert.match(row(id).text, state);
     assert.equal(row(id).choice.disabled, true, id);
     assert.equal(row(id).write.disabled, true, id);
+  }
+  if (scenario.startsWith("concurrent-")) {
+    await write(["days"]);
+    const expected = scenario === "concurrent-written" ? /已写入/ : /需核对/;
+    expectLocked("days", expected);
+    assert.match(nodes.status.textContent, expected);
+    assert.doesNotMatch(nodes.status.textContent, /未执行/);
+    assert.equal(word.writes.length, scenario === "concurrent-written" ? 1 : 0);
+    return;
   }
   if (scenario === "overlap") {
     await write(items.map(item => item.id));

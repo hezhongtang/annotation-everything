@@ -86,6 +86,7 @@ async function writeSelected(items) {
   const {batch} = await revisionRequest("plan", {items: items.map(item => item.id)});
   const previousPlans = [];
   let lastMessage;
+  let interruptedItem;
   binding.queuedRevisions = new Map(items.map(item => [item.id, "unexecuted"]));
   for (const item of items) {
     const initial = plans.get(item.id);
@@ -107,6 +108,7 @@ async function writeSelected(items) {
       // Only a thrown pre-write guard from this grant owner proves the command was never issued.
       if (binding && permit) await revisionRequest("observe", {batch, id: item.id, permit, status: "unexecuted", after: null});
       if (!binding) throw error;
+      interruptedItem = item.id;
       lastMessage = item.id + " · 未执行。" + error.message;
       binding.revisionErrors.set(item.id, lastMessage);
       break;
@@ -122,6 +124,8 @@ async function writeSelected(items) {
   }
   await refreshWordList();
   binding.queuedRevisions = null;
+  const observed = binding.operations.get(interruptedItem);
+  if (observed && observed.status !== "unexecuted") lastMessage = interruptedItem + " · " + revisionLabels[observed.status];
   message(lastMessage);
 }
 

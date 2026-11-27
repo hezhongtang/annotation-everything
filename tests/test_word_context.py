@@ -26,6 +26,7 @@ class WordContextTests(unittest.TestCase):
         self.fp = "e" * 64
         self.para = {
             "n": 3,
+            "paraId": "1A000003",
             "digest": hashlib.sha256("共同登记样机编号。".encode()).hexdigest(),
             "original": "分别登记样机编号。",
             "current": "共同登记样机编号。",
@@ -49,7 +50,7 @@ class WordContextTests(unittest.TestCase):
         bound = SimpleNamespace(
             review=self.review,
             fingerprint=self.fp,
-            locations={3: {"bodyParagraph": 3}},
+            locations={3: {"bodyParagraph": 3, "paraId": "1A000003"}},
             paragraphs={3: SimpleNamespace(text="共同登记样机编号。")},
             restrictions={3: {"revision"}},
         )
@@ -59,6 +60,69 @@ class WordContextTests(unittest.TestCase):
         bound.fingerprint = self.fp
         bound.restrictions = {3: {"revision", "field"}}
         self.assertIn("结构", word_context.suggestions(bound)[0]["writeRestriction"])
+        bound.restrictions = {}
+        bound.locations[3]["paraId"] = "1A000004"
+        self.assertIn("段落标识", word_context.suggestions(bound)[0]["writeRestriction"])
+
+    def test_recreated_preview_recovers_only_the_unacknowledged_identical_submission(self):
+        binding = SimpleNamespace(
+            review=self.review, receiver_id=self.receiver, fingerprint=self.fp, authorize_receiver=lambda: None
+        )
+
+        def send(key, receiver=self.receiver, doc_key="a", paragraphs=None):
+            return word_context.submit(
+                self.review, receiver, self.fp, paragraphs or [self.para], key, lambda: None, doc_key
+            )
+
+        original = send("first")
+        notes_store.handoff_claim(self.review, seq=original)
+        word_context.return_suggestions(self.review, original, [], "Codex", "synthetic-session")
+        self.assertEqual(send("regenerated"), original)
+        self.assertNotEqual(send("other-receiver", receiver="b"), original)
+        self.assertNotEqual(send("other-file", doc_key="c"), original)
+        self.assertNotEqual(send("other-selection", paragraphs=[{**self.para, "current": "编号"}]), original)
+        with self.assertRaisesRegex(ValueError, "receipt-changed"):
+            word_context.acknowledge(binding, "c", original)
+        self.assertEqual(send("still-unacknowledged"), original)
+        word_context.acknowledge(binding, "a", original)
+        self.assertNotEqual(send("intentional-repeat"), original)
+
+    def test_old_pending_claimed_and_returned_word_work_survive_handoff_history_limit(self):
+        def send(n):
+            seq = word_context.submit(
+                self.review, self.receiver, self.fp, [{**self.para, "n": n}], f"request-{n}", lambda: None, "file"
+            )
+            bound = SimpleNamespace(
+                review=self.review, receiver_id=self.receiver, fingerprint=self.fp, authorize_receiver=lambda: None
+            )
+            word_context.acknowledge(bound, "file", seq)
+            return seq
+
+        returned, claimed, pending = (send(n) for n in (1, 2, 3))
+        notes_store.handoff_claim(self.review, seq=returned)
+        [suggestion] = word_context.return_suggestions(
+            self.review,
+            returned,
+            [{"n": 1, "from": "编号", "to": "序号", "reason": "清单用词"}],
+            "Codex",
+            "synthetic-session",
+        )
+        notes_store.handoff_claim(self.review, seq=claimed)
+        doc = notes_store.handoff_load(self.review)
+        # Seed finished history at the limit, then cross it via an actual handoff.
+        for i in range(notes_store.HANDOFF_KEEP):
+            doc["seq"] += 1
+            doc["items"].append({"seq": doc["seq"], "status": "done"})
+        (self.review / notes_store.HANDOFF_FILE).write_text(json.dumps(doc))
+        notes_store.handoff_submit(self.review, "浏览器批次")
+        batches = notes_store.handoff_load(self.review)["items"]
+        self.assertEqual([b["seq"] for b in batches[:3]], [returned, claimed, pending])
+        self.assertEqual(len(batches), notes_store.HANDOFF_KEEP + 3)
+        self.assertEqual(batches[0]["wordSuggestions"], [suggestion])
+        self.assertEqual(batches[1]["status"], "claimed")
+        self.assertEqual(batches[2]["status"], "pending")
+        word_context.withdraw(self.review, suggestion["id"], lambda: None)
+        self.assertNotIn(returned, [b["seq"] for b in notes_store.handoff_load(self.review)["items"]])
 
     def test_receiver_claim_contains_only_selected_word_material(self):
         notes_store.handoff_submit(self.review, "浏览器私有旧批次")

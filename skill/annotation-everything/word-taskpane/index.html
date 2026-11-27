@@ -286,7 +286,8 @@
         label.append(input, location);
         entry.append(label, text);
         const detail = document.createElement("p");
-        detail.textContent = binding.revisionErrors?.get(item.id) || (op ? revisionLabels[op.status] : "待处理");
+        detail.textContent = op && op.status !== "unexecuted" ? revisionLabels[op.status]
+          : binding.revisionErrors?.get(item.id) || (op ? revisionLabels[op.status] : "待处理");
         entry.append(detail);
         addWordSuggestionControls(entry, item);
         entry.append(button);
@@ -329,7 +330,7 @@
         control.load("$none");
         await context.sync();
         if (!cell.isNullObject || !control.isNullObject) throw new Error("原正文位置已变为表格或内容控件。");
-        return paragraph;
+        return verifyParagraphId(context, paragraph, item);
       }
       const tables = body.tables;
       tables.load("items");
@@ -348,7 +349,15 @@
       await context.sync();
       if (!table.isUniform || table.nestingLevel !== 1 || !tableControl.isNullObject || !control.isNullObject)
         throw new Error("目标表格含不支持的结构。");
-      return paragraphs.items[0];
+      return verifyParagraphId(context, paragraphs.items[0], item);
+    }
+
+    async function verifyParagraphId(context, paragraph, item) {
+      const raw = paragraph.getRange("Content").getOoxml();
+      await context.sync();
+      if (!item.paraId || wordRangeParagraphId(raw.value) !== item.paraId)
+        throw new Error("原段落标识已改变或无法核对，请在 Word 原页处理。");
+      return paragraph;
     }
 
     // Queue all three observations together so that Word uses the same range.

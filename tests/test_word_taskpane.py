@@ -51,6 +51,14 @@ class TaskpaneInteractionTests(unittest.TestCase):
     def test_reconnect_reads_a_lost_receipt_and_can_apply_only_remaining_suggestions(self):
         self.exercise_pane("reconnect")
 
+    def test_competing_pane_cannot_mask_the_native_result_or_retry(self):
+        for scenario in ("concurrent-written", "concurrent-unknown"):
+            with self.subTest(scenario=scenario):
+                self.exercise_pane(scenario)
+
+    def test_rebind_and_repreview_retry_only_the_approved_selection(self):
+        self.exercise_pane("resubmit")
+
     def test_undo_in_word_marks_the_attempt_uncertain_and_blocks_another_write(self):
         self.exercise_pane("undo")
 
@@ -203,6 +211,7 @@ class TaskpaneTests(unittest.TestCase):
             "table": 0,
             "row": 0,
             "column": 1,
+            "paraId": "1A000002",
         }
         self.assertEqual(bound["reviewId"], self.rid)
         self.assertEqual(bound["title"], "合成合同 A")
@@ -233,6 +242,38 @@ class TaskpaneTests(unittest.TestCase):
         self.assertEqual(refreshed["batch"], {"seq": 1, "status": "pending"})
         self.assertEqual(self.file.read_bytes(), source)
 
+    def test_legacy_repeated_quote_keeps_verified_offset_or_requests_relocation(self):
+        import docx_review
+        import word_taskpane
+
+        clause = "样机🧾编号及备用编号。"
+        with patch.object(make_word_native, "TERMS", (clause,)):
+            review, file, rid, _ = self.review_fixture("r")
+        source = docx_review.render(file)
+        para = next(p for p in source["paragraphs"] if p["digest"] == docx_review.text_digest(clause))
+        anchor = {"v": 1, "kind": "quote", "via": "text", "fp": source["fingerprint"], "para": para}
+        for offsets in ({}, {"start": clause.rindex("编号"), "end": clause.rindex("编号") + 2}):
+            notes_store.add(
+                review,
+                {
+                    "page": 1,
+                    "target": "报告",
+                    "quoteFrom": "报告",
+                    "quote": "编号",
+                    "text": "核对",
+                    "docx": {**anchor, **offsets},
+                    "edit": {"op": "replace", "from": "编号", "to": "序号"},
+                },
+            )
+        self.server = word_taskpane.TaskpaneServer(review, file, self.tls, port=0)
+        self.start(self.server)
+        status, result = self.request("/api/bind", {"documentKey": self.key(file)})
+        self.assertEqual(status, 200)
+        matches = [s for s in result["suggestions"] if s["from"] == "编号"]
+        self.assertEqual(len(matches), 2)
+        self.assertEqual(matches[0]["status"], "needs-relocation")
+        self.assertEqual(matches[1]["sourceOffset"], len(clause[: clause.rindex("编号")].encode("utf-16-le")) // 2)
+
     def test_bound_receiver_returns_selected_thread_and_locatable_suggestion(self):
         import word_context
         import word_taskpane
@@ -244,6 +285,7 @@ class TaskpaneTests(unittest.TestCase):
         identity = {"documentKey": self.key(source), "reviewId": rid}
         paragraph = {
             "n": 8,
+            "paraId": "1A000002",
             "digest": hashlib.sha256("应于五日内回复".encode()).hexdigest(),
             "original": "五日",
             "current": "五日",
@@ -265,6 +307,8 @@ class TaskpaneTests(unittest.TestCase):
         submission = {**identity, "submitId": "test-word-selection", "paragraphs": [paragraph]}
         self.assertEqual(self.request("/api/word/submit", submission), (200, {"batch": 1, "delivery": "waiting"}))
         self.assertEqual(self.request("/api/word/submit", submission)[1]["batch"], 1)
+        self.assertEqual(self.request("/api/word/submit", {**submission, "submitId": "new-preview"})[1]["batch"], 1)
+        self.assertEqual(self.request("/api/word/ack", {**identity, "batch": 1}), (200, {}))
         claimed = notes_store.handoff_claim(review, seq=1)
         self.assertEqual(claimed["wordSubmission"]["paragraphs"], [paragraph])
         reason = "甲回复“请按验收安排复核时限。”"

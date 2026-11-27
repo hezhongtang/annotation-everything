@@ -57,6 +57,14 @@ class EditError(ValueError):
 class SelectionError(EditError):
     def __init__(self, errors: list[EditError]):
         self.errors = errors
+
+
+class AmbiguousText(EditError):
+    """The source paragraph is verified but contains more than one matching range."""
+
+    def __init__(self, paragraph: Paragraph):
+        super().__init__("ambiguous")
+        self.paragraph = paragraph
         super().__init__("selection")
 
 
@@ -258,8 +266,10 @@ def locate_edit(paras: list[Paragraph], edit: dict, restrictions: dict[int, set[
         matches = [preferred]
     else:
         matches = _matches(p.text, edit["from"])
-    if len(matches) != 1:
-        raise EditError("ambiguous" if matches else "notFound")
+    if len(matches) > 1:
+        raise AmbiguousText(p)
+    if not matches:
+        raise EditError("notFound")
     start, end = matches[0]
     # 非 w:t 字符（制表符、符号等）和换行结构不在本次字节修改能力内。
     covered = sum(max(0, min(end, t.offset + len(t.text)) - max(start, t.offset)) for t in p.elements)

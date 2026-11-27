@@ -2,7 +2,7 @@
 (() => {
   "use strict";
   const fieldNames = ["id", "n", "from", "to", "paragraph", "bodyParagraph", "table", "row", "column", "digest",
-                      "fp", "selection", "edge", "reason", "sourceBatch", "status", "writeRestriction"];
+                      "fp", "selection", "edge", "reason", "sourceBatch", "sourceOffset", "paraId", "status", "writeRestriction"];
   const unknownMessage = "结果需核对。请在 Word 原页检查修订及作者。";
   const identity = item => binding.key + "/" + binding.reviewId + "/" + item.id;
   const paragraphKey = item => Number.isInteger(item.table)
@@ -39,15 +39,7 @@
     const live = read();
     ensure(xml && live.original === xml.original && (live.current === xml.current || live.text === xml.current),
       "Word 段落包含复杂结构或无法核对改前、改后文字，请在原页处理。");
-    const ranges = changes.items.map(c => c.getRange());
-    const reads = ranges.map(readText);
-    if (ranges.length) await context.sync();
-    const native = changes.items.map((c, i) => {
-      const text = c.type === "Added" ? reads[i]().current : reads[i]().original;
-      ensure(c.author && ["Added", "Deleted"].includes(c.type), "无法核对 Word 原生修订或署名。");
-      return {type: c.type, text: text || c.text, author: c.author};
-    });
-    // Word can expose adjacent revisions as one range. Confirm each author's complete text in both views.
+    let entries = changes.items.map(change => ({change, range: change.getRange()}));
     const signed = revisions => {
       const groups = new Map();
       for (const r of revisions) {
@@ -56,15 +48,39 @@
       }
       return JSON.stringify(Array.from(groups).sort());
     };
-    ensure(xml.revisions.every(r => r.author && r.text) && signed(native) === signed(xml.revisions),
-      "Word 修订范围的文字与署名未能互证。");
+    async function nativeSignature(entries) {
+      const reads = entries.map(entry => readText(entry.range));
+      if (entries.length) await context.sync();
+      return signed(entries.map(({change}, i) => {
+        ensure(change.author && ["Added", "Deleted"].includes(change.type), "无法核对 Word 原生修订或署名。");
+        const text = change.type === "Added" ? reads[i]().current : reads[i]().original;
+        return {type: change.type, author: change.author, text: text || change.text};
+      }));
+    }
+    ensure(xml.revisions.every(r => r.author && r.text), "Word 修订缺少署名或文字。");
+    const signature = signed(xml.revisions);
+    if (await nativeSignature(entries) !== signature) {
+      // On Mac a cell paragraph can omit its leading insertion even when Word's body reports it.
+      const all = context.document.body.getTrackedChanges();
+      all.load("items/type,items/author,items/text");
+      await context.sync();
+      const located = all.items.map(change => {
+        const nativeRange = change.getRange();
+        return {change, range: nativeRange, relation: nativeRange.compareLocationWith(range)};
+      });
+      await context.sync();
+      const inside = ["Equal", "Inside", "InsideStart", "InsideEnd"];
+      entries = located.filter(entry => inside.includes(entry.relation.value));
+      ensure(await nativeSignature(entries) === signature, "Word 修订范围的文字与署名未能互证。");
+    }
+    const ranges = entries.map(entry => entry.range);
     return {value: xml, ranges};
   }
 
   function baseFor(item, previousPlans, anchor) {
     const manual = anchor || binding.relocations?.get(item.id);
     let current = manual ? manual.current : item.paragraph;
-    let offset = manual?.offset;
+    let offset = manual?.offset ?? item.sourceOffset;
     for (const prior of previousPlans) {
       if (prior.paragraphKey !== paragraphKey(item)) continue;
       ensure(prior.before.current === current, "同段前序修订需重新核对。");

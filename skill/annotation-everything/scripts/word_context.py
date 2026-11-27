@@ -17,6 +17,7 @@ import word_revisions
 API = "/api/word/"
 REQUEST_FIELDS = {
     API + "submit": {"submitId", "paragraphs"},
+    API + "ack": {"batch"},
     API + "list": set(),
     API + "withdraw": {"id"},
     API + "recall": {"batch"},
@@ -62,7 +63,10 @@ def validate_paragraphs(paragraphs):
     require(isinstance(paragraphs, list) and 1 <= len(paragraphs) <= 32)
     seen = set()
     for p in paragraphs:
-        require(keys(p, "n digest original current revisions threads"))
+        fields = "n digest original current revisions threads"
+        require(keys(p, fields) or keys(p, fields + " paraId"))
+        if p.get("paraId") is not None:
+            require(isinstance(p["paraId"], str) and re.fullmatch("[0-9A-F]{8}", p["paraId"]))
         require(type(p["n"]) is int and p["n"] >= 0 and p["n"] not in seen)
         seen.add(p["n"])
         require(string(p["digest"], 64) and re.fullmatch("[0-9a-f]{64}", p["digest"]))
@@ -77,10 +81,12 @@ def validate_paragraphs(paragraphs):
         require(p["original"] or p["current"] or p["revisions"] or p["threads"])
 
 
-def submit(review, receiver_id, fingerprint, paragraphs, submit_id, authorize):
+def submit(review, receiver_id, fingerprint, paragraphs, submit_id, authorize, document_key=None):
     require(receiver_id and string(submit_id, 64) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", submit_id))
     validate_paragraphs(paragraphs)
     snap = {"bindingId": receiver_id, "fingerprint": fingerprint, "paragraphs": paragraphs}
+    if document_key is not None:
+        snap["documentKey"] = document_key
     _, item, _ = store.handoff_submit(
         review,
         "请根据所选 Word 原文、改后文字及讨论返回建议。保留需核对的修订。",
@@ -96,6 +102,23 @@ def find_batch(doc, seq):
     item = next((b for b in doc["items"] if b["seq"] == seq and "wordSubmission" in b), None)
     require(item, "no-word-batch")
     return item
+
+
+def acknowledge(binding, document_key, seq):
+    require(type(seq) is int, "no-word-batch")
+    with store.locked(binding.review):
+        binding.authorize_receiver()
+        doc = store.handoff_load(binding.review)
+        batch = find_batch(doc, seq)
+        snap = batch["wordSubmission"]
+        require(
+            snap.get("bindingId") == binding.receiver_id
+            and snap.get("documentKey") == document_key
+            and snap.get("fingerprint") == binding.fingerprint,
+            "word-receipt-changed",
+        )
+        if batch.pop("wordAwaitingReceipt", False):
+            store._handoff_commit(binding.review, doc, {"op": "word-ack", "seq": seq})
 
 
 def return_suggestions(review, seq, suggestions, harness=None, session=None):
@@ -128,6 +151,7 @@ def return_suggestions(review, seq, suggestions, harness=None, session=None):
                     "sourceBatch": seq,
                     "status": "pending",
                     "digest": p["digest"],
+                    "paraId": p.get("paraId"),
                     "fp": snap["fingerprint"],
                     "selection": p["current"],
                 }
@@ -180,6 +204,8 @@ def suggestions(binding):
                 restriction = "原建议属于另一版本的文档，请重新送审。"
             elif not location or binding.restrictions.get(n, set()) - {"revision"}:
                 restriction = "原段落包含不支持的结构，请在 Word 原页处理。"
+            elif not item.get("paraId") or item["paraId"] != location.get("paraId"):
+                restriction = "无法核对送审选区与原文的段落标识，请在 Word 原页处理。"
             valid = (
                 location
                 and item["fp"] == binding.fingerprint
@@ -207,6 +233,7 @@ def handle(binding, path, body):
             body["paragraphs"],
             body["submitId"],
             binding.authorize_receiver,
+            binding.canonical_document_key,
         )
         active = wakeup.load_binding(binding.review)
         delivery = "waiting"
@@ -216,6 +243,9 @@ def handle(binding, path, body):
             except (ValueError, OSError):
                 delivery = "unconfirmed"
         return {"batch": seq, "delivery": delivery}
+    if path == API + "ack":
+        acknowledge(binding, binding.canonical_document_key, body["batch"])
+        return {}
     if path == API + "recall":
         recall(binding.review, body["batch"], binding.authorize_receiver)
     if path == API + "withdraw":

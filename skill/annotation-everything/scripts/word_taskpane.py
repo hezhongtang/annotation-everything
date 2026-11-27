@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import errno
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -64,6 +65,14 @@ def paragraph_locations(root):
                 paragraphs = cell.findall(W + "p")
                 if len(paragraphs) == 1:
                     locations[by_element[paragraphs[0]]] = {"table": t, "row": r, "column": c}
+    ids = {n: docx_review.para_id(p) for p, n in by_element.items()}
+    counts = Counter(ids.values())
+    for n, location in locations.items():
+        pid = ids[n]
+        if pid and len(pid) == 8 and pid != "00000000" and counts[pid] == 1:
+            location["paraId"] = pid
+        else:
+            location["writeRestriction"] = "源文档缺少唯一的段落标识，请在 Word 原页处理。"
     return locations
 
 
@@ -73,6 +82,7 @@ class Binding:
     def __init__(self, review, document):
         self.review = review.resolve(strict=True)
         self.document = document.resolve(strict=True)
+        self.canonical_document_key = hashlib.sha256(str(self.document).encode()).hexdigest()
         paths = {self.document}
         if sys.platform == "darwin" and self.document.parts[:3] in (("/", "private", "tmp"), ("/", "private", "var")):
             alias = Path("/") / self.document.relative_to("/private")
@@ -175,15 +185,28 @@ class Binding:
     def suggestions(self):
         result = []
         for note in notes_store.load(self.review)["notes"]:
+            needs_selection = False
             try:
                 edit = docx_edit.annotation_edit(note)
                 if edit["anchor"].get("fp") != self.fingerprint or not isinstance(edit["to"], str):
                     continue
                 p, start, end = docx_edit.locate_edit(self.paragraphs, edit, self.native_restrictions)
+            except docx_edit.AmbiguousText as exc:
+                p = exc.paragraph
+                needs_selection = True
             except docx_edit.EditError:
                 continue
-            if p.n in self.locations and p.text.count(edit["from"]) == 1 and p.text[start:end] == edit["from"]:
-                result.append({k: edit[k] for k in ("id", "from", "to")} | {"paragraph": p.text} | self.locations[p.n])
+            if p.n not in self.locations or edit["from"] not in p.text:
+                continue
+            item = {k: edit[k] for k in ("id", "from", "to")} | {"paragraph": p.text} | self.locations[p.n]
+            if needs_selection:
+                item.update(status="needs-relocation", n=p.n)
+            elif p.text[start:end] != edit["from"]:
+                continue
+            elif p.text.find(edit["from"]) != p.text.rfind(edit["from"]):
+                # Word reports offsets in UTF-16 code units, while locate_edit returns code points.
+                item["sourceOffset"] = len(p.text[:start].encode("utf-16-le")) // 2
+            result.append(item)
         return result + word_context.suggestions(self)
 
 

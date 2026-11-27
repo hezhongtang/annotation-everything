@@ -6,7 +6,7 @@ const { webcrypto } = require("node:crypto");
 
 const page = fs.readFileSync(0, "utf8");
 const scripts = Array.from(page.matchAll(/<script>([\s\S]*?)<\/script>/g), match => match[1]);
-const suggestion = {id: "sample", from: "五日", to: "七日", paragraph: "应于五日内回复", bodyParagraph: 0};
+const suggestion = {id: "sample", from: "五日", to: "七日", paragraph: "应于五日内回复", bodyParagraph: 0, paraId: "1A000001"};
 
 // Synthetic Office boundary, including the Flat OPC DOM exposed by the webview.
 class DOMParser {
@@ -25,13 +25,14 @@ class DOMParser {
       children.forEach(c => { c.parentElement = result; });
       return result;
     }
-    const runs = JSON.parse(json).map(({type, text, author}) => {
+    const {runs: segments, paraId} = JSON.parse(json);
+    const runs = segments.map(({type, text, author}) => {
       const value = node(type === "Deleted" ? "delText" : "t");
       value.textContent = text;
       const run = node("r", [value]);
       return !type ? run : node(type === "Deleted" ? "del" : "ins", [run], {author, date: "2026-11-27"});
     });
-    return node("package", [node("part", [node("body", [node("p", runs)])], {name: "/word/document.xml"}, pkg)], {}, pkg);
+    return node("package", [node("part", [node("body", [node("p", runs, {paraId})])], {name: "/word/document.xml"}, pkg)], {}, pkg);
   }
 }
 
@@ -44,7 +45,7 @@ function matches(node, selector) {
 
 function element(tag) {
   return {
-    tag, dataset: {}, children: [], events: {}, value: "",
+    tag, dataset: {}, style: {}, children: [], events: {}, value: "",
     addEventListener(name, listener) { this.events[name] = listener; },
     append(...nodes) { this.children.push(...nodes); },
     replaceChildren(...nodes) { this.children = nodes; },
@@ -65,7 +66,7 @@ async function openPane(Word, fetch, files = {url: "/synthetic/A/contract.docx"}
   const document = {
     getElementById: id => nodes[id] || null,
     addEventListener() {},
-    createElement: element
+    createElement: element, createTextNode: value => value
   };
   const office = {
     HostType: { Word: "Word" }, PlatformType: { Mac: "Mac", PC: "PC" }, AsyncResultStatus: { Succeeded: "ok" },
@@ -86,7 +87,7 @@ async function openPane(Word, fetch, files = {url: "/synthetic/A/contract.docx"}
   return nodes;
 }
 
-async function applyInWord({ fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false }) {
+async function applyInWord({ incompleteCell = false, outsideOnly = false, fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false, liveParaId = suggestion.paraId }) {
   const item = {...suggestion, paragraph: (old ? "邮件" : "") + suggestion.paragraph, ...(table && {table: 0, row: 0, column: 1}), ...replacement};
   const writes = [];
   const collection = items => ({items, load() {}});
@@ -114,17 +115,23 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
   };
   const targetStart = {...target, text: ""}, targetEnd = {...target, text: ""};
   const outsideControl = {isNullObject: true, load() {}};
+  function nativeChange(r, location) {
+    return {...r, getRange: () => ({
+      ...plainRange(r.type === "Deleted" ? r.text : "", r.type === "Added" ? r.text : ""),
+      relation: oldRelation, compareLocationWith: () => ({value: location})
+    })};
+  }
   const paragraph = {
     parentContentControlOrNullObject: outsideControl, parentTableCellOrNullObject: outsideControl,
     getRange: () => ({
       ...plainRange(projection(segments(), "Original"), projection(segments(), "Current")),
-      getOoxml: () => ({value: JSON.stringify(segments())}),
+      getOoxml: () => ({value: JSON.stringify({runs: segments(), paraId: liveParaId})}),
       getRange: () => ({expandTo: () => plainRange("", projection(prefix, "Current"))}),
       search: () => collection([target])
     }),
-    getTrackedChanges: () => collection(segments().filter(r => r.type).map(r => ({
-      ...r, getRange: () => ({...plainRange(r.type === "Deleted" ? r.text : "", r.type === "Added" ? r.text : ""), relation: oldRelation})
-    })))
+    getTrackedChanges: () => collection(segments().filter(r => r.type && !(incompleteCell && r.type === "Added"))
+      .map(r => nativeChange(r, "Inside")))
+
   };
   const comments = relations.map(relation => ({ getRange() {
     if (unreadable) throw new Error("Office range unavailable");
@@ -135,6 +142,9 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
     getSelection: () => wrongSelection ? {} : selected,
     changeTrackingMode: tracking, isReadOnly: readOnly, protectionType: protectedDoc ? "AllowOnlyReading" : "NoProtection", load() {},
     body: {
+      getTrackedChanges: () => collection(segments().filter(r => r.type).map(r =>
+        nativeChange(r, outsideOnly && r.type === "Added" ? "Before" : "InsideStart"))
+        .concat(nativeChange({type: "Added", text: "七日", author: "乙"}, "After"))),
       tables: collection([{load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: outsideControl, getCell: () => ({body: {paragraphs: collection([paragraph])}})}]),
       paragraphs: collection([paragraph]), getRange: () => ({getComments: () => collection(comments)})
     }
@@ -160,11 +170,57 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
   return {writes, status: nodes.status.textContent, disabled: writeButton()?.disabled};
 }
 
+async function resubmitAfterReconnect() {
+  const paragraph = {n: 2, paraId: "1A000002", digest: "e".repeat(64), original: "五日", current: "五日", revisions: [],
+    threads: [{id: "T", content: "未勾选的讨论", authorName: "甲", range: {text: "日"}, resolved: false, replies: []}]};
+  const Word = {run: async () => [paragraph]};
+  const receiver = {state: "waiting", bindingId: "receiver-A", sessionId: "s", harness: "Codex"};
+  const attempts = [];
+  let lose = true;
+  const other = revisionService([]);
+  const fetch = async (path, request) => {
+    const reply = data => ({ok: true, json: async () => data});
+    if (path === "/api/bind" || path === "/api/status") return reply({reviewId: "R", receiver, suggestions: []});
+    if (path === "/api/word/submit") {
+      attempts.push(JSON.parse(request.body));
+      if (lose) { lose = false; throw Error("Synthetic response lost after commit"); }
+      return reply({batch: 5});
+    }
+    if (path === "/api/word/ack") return reply({});
+    return other.fetch(path, request);
+  };
+  const nodes = await openPane(Word, fetch);
+  const submit = async () => {
+    await nodes["word-preview"].events.click();
+    await nodes["word-submit"].events.click();
+  };
+  await submit();
+  assert.match(nodes.status.textContent, /已断开/);
+  nodes.token.value = "synthetic";
+  await nodes.connect.events.submit({preventDefault() {}});
+  await submit();
+  await submit();
+  assert.equal(attempts.length, 3);
+  assert.deepEqual(attempts[0], attempts[1], "Rebinding and recreating the preview retry the same approved selection.");
+  assert.notEqual(attempts[2].submitId, attempts[0].submitId, "A new explicit submission after receipt has its own ID.");
+  for (const attempt of attempts) assert.deepEqual(attempt.paragraphs[0].threads, []);
+}
+
 (async () => {
+  if (process.argv[2] === "resubmit") return resubmitAfterReconnect();
   if (process.argv[2]) return batchScenario(process.argv[2], openPane);
+  const recoveredCell = await applyInWord({table: true, incompleteCell: true});
+  assert.match(recoveredCell.status, /已写入当前 Word 文档/);
+  const unrelatedEvidence = await applyInWord({table: true, incompleteCell: true, outsideOnly: true});
+  assert.match(unrelatedEvidence.status, /需核对/);
   const protectedResult = await applyInWord({readOnly: true});
   assert.deepEqual(protectedResult.writes, [], "read-only Word must retain the suggestion");
   for (const table of [true, false]) {
+    for (const liveParaId of ["1A00000F", null]) {
+      const moved = await applyInWord({table, liveParaId, manual: true});
+      assert.deepEqual(moved.writes, [], "An identical paragraph at the former index must never receive the edit.");
+      assert.match(moved.status, /段落标识/);
+    }
     for (const [replacement, writes] of [
       [{from: "", selection: "五日", edge: "Start", to: "约"}, [["约", "Start"]]],
       [{to: ""}, [["", "Delete"]]]
