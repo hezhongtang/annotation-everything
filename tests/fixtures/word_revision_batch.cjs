@@ -7,7 +7,7 @@ const original = runs => runs.filter(r => r.type !== "Added").map(r => r.text).j
 
 function revisionService(items, options = {}) {
   const operations = [];
-  const state = {reviewId: "A", title: "合成 A", documentName: "contract.docx", receiver: {state: "unconfigured"}};
+  const state = {reviewId: "A", title: "合成 A", documentName: "contract.docx", sourceTailId: options.sourceTailId, receiver: {state: "unconfigured"}};
   const reply = data => ({ok: true, json: async () => JSON.parse(JSON.stringify(data))});
   async function fetch(path, request) {
     const body = JSON.parse(request.body);

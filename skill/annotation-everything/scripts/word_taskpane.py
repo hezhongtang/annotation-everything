@@ -174,9 +174,11 @@ class Binding:
     def status(self, live):
         batches = notes_store.handoff_load(self.review)["items"]
         latest = batches[-1] if batches else None
+        last = self.locations.get(len(self.paragraphs) - 1, {})
         return {
             **live,
             "reviewId": self.rid,
+            "sourceTailId": last.get("paraId") if "bodyParagraph" in last else None,
             "documentName": self.document.name,
             "batch": {k: latest[k] for k in ("seq", "status")} if latest else None,
             "browserUrl": f"http://127.0.0.1:{self.port}/",

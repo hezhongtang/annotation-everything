@@ -27,19 +27,22 @@ async function readWordStructure(context) {
   const pkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
   const w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
   const children = (el, name) => Array.from(el.children).filter(c => c.namespaceURI === w && c.localName === name);
-  const requireStructure = ok => { if (!ok) throw new Error("无法核对 Word 全文中的段落与表格顺序，请在原页处理。"); };
+  const requireStructure = (ok, detail) => {
+    if (!ok) throw new Error("无法核对 Word 全文中的段落与表格顺序。" + detail + " 请在原页处理。");
+  };
   const doc = new DOMParser().parseFromString(raw.value, "application/xml");
   const parts = Array.from(doc.getElementsByTagNameNS(pkg, "part")).filter(p => p.getAttributeNS(pkg, "name") === "/word/document.xml");
-  requireStructure(parts.length === 1);
+  requireStructure(parts.length === 1, "找到 " + parts.length + " 个主文档部件。");
   const main = parts[0].getElementsByTagNameNS(w, "document");
-  requireStructure(main.length === 1);
+  requireStructure(main.length === 1, "主部件内找到 " + main.length + " 个 document 元素。");
   const bodies = children(main[0], "body");
-  requireStructure(bodies.length === 1);
+  requireStructure(bodies.length === 1, "主文档内找到 " + bodies.length + " 个 body 元素。");
   const root = bodies[0];
   const ordered = Array.from(root.getElementsByTagNameNS(w, "p"));
   const xmlTables = children(root, "tbl");
-  requireStructure(ordered.length === paragraphs.items.length && xmlTables.length === tables.items.length &&
-    root.getElementsByTagNameNS(w, "tbl").length === xmlTables.length);
+  const allTables = root.getElementsByTagNameNS(w, "tbl").length;
+  const counts = "Word 段落 " + paragraphs.items.length + "，XML 段落 " + ordered.length +
+    "；Word 表格 " + tables.items.length + "，XML 顶层表格 " + xmlTables.length + "，全部表格 " + allTables + "。";
   const coordinates = new Map(children(root, "p").map(p => [p, {}]));
   xmlTables.forEach((table, t) => {
     const irregular = ["gridSpan", "vMerge", "hMerge", "gridBefore", "gridAfter"].some(k => table.getElementsByTagNameNS(w, k).length);
@@ -48,7 +51,30 @@ async function readWordStructure(context) {
       for (const p of inside) coordinates.set(p, irregular || inside.length !== 1 ? null : {table: t, row: r, column: c});
     }));
   });
-  requireStructure(ordered.every(p => coordinates.has(p)));
+  const unmapped = ordered.find(p => !coordinates.has(p));
+  const wrapper = unmapped ? "第 " + (ordered.indexOf(unmapped) + 1) + " 段的父元素为 " + unmapped.parentElement.localName + "。" : "";
+  if (ordered.length !== paragraphs.items.length) {
+    const tail = ordered[ordered.length - 1];
+    const previous = ordered[ordered.length - 2];
+    const id = p => p.getAttributeNS(w14, "paraId") || "无标识";
+    const text = p => Array.from(p.getElementsByTagNameNS(w, "t")).map(t => t.textContent).join("");
+    const live = paragraphs.items.slice(-2).map(p => p.getRange("Content").getReviewedText("Current"));
+    await context.sync();
+    const details = " XML 末三段（标识/父元素/文字长度）" +
+      ordered.slice(-3).map(p => [id(p), p.parentElement.localName, text(p).length].join("/")).join("、") +
+      "。Word 末两段文字长度 " + live.map(r => r.value.length).join("、") + "。";
+    // Mac can append an empty paragraph when exporting the body. Keep real trailing blank paragraphs ambiguous.
+    const plain = p => p && p.parentElement === root && Array.from(p.children).every(c => c.namespaceURI === w &&
+      (c.localName === "pPr" || (c.localName === "r" && Array.from(c.children).every(r => r.namespaceURI === w &&
+        ["rPr", "t"].includes(r.localName)))));
+    const lastText = live[live.length - 1]?.value;
+    const extraBlank = ordered.length === paragraphs.items.length + 1 && plain(tail) && !text(tail) &&
+      plain(previous) && lastText && text(previous) === lastText && id(previous).toUpperCase() === binding.sourceTailId &&
+      (!tail.getAttributeNS(w14, "paraId") || !ordered.slice(0, -1).some(p => id(p).toUpperCase() === id(tail).toUpperCase()));
+    requireStructure(extraBlank, counts + wrapper + details);
+    ordered.pop();
+  }
+  requireStructure(xmlTables.length === tables.items.length && allTables === xmlTables.length && !unmapped, counts + wrapper);
   const unique = new Map();
   const locations = ordered.map((p, n) => {
     const id = (p.getAttributeNS(w14, "paraId") || "").toUpperCase();

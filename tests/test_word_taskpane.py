@@ -214,6 +214,7 @@ class TaskpaneTests(unittest.TestCase):
             "paraId": "1A000002",
         }
         self.assertEqual(bound["reviewId"], self.rid)
+        self.assertEqual(bound["sourceTailId"], self.server.binding.paragraphs[-1].pid)
         self.assertEqual(bound["title"], "合成合同 A")
         table, tail = bound["suggestions"]
         self.assertEqual(table, expected)

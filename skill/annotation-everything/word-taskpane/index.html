@@ -217,6 +217,7 @@
     const receiverStates = {idle: "未在等待", event: "事件接收", processing: "处理中", waiting: "等待中"};
 
     function displayStatus(result) {
+      binding.sourceTailId = result.sourceTailId;
       byId("title").textContent = result.title;
       byId("documentName").textContent = "当前文档 " + result.documentName + " · " + binding.path;
       byId("reviewId").textContent = "审阅标识 " + result.reviewId;

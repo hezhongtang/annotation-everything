@@ -28,7 +28,12 @@ class DOMParser {
     const pkgPart = (name, blocks) => node("part", [node("document", [node("body", blocks)])], {name}, pkg);
     const {runs: segments, paraId, layout} = JSON.parse(json);
     if (layout) {
-      const paragraph = id => node("p", [], {paraId: id});
+      const paragraph = spec => {
+        const {id, text} = spec && typeof spec === "object" ? spec : {id: spec, text: ""};
+        const t = node("t");
+        t.textContent = text;
+        return node("p", text ? [node("r", [t])] : [], {paraId: id});
+      };
       const blocks = layout.map(block => Array.isArray(block) ? node("tbl", block.map(row =>
         node("tr", row.map(id => node("tc", [paragraph(id)]))))) : paragraph(block));
       return node("package", [pkgPart("/word/header1.xml", [paragraph("1A000001")]), pkgPart("/word/document.xml", blocks)], {}, pkg);
@@ -94,7 +99,7 @@ async function openPane(Word, fetch, files = {url: "/synthetic/A/contract.docx"}
   return nodes;
 }
 
-async function applyInWord({ incompleteCell = false, outsideOnly = false, fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false, liveParaId = suggestion.paraId, duplicateId = false, extraXmlParagraph = false }) {
+async function applyInWord({ incompleteCell = false, outsideOnly = false, fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false, liveParaId = suggestion.paraId, duplicateId = false, extraXmlParagraph = false, exportTail }) {
   const item = {...suggestion, paragraph: (old ? "邮件" : "") + suggestion.paragraph, ...(table && {table: 0, row: 0, column: 1}), ...replacement};
   if (table) delete item.bodyParagraph;
   const writes = [];
@@ -147,23 +152,28 @@ async function applyInWord({ incompleteCell = false, outsideOnly = false, fileCh
     return {relation};
   } }));
   let file = "/synthetic/A/contract.docx";
+  const tailId = "1A0000AB";
+  const xmlTail = exportTail && {id: exportTail.xmlId || tailId, text: exportTail.xmlText ?? "真实末段"};
+  const liveTail = text => ({getRange: () => plainRange(text, text)});
   const context = {sync: async () => {if (loss && writes.length) throw new Error("Word 未应答");}, document: {
     getSelection: () => wrongSelection ? {} : selected,
     changeTrackingMode: tracking, isReadOnly: readOnly, protectionType: protectedDoc ? "AllowOnlyReading" : "NoProtection", load() {},
     body: {
       getOoxml: () => ({value: JSON.stringify({layout: [
-        ...(table ? [[["1B000010", liveParaId]]] : [liveParaId]), ...(duplicateId || extraXmlParagraph ? [liveParaId] : [])
+        ...(table ? [[["1B000010", liveParaId]]] : [liveParaId]), ...(duplicateId || extraXmlParagraph ? [liveParaId] : []),
+        ...(exportTail ? (exportTail.middle ? [null, xmlTail] : [xmlTail, null]) : [])
       ]})}),
       getTrackedChanges: () => collection(segments().filter(r => r.type).map(r =>
         nativeChange(r, outsideOnly && r.type === "Added" ? "Before" : "InsideStart"))
         .concat(nativeChange({type: "Added", text: "七日", author: "乙"}, "After"))),
       tables: collection(table ? [{load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: outsideControl, getCell: () => ({body: {paragraphs: collection([paragraph])}})}] : []),
-      paragraphs: collection([...(table ? [{}, paragraph] : [paragraph]), ...(duplicateId ? [{}] : [])]),
+      paragraphs: collection([...(table ? [liveTail("左栏"), paragraph] : [paragraph]), ...(duplicateId ? [liveTail("副本")] : []),
+        ...(exportTail ? [liveTail(exportTail.hostText ?? "真实末段")] : [])]),
       getRange: () => ({getComments: () => collection(comments)})
     }
   }};
   const Word = {run: action => action(context)};
-  const service = revisionService([item]);
+  const service = revisionService([item], {sourceTailId: tailId});
   const nodes = await openPane(Word, service.fetch, {get url() { return file; }});
   if (fileChanged) file = "/synthetic/B/contract.docx";
   const writeButton = () => nodes.suggestions.querySelectorAll("button").find(button => button.dataset.write === "true");
@@ -200,14 +210,15 @@ async function resubmitAfterReconnect() {
   const first = paragraph("五日", [comment]);
   const outside = paragraph("仅在本机的未选文字");
   const cell = paragraph("五日");
+  const tail = paragraph("源文件末段");
   const table = {load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: empty,
     getCell: () => ({body: {paragraphs: collection([cell])}})};
   const context = {sync: async () => {}, document: {
     getSelection: () => ({paragraphs: collection([first, cell])}),
-    body: {paragraphs: collection([first, outside, cell]), tables: collection([table]),
+    body: {paragraphs: collection([first, outside, cell, tail]), tables: collection([table]),
       getOoxml() {
         bodyReads++;
-        return {value: JSON.stringify({layout: ["1A000006", "1A000003", [["1A000001"]]]})};
+        return {value: JSON.stringify({layout: ["1A000006", "1A000003", [["1A000001"]], {id: "1A000007", text: "源文件末段"}, null]})};
       }}
   }};
   const Word = {run: action => action(context)};
@@ -217,7 +228,7 @@ async function resubmitAfterReconnect() {
   const other = revisionService([]);
   const fetch = async (path, request) => {
     const reply = data => ({ok: true, json: async () => data});
-    if (path === "/api/bind" || path === "/api/status") return reply({reviewId: "R", receiver, suggestions: []});
+    if (path === "/api/bind" || path === "/api/status") return reply({reviewId: "R", sourceTailId: "1A000007", receiver, suggestions: []});
     if (path === "/api/word/submit") {
       attempts.push(JSON.parse(request.body));
       if (lose) { lose = false; throw Error("Synthetic response lost after commit"); }
@@ -259,6 +270,12 @@ async function resubmitAfterReconnect() {
   const protectedResult = await applyInWord({readOnly: true});
   assert.deepEqual(protectedResult.writes, [], "read-only Word must retain the suggestion");
   for (const table of [true, false]) {
+    assert.match((await applyInWord({table, exportTail: {}})).status, /已写入当前 Word 文档/);
+    for (const exportTail of [{middle: true}, {xmlText: "", hostText: ""}, {xmlId: "1A0000CC"}, {hostText: "已改变"}]) {
+      const result = await applyInWord({table, exportTail});
+      assert.deepEqual(result.writes, [], "An uncorroborated extra paragraph must never be discarded.");
+      assert.match(result.status, /段落/);
+    }
     for (const structure of [{duplicateId: true}, {extraXmlParagraph: true}]) {
       const result = await applyInWord({table, ...structure});
       assert.deepEqual(result.writes, [], "An ambiguous ID or differing Word paragraph count must stop the write.");
