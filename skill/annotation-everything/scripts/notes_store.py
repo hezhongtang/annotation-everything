@@ -2449,6 +2449,7 @@ def handoff_submit(
     validate_submission: Callable[[dict], None] | None = None,
     note_ids: list[str] | None = None,
     submit_id: str | None = None,
+    word_submission: dict | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """记一次提交（一批），快照当时的未处理批注。上一次提交还没被代理接收时合并进去（刷新快照、附言与选项），不重复排队。
 
@@ -2474,12 +2475,24 @@ def handoff_submit(
         manifest = ledger.read_manifest(review_dir)
         video = manifest.get("video") if _is_video_review(manifest) else None
         existing = next((i for i in items if submit_id is not None and i.get("submitId") == submit_id), None)
+        if existing is not None and (word_submission is not None or "wordSubmission" in existing):
+            if existing.get("wordSubmission") != word_submission:
+                raise HandoffError("送审标识已用于其他选区", code="word-submission-changed")
+            return doc, existing, True
         if existing is not None and (video is not None or existing.get("status") != "pending"):
             return doc, existing, True
         if validate_submission is not None:
             validate_submission(manifest)
         latest = items[-1] if items else None
-        merge_into = latest if video is None and latest and latest.get("status") == "pending" else None
+        merge_into = (
+            latest
+            if video is None
+            and word_submission is None
+            and latest
+            and "wordSubmission" not in latest
+            and latest.get("status") == "pending"
+            else None
+        )
         if video is not None:
             target = "review"
             pending = _in_flight_ids(items, notes)
@@ -2505,8 +2518,17 @@ def handoff_submit(
             "allowSubagents": bool(allow_subagents),
             "fullCheck": full_check_value,
             "alwaysSkills": always_skills(review_dir),
-            **(_selected_snapshot(notes, note_ids) if note_ids is not None else _open_snapshot(notes)),
+            **(
+                _open_snapshot([])
+                if word_submission is not None
+                else _selected_snapshot(notes, note_ids)
+                if note_ids is not None
+                else _open_snapshot(notes)
+            ),
         }
+        if word_submission is not None:
+            snap["wordSubmission"] = word_submission
+            snap["selected"] = True
         if video is not None:
             by_id = {n["id"]: n for n in notes}
             snap["videoSubmission"] = {
@@ -2646,6 +2668,20 @@ def _can_resume_video_repair(review_dir: Path, item: dict) -> bool:
     return True
 
 
+def receiver_batches(review_dir, items):
+    """A Word selection was submitted to the specific receiver shown in its pane."""
+    if not any("wordSubmission" in item for item in items):
+        return items
+    import wakeup
+
+    receiver = (wakeup.load_binding(review_dir) or {}).get("bindingId")
+    return [
+        item
+        for item in items
+        if "wordSubmission" not in item or (receiver and item["wordSubmission"].get("bindingId") == receiver)
+    ]
+
+
 def handoff_claim(
     review_dir: Path,
     *,
@@ -2666,7 +2702,12 @@ def handoff_claim(
         if _legacy_video_stages(doc) and _is_video_review(ledger.read_manifest(review_dir)):
             _restore_legacy_video_stages(review_dir, doc)
         item = next(
-            (i for i in doc["items"] if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)), None
+            (
+                i
+                for i in receiver_batches(review_dir, doc["items"])
+                if i.get("status") in want and (seq is None or int(i.get("seq", 0)) == seq)
+            ),
+            None,
         )
         if item is None:
             return None

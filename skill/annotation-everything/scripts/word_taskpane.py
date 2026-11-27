@@ -25,6 +25,7 @@ import review_stop
 import serve
 import wakeup
 import word_comments
+import word_context
 
 PORT = 43821
 ASSETS = Path(__file__).resolve().parents[1] / "word-taskpane"
@@ -172,14 +173,15 @@ class Binding:
                 continue
             if p.n in self.locations and p.text.count(edit["from"]) == 1 and p.text[start:end] == edit["from"]:
                 result.append({k: edit[k] for k in ("id", "from", "to")} | {"paragraph": p.text} | self.locations[p.n])
-        return result
+        return result + word_context.suggestions(self)
 
 
 def index_page():
     html = (ASSETS / "index.html").read_text(encoding="utf-8")
     fragments = (ASSETS / name for name in ("context.pane.html", "comments.pane.html"))
-    inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments if file.exists())
-    return html.replace("<!-- AE-PANE-FRAGMENTS -->", inline).encode()
+    inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments)
+    evidence = (ASSETS / "word-evidence.js").read_text(encoding="utf-8")
+    return html.replace("<!-- AE-PANE-FRAGMENTS -->", "<script>\n" + evidence + "</script>\n" + inline).encode()
 
 
 class TaskpaneServer(ThreadingHTTPServer):
@@ -231,6 +233,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 "/api/status",
                 "/api/suggestion",
                 *word_comments.REQUEST_FIELDS,
+                *word_context.REQUEST_FIELDS,
             ):
                 raise Refused(404, "not-found")
             if self.headers.get_all("Origin") != ["https://" + host] or self.headers.get(
@@ -250,7 +253,8 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 or not lengths[0].isdecimal()
             ):
                 raise Refused(400, "bad-length")
-            if len(lengths[0]) > 5 or int(lengths[0]) > 4096:
+            limit = word_context.MAX_BYTES if self.path == "/api/word/submit" else 4096
+            if len(lengths[0]) > len(str(limit)) or int(lengths[0]) > limit:
                 raise Refused(413, "too-large")
             try:
                 body = json.loads(self.rfile.read(int(lengths[0])).decode())
@@ -258,11 +262,16 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 raise Refused(400, "bad-json") from None
             fields = {
                 **word_comments.REQUEST_FIELDS,
+                **{k: v | {"documentKey", "reviewId"} for k, v in word_context.REQUEST_FIELDS.items()},
                 "/api/bind": {"documentKey"},
                 "/api/status": {"documentKey", "reviewId"},
                 "/api/suggestion": {"documentKey", "reviewId", "id"},
             }[self.path]
-            if not isinstance(body, dict) or set(body) != fields or not all(isinstance(v, str) for v in body.values()):
+            if (
+                not isinstance(body, dict)
+                or set(body) != fields
+                or not all(isinstance(body[k], str) for k in fields - {"paragraphs", "batch"})
+            ):
                 raise Refused(400, "bad-request")
             binding = self.server.binding
             if body["documentKey"] not in binding.document_keys or body.get("reviewId", binding.rid) != binding.rid:
@@ -271,6 +280,8 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
             binding.verified_bytes()
             if self.path in word_comments.REQUEST_FIELDS:
                 self.send_payload(200, word_comments.handle(binding, self.path, body))
+            elif self.path in word_context.REQUEST_FIELDS:
+                self.send_payload(200, word_context.handle(binding, self.path, body))
             elif self.path == "/api/status":
                 self.send_payload(200, binding.status(live))
             elif self.path == "/api/bind":
@@ -280,6 +291,8 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 if suggestion is None:
                     raise Refused(404, "no-suggestion")
                 self.send_payload(200, {"reviewId": binding.rid, "suggestion": suggestion})
+        except word_context.ContextError as exc:
+            self.send_payload(409, {"error": str(exc)})
         except (Refused, word_comments.CommentError) as exc:
             self.send_payload(exc.status, {"error": exc.code})
         except (OSError, ValueError, BuildError, ledger.LedgerError, TypeError, KeyError, AttributeError):

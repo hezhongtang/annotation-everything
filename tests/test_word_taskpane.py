@@ -161,6 +161,61 @@ class TaskpaneTests(unittest.TestCase):
         self.assertEqual(refreshed["batch"], {"seq": 1, "status": "pending"})
         self.assertEqual(self.file.read_bytes(), source)
 
+    def test_bound_receiver_returns_selected_thread_and_locatable_suggestion(self):
+        import word_context
+        import word_taskpane
+
+        review, source, rid, _ = self.review_fixture("c", session="word-reviewer")
+        original_package = source.read_bytes()
+        self.server = word_taskpane.TaskpaneServer(review, source, self.tls, port=0)
+        self.start(self.server)
+        identity = {"documentKey": self.key(source), "reviewId": rid}
+        paragraph = {
+            "n": 8,
+            "digest": hashlib.sha256("应于五日内回复".encode()).hexdigest(),
+            "original": "五日",
+            "current": "五日",
+            "revisions": [],
+            "threads": [
+                {
+                    "id": "t1",
+                    "authorName": "乙",
+                    "creationDate": "",
+                    "content": "五日够吗？",
+                    "range": {"text": "五日"},
+                    "resolved": False,
+                    "replies": [
+                        {"id": "r1", "authorName": "甲", "creationDate": "", "content": "请按验收安排复核时限。"}
+                    ],
+                }
+            ],
+        }
+        submission = {**identity, "submitId": "test-word-selection", "paragraphs": [paragraph]}
+        self.assertEqual(self.request("/api/word/submit", submission), (200, {"batch": 1, "delivery": "waiting"}))
+        self.assertEqual(self.request("/api/word/submit", submission)[1]["batch"], 1)
+        claimed = notes_store.handoff_claim(review, seq=1)
+        self.assertEqual(claimed["wordSubmission"]["paragraphs"], [paragraph])
+        reason = "甲回复“请按验收安排复核时限。”"
+        [item] = word_context.return_suggestions(
+            review, 1, [{"n": 8, "from": "五日", "to": "七日", "reason": reason}], "Codex", "word-reviewer"
+        )
+        entries = self.request("/api/word/list", identity)[1]["suggestions"]
+        suggestion = next(s for s in entries if s["id"] == item["id"])
+        self.assertEqual(
+            (
+                suggestion["sourceBatch"],
+                suggestion["reason"],
+                suggestion["status"],
+                suggestion["table"],
+                suggestion["column"],
+            ),
+            (1, reason, "pending", 0, 1),
+        )
+        self.assertEqual(self.request("/api/suggestion", {**identity, "id": item["id"]})[1]["suggestion"], suggestion)
+        self.assertEqual(self.request("/api/word/withdraw", {**identity, "id": item["id"]})[0], 200)
+        self.assertEqual(self.request("/api/suggestion", {**identity, "id": item["id"]})[0], 404)
+        self.assertEqual(source.read_bytes(), original_package)
+
     def test_receiver_transfer_invalidates_the_open_pane(self):
         import word_taskpane
 
@@ -303,4 +358,7 @@ class TaskpaneTests(unittest.TestCase):
         response = connection.getresponse()
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Referrer-Policy"), "same-origin")
-        self.assertIn(b"appsforoffice.microsoft.com", response.read())
+        html = response.read()
+        for expected in (b"appsforoffice.microsoft.com", b"function selectedPassage(", b'id="comment-post"'):
+            self.assertIn(expected, html)
+        self.assertNotIn(b"<!-- AE-PANE-FRAGMENTS -->", html)

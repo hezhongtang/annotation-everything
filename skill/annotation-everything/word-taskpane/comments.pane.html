@@ -23,8 +23,8 @@
 
   function attributes(item) {
     return {
-      id: item.id, content: item.content, authorName: item.authorName,
-      creationDate: item.creationDate ? new Date(item.creationDate).toISOString() : null
+      id: item.id, content: item.content, authorName: item.authorName || "",
+      creationDate: item.creationDate ? new Date(item.creationDate).toISOString() : ""
     };
   }
 

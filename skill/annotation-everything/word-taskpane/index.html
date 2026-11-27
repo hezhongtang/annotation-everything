@@ -44,6 +44,13 @@
       <p><a id="browser" target="_blank" rel="noopener noreferrer">打开浏览器对照页</a></p>
       <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。</p>
       <ul id="suggestions" aria-label="文字建议"></ul>
+      <section id="wordSubmission">
+        <h2>送审当前选区</h2>
+        <button id="word-preview" type="button">预览所选文字与讨论</button>
+        <div id="word-selection"></div>
+        <button id="word-submit" type="button" hidden>将预览内容交给接收会话</button>
+        <div id="word-pending"></div>
+      </section>
       <button id="inspect" type="button">读取选区与正文修订</button>
       <p class="note">可在 Word 中选中已有修订的整段，再读取原文、改后文字和作者。读数只显示在本窗格。</p>
       <details id="evidence" hidden>
@@ -72,7 +79,7 @@
       byId("refresh").disabled = busy || !binding;
       byId("disconnect").disabled = busy || !binding;
       for (const button of byId("suggestions").querySelectorAll("button")) {
-        button.disabled = busy || attempted.has(button.dataset.id);
+        button.disabled = busy || (button.dataset.write === "true" && attempted.has(button.dataset.id));
       }
     }
 
@@ -166,6 +173,8 @@
       byId("evidence").hidden = true;
       byId("output").textContent = "";
       byId("suggestions").replaceChildren();
+      clearWordPreview();
+      byId("word-pending").replaceChildren();
       byId("browser").removeAttribute("href");
       refreshControls();
     }
@@ -193,6 +202,7 @@
       const result = await request("/api/status", binding.token, { documentKey: binding.key, reviewId: binding.reviewId });
       await checkDocument();
       displayStatus(result);
+      await refreshWordList();
     }
 
     byId("disconnect").addEventListener("click", () => {
@@ -213,18 +223,22 @@
     }
 
     function displaySuggestions(items) {
+      byId("suggestions").replaceChildren();
       for (const item of items) {
         const entry = document.createElement("li");
         const location = document.createElement("strong");
-        location.textContent = describe(item);
+        location.textContent = item.status === "needs-relocation" ? "需重新定位 · 第 " + (item.n + 1) + " 段" : describe(item);
         const text = document.createElement("p");
         text.textContent = item.from + " → " + item.to;
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = "应用这条修订";
         button.dataset.id = item.id;
+        button.dataset.write = "true";
         button.addEventListener("click", () => run(() => apply(item)));
-        entry.append(location, text, button);
+        entry.append(location, text);
+        addWordSuggestionControls(entry, item);
+        if (item.status !== "needs-relocation") entry.append(button);
         byId("suggestions").append(entry);
       }
     }
@@ -244,6 +258,7 @@
         displayStatus(result);
         displaySuggestions(result.suggestions);
         byId("review").hidden = false;
+        await refreshWordList();
         message("已绑定当前文档。");
       });
     });

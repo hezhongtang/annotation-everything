@@ -28,3 +28,19 @@ The service records each intent in `word-comments.json` inside the review direct
 - **Reopen the same original.** Connect with the code for that review. A normal Word save can change the package fingerprint. If the pane asks for verification, check the full path and an identifier in the document, stop the pane service, then explicitly run `python3 "$S/build_viewer.py" --rebuild "$REVIEW"`. Inspect changed or missing annotation locations in the rebuild report. With the dedicated review running, restart the pane service and use its new code. The rebuild retains the review ID and relocates annotations using paragraph identity and text digests.
 - **Save As or switch to a file with the same name.** Select **重新选择审阅**. Return to the bound original or select a review with its own directory and the copy’s full source path. The pane origin serves one review at a time. To switch, stop your own pane service with Ctrl+C, start it with the other review and source path, and check its new code. Both dedicated browser services can remain open.
 - **Review stopped, port changed hands or receiver transferred.** Start the dedicated service again for the intended review ID. Restart the pane service for that identity and enter its new code. If the service or Word API is unavailable or the file exceeds 16 MiB, open the browser URL from the dedicated service. Existing batches and paragraph annotations stay in their review directory.
+
+## Submit a selection and receive suggestions
+
+Select text in one or more consecutive paragraphs in Word. Choose **预览所选文字与讨论** to check original and current wording, changes and authors. Select the threads to include, then choose **将预览内容交给接收会话**. The pane displays the source batch number. Selected threads retain their quoted text, authors, available timestamps, replies and resolution state. Uncertain change attribution is marked for verification.
+
+The bound receiver uses its existing `notes.py claim` or `notes.py wait` workflow. Use the selected passages in `wordSubmission.paragraphs` to prepare a UTF-8 JSON array. Copy the zero-based paragraph number `n`. The reason can quote a selected reply. Replacement and deletion require `from` to occur in the selected current text. Use an empty `to` for deletion. For an insertion, set `from` to an empty string and set `edge` to `Start` or `End` of the selected passage. An empty array completes a batch with no suggestions.
+
+```json
+[{"n":8,"from":"五日","to":"七日","reason":"Allow two additional days for the inspection requested in the reply."}]
+```
+
+```sh
+python3 "$S/word_context.py" return "$REVIEW" --batch 1 --input suggestions.json --harness "$HARNESS" --session "$SESSION"
+```
+
+Refresh the connection to see the original wording, suggestion, reason and source batch. Choose **在 Word 定位** to select the passage in Word. A reviewer can recall a pending batch or withdraw a returned suggestion. Changed paragraphs and repeated matches require verification. Select the intended text and submit a fresh batch.
