@@ -94,6 +94,7 @@ class Binding:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             main, xml, self.restrictions, _ = docx_edit.inspect_package(zf, allow_untracked=True)
         self.paragraphs = docx_edit.parse_document(xml)
+        self.native_restrictions = {n: reasons - {"revision"} for n, reasons in self.restrictions.items()}
         self.locations = paragraph_locations(docx_review.parse_xml(xml, main))
 
     def verified_bytes(self):
@@ -166,9 +167,9 @@ class Binding:
         for note in notes_store.load(self.review)["notes"]:
             try:
                 edit = docx_edit.annotation_edit(note)
-                if edit["anchor"].get("fp") != self.fingerprint or not isinstance(edit["to"], str) or not edit["to"]:
+                if edit["anchor"].get("fp") != self.fingerprint or not isinstance(edit["to"], str):
                     continue
-                p, start, end = docx_edit.locate_edit(self.paragraphs, edit, self.restrictions)
+                p, start, end = docx_edit.locate_edit(self.paragraphs, edit, self.native_restrictions)
             except docx_edit.EditError:
                 continue
             if p.n in self.locations and p.text.count(edit["from"]) == 1 and p.text[start:end] == edit["from"]:
@@ -178,7 +179,7 @@ class Binding:
 
 def index_page():
     html = (ASSETS / "index.html").read_text(encoding="utf-8")
-    fragments = (ASSETS / name for name in ("context.pane.html", "comments.pane.html"))
+    fragments = (ASSETS / name for name in ("context.pane.html", "revisions.pane.html", "comments.pane.html"))
     inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments)
     evidence = (ASSETS / "word-evidence.js").read_text(encoding="utf-8")
     return html.replace("<!-- AE-PANE-FRAGMENTS -->", "<script>\n" + evidence + "</script>\n" + inline).encode()
@@ -324,6 +325,8 @@ def main(argv=None):
             print(f"Fixed port {PORT} is already in use.", file=sys.stderr)
         else:
             print(f"Cannot start Word task pane: {exc}", file=sys.stderr)
+        if isinstance(exc, docx_edit.EditError) and exc.code in {"signed", "protected"}:
+            print("文档带有数字签名或已受保护。建议保留在原审阅目录，可打开浏览器对照页查看。", file=sys.stderr)
         if isinstance(exc, Refused) and exc.code == "document-changed":
             print(
                 "Verify the saved original, then run build_viewer.py --rebuild REVIEW and reconnect.", file=sys.stderr

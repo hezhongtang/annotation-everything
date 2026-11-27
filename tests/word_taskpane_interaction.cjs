@@ -8,6 +8,33 @@ const page = fs.readFileSync(0, "utf8");
 const scripts = Array.from(page.matchAll(/<script>([\s\S]*?)<\/script>/g), match => match[1]);
 const suggestion = {id: "sample", from: "五日", to: "七日", paragraph: "应于五日内回复", bodyParagraph: 0};
 
+// Synthetic Office boundary, including the Flat OPC DOM exposed by the webview.
+class DOMParser {
+  parseFromString(json) {
+    const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    const pkg = "http://schemas.microsoft.com/office/2006/xmlPackage";
+    function node(localName, children = [], attrs = {}, namespaceURI = w) {
+      const result = {localName, namespaceURI, textContent: "", getAttributeNS: (_ns, key) => attrs[key],
+        getElementsByTagNameNS(ns, name) {
+          return children.flatMap(c => [
+            ...((ns === "*" || ns === c.namespaceURI) && (name === "*" || name === c.localName) ? [c] : []),
+            ...c.getElementsByTagNameNS(ns, name)
+          ]);
+        }
+      };
+      children.forEach(c => { c.parentElement = result; });
+      return result;
+    }
+    const runs = JSON.parse(json).map(({type, text, author}) => {
+      const value = node(type === "Deleted" ? "delText" : "t");
+      value.textContent = text;
+      const run = node("r", [value]);
+      return !type ? run : node(type === "Deleted" ? "del" : "ins", [run], {author, date: "2026-11-27"});
+    });
+    return node("package", [node("part", [node("body", [node("p", runs)])], {name: "/word/document.xml"}, pkg)], {}, pkg);
+  }
+}
+
 function element(tag) {
   return {
     tag, dataset: {}, children: [], events: {}, value: "",
@@ -21,8 +48,8 @@ function element(tag) {
   };
 }
 
-async function applyInWord({ fileChanged = false, direct = false, relations = [], unreadable = false, table = false }) {
-  const item = table ? {...suggestion, table: 0, row: 0, column: 1} : suggestion;
+async function applyInWord({ fileChanged = false, direct = false, relations = [], unreadable = false, table = false, readOnly = false, replacement = {}, old = false, missingAuthor = false, loss = false, tracking = "TrackAll", protectedDoc = false, enable = false, oldRelation = "After", manual = false, wrongSelection = false }) {
+  const item = {...suggestion, paragraph: (old ? "邮件" : "") + suggestion.paragraph, ...(table && {table: 0, row: 0, column: 1}), ...replacement};
   const nodes = {};
   const document = {
     getElementById: id => nodes[id] ||= element(id),
@@ -39,31 +66,52 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
   };
   const writes = [];
   const collection = items => ({items, load() {}});
-  const target = {
-    text: suggestion.from,
-    getComments: () => collection(direct ? [{}] : []),
-    compareLocationWith: range => ({value: range.relation}),
-    insertText(text, location) { writes.push([text, location]); return { select() {} }; }
+  const prefix = [{text: "应于"}];
+  if (old) prefix.unshift({type: "Deleted", text: "传真", author: "甲"}, {type: "Added", text: "邮件", author: "甲"});
+  const suffix = [{text: "内回复"}];
+  const segments = () => {
+    const native = (type, text) => ({type, text, author: missingAuthor ? "" : "乙"});
+    if (!writes.length) return [...prefix, {text: "五日"}, ...suffix];
+    if (!item.from) return [...prefix, ...(item.edge === "Start" ? [native("Added", item.to), {text: "五日"}] :
+      [{text: "五日"}, native("Added", item.to)]), ...suffix];
+    return [...prefix, native("Deleted", "五日"), ...(item.to ? [native("Added", item.to)] : []), ...suffix];
   };
-  const original = suggestion.paragraph;
-  const current = () => writes.length ? "应于七日内回复" : original;
+  const projection = (runs, state) => runs.filter(r => r.type !== (state === "Original" ? "Added" : "Deleted")).map(r => r.text).join("");
+  const plainRange = (original, current) => ({
+    load() {return this;}, text: current, getReviewedText: state => ({value: state === "Original" ? original : current})
+  });
+  let selected;
+  const target = {
+    ...plainRange("五日", "五日"), getRange(edge) { return edge === "Start" ? targetStart : targetEnd; },
+    getComments: () => collection(direct ? [{}] : []),
+    compareLocationWith(range) { return {value: this === range ? "Equal" : range.relation}; },
+    select() { selected = this; }, delete() {writes.push(["", "Delete"]);},
+    insertText(text, location) { writes.push([text, location]); }
+  };
+  const targetStart = {...target, text: ""}, targetEnd = {...target, text: ""};
+  const outsideControl = {isNullObject: true, load() {}};
   const paragraph = {
+    parentContentControlOrNullObject: outsideControl, parentTableCellOrNullObject: outsideControl,
     getRange: () => ({
-      load() {}, get text() { return current(); },
-      getReviewedText: state => ({value: state === "Original" ? original : current()}),
+      ...plainRange(projection(segments(), "Original"), projection(segments(), "Current")),
+      getOoxml: () => ({value: JSON.stringify(segments())}),
+      getRange: () => ({expandTo: () => plainRange("", projection(prefix, "Current"))}),
       search: () => collection([target])
     }),
-    getTrackedChanges: () => collection(writes.length ? [{type: "Added"}, {type: "Deleted"}] : [])
+    getTrackedChanges: () => collection(segments().filter(r => r.type).map(r => ({
+      ...r, getRange: () => ({...plainRange(r.type === "Deleted" ? r.text : "", r.type === "Added" ? r.text : ""), relation: oldRelation})
+    })))
   };
   const comments = relations.map(relation => ({ getRange() {
     if (unreadable) throw new Error("Office range unavailable");
     return {relation};
   } }));
   let file = "/synthetic/A/contract.docx";
-  const context = {sync: async () => {}, document: {
-    changeTrackingMode: "TrackAll", load() {},
+  const context = {sync: async () => {if (loss && writes.length) throw new Error("Word 未应答");}, document: {
+    getSelection: () => wrongSelection ? {} : selected,
+    changeTrackingMode: tracking, isReadOnly: readOnly, protectionType: protectedDoc ? "AllowOnlyReading" : "NoProtection", load() {},
     body: {
-      tables: collection([{getCell: () => ({body: {paragraphs: collection([paragraph])}})}]),
+      tables: collection([{load() {}, isUniform: true, nestingLevel: 1, parentContentControlOrNullObject: outsideControl, getCell: () => ({body: {paragraphs: collection([paragraph])}})}]),
       paragraphs: collection([paragraph]), getRange: () => ({getComments: () => collection(comments)})
     }
   }};
@@ -80,7 +128,7 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
     return {ok: true, json: async () => responses[path]};
   };
   const pane = vm.createContext({
-    Office: office, window: {Office: office, addEventListener() {}}, Word, document, fetch,
+    DOMParser, Office: office, window: {Office: office, addEventListener() {}}, Word, document, fetch,
     crypto: webcrypto, TextEncoder, setTimeout, clearTimeout
   });
   for (const script of scripts) vm.runInContext(script, pane);
@@ -88,6 +136,16 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
   await nodes.connect.events.submit({preventDefault() {}});
   if (fileChanged) file = "/synthetic/B/contract.docx";
   const writeButton = () => nodes.suggestions.querySelectorAll("button").find(button => button.dataset.write === "true");
+  if (enable) {
+    await nodes["enable-tracking"].events.click();
+    assert.deepEqual(writes, [], "enabling tracking never writes a suggestion");
+  }
+  if (manual) {
+    selected = target;
+    const relocate = nodes.suggestions.querySelectorAll("button").find(button => button.textContent === "用当前选区重新定位");
+    await relocate.events.click();
+    assert.deepEqual(writes, [], "reselecting the target never writes a suggestion");
+  }
   const button = writeButton();
   assert.ok(button, nodes.status.textContent);
   await button.events.click();
@@ -95,6 +153,35 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
 }
 
 (async () => {
+  const protectedResult = await applyInWord({readOnly: true});
+  assert.deepEqual(protectedResult.writes, [], "read-only Word must retain the suggestion");
+  for (const table of [true, false]) {
+    for (const [replacement, writes] of [
+      [{from: "", selection: "五日", edge: "Start", to: "约"}, [["约", "Start"]]],
+      [{to: ""}, [["", "Delete"]]]
+    ]) {
+      const result = await applyInWord({table, replacement});
+      assert.deepEqual(result.writes, writes, result.status);
+      assert.match(result.status, /已写入当前 Word 文档/);
+    }
+  }
+  assert.match((await applyInWord({old:true})).status, /已写入当前 Word 文档/);
+  for (const options of [{missingAuthor:true}, {loss:true}]) {
+    const result = await applyInWord(options);
+    assert.match(result.status, /需核对/);
+    assert.equal(result.disabled, true);
+  }
+  for (const options of [{tracking:"Off"}, {protectedDoc:true}]) {
+    const result = await applyInWord(options);
+    assert.deepEqual(result.writes, []);
+    assert.equal(result.disabled, false);
+  }
+  assert.match((await applyInWord({tracking: "Off", enable: true})).status, /已写入当前 Word 文档/);
+  assert.match((await applyInWord({manual: true, replacement: {status: "needs-relocation"}})).status, /已写入当前 Word 文档/);
+  for (const options of [{old:true, oldRelation:"Equal"}, {wrongSelection:true}, {replacement: {status:"needs-relocation"}}]) {
+    const result = await applyInWord(options);
+    assert.deepEqual(result.writes, [], result.status);
+  }
   const refused = [
     {table: true, direct: true}, {relations: ["Equal"]}, {relations: ["InsideStart"]}, {relations: ["OverlapsBefore"]},
     {relations: ["AdjacentBefore"]}, {relations: ["AdjacentAfter"]}, {relations: ["unknown"]},

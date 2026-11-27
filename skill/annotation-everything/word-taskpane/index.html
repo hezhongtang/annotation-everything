@@ -43,6 +43,7 @@
       <button id="disconnect" type="button">重新选择审阅</button>
       <p><a id="browser" target="_blank" rel="noopener noreferrer">打开浏览器对照页</a></p>
       <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。已有批注覆盖目标或紧邻其边界时，窗格会保留建议，保护原讨论。</p>
+      <button id="enable-tracking" type="button">启用 Word 修订跟踪</button>
       <ul id="suggestions" aria-label="文字建议"></ul>
       <section id="wordSubmission">
         <h2>送审当前选区</h2>
@@ -80,7 +81,7 @@
       byId("refresh").disabled = busy || !binding;
       byId("disconnect").disabled = busy || !binding;
       for (const button of byId("suggestions").querySelectorAll("button")) {
-        button.disabled = busy || (button.dataset.write === "true" && attempted.has(button.dataset.id));
+        button.disabled = busy || (button.dataset.write === "true" && attempted.has(binding?.key + "/" + binding?.reviewId + "/" + button.dataset.id));
       }
     }
 
@@ -214,7 +215,7 @@
     // Refresh on return to the pane; every explicit action also checks the current identity.
     window.addEventListener("focus", () => { if (binding) run(refreshConnection); });
 
-    const fields = ["id", "from", "to", "paragraph", "table", "row", "column", "bodyParagraph"];
+
 
     function describe(item) {
       if (Number.isInteger(item.table)) {
@@ -233,13 +234,13 @@
         text.textContent = item.from + " → " + item.to;
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = "应用这条修订";
+        button.textContent = "写为修订";
         button.dataset.id = item.id;
         button.dataset.write = "true";
         button.addEventListener("click", () => run(() => apply(item)));
         entry.append(location, text);
         addWordSuggestionControls(entry, item);
-        if (item.status !== "needs-relocation") entry.append(button);
+        entry.append(button);
         byId("suggestions").append(entry);
       }
     }
@@ -272,6 +273,12 @@
         await context.sync();
         const paragraph = paragraphs.items[item.bodyParagraph];
         if (!paragraph) throw new Error("原定位的正文段落已不存在。");
+        const cell = paragraph.parentTableCellOrNullObject;
+        const control = paragraph.parentContentControlOrNullObject;
+        cell.load("$none");
+        control.load("$none");
+        await context.sync();
+        if (!cell.isNullObject || !control.isNullObject) throw new Error("原正文位置已变为表格或内容控件。");
         return paragraph;
       }
       const tables = body.tables;
@@ -279,10 +286,18 @@
       await context.sync();
       const table = tables.items[item.table];
       if (!table) throw new Error("原定位的表格已不存在。");
+      table.load("isUniform,nestingLevel");
+      const tableControl = table.parentContentControlOrNullObject;
+      tableControl.load("$none");
       const paragraphs = table.getCell(item.row, item.column).body.paragraphs;
       paragraphs.load("items");
       await context.sync();
       if (paragraphs.items.length !== 1) throw new Error("目标单元格的段落结构已改变。");
+      const control = paragraphs.items[0].parentContentControlOrNullObject;
+      control.load("$none");
+      await context.sync();
+      if (!table.isUniform || table.nestingLevel !== 1 || !tableControl.isNullObject || !control.isNullObject)
+        throw new Error("目标表格含不支持的结构。");
       return paragraphs.items[0];
     }
 
@@ -340,56 +355,21 @@
       if (touchesThread) throw new Error("此处已有 Word 批注。接受或拒绝替换可能移除原批注及回复。未写入修订，建议已保留。");
     }
 
-    async function apply(item) {
-      if (attempted.has(item.id)) throw new Error("本次已向 Word 提交此建议。请先核对修订。");
-      await checkDocument();
-      const result = await request("/api/suggestion", binding.token, {
-        documentKey: binding.key, reviewId: binding.reviewId, id: item.id
-      });
-      if (result.reviewId !== binding.reviewId || !result.suggestion ||
-          fields.some(key => item[key] !== result.suggestion[key])) {
-        throw new Error("绑定时显示的建议已改变，请关闭窗格后重新绑定。");
+    async function checkRevisionPermission(context) {
+      if (!Office.context.requirements.isSetSupported("WordApiDesktop", "1.4")) {
+        throw new Error("Word 缺少核对只读和文档保护所需的接口，建议已保留。");
       }
-      await Word.run(async context => {
-        const paragraph = await targetParagraph(context, item);
-        const range = paragraph.getRange("Content");
-        const beforeText = readText(range);
-        const oldChanges = paragraph.getTrackedChanges();
-        oldChanges.load("items/type");
-        const matches = range.search(item.from, { matchCase: true, matchWildcards: false });
-        matches.load("items/text");
-        context.document.load("changeTrackingMode");
-        await context.sync();
-        const before = beforeText();
-        if (!["TrackAll", "TrackMineOnly"].includes(context.document.changeTrackingMode)) {
-          throw new Error("请先在 Word「审阅」中打开修订。");
-        }
-        if (oldChanges.items.length || before.original !== item.paragraph || before.current !== item.paragraph ||
-            before.text !== item.paragraph || matches.items.length !== 1 || matches.items[0].text !== item.from) {
-          throw new Error("目标段落含已有修订、原文已变或原词定位不唯一。请在 Word 中核对。");
-        }
-        await protectCommentThreads(context, matches.items[0]);
-        await refreshConnection();
-        attempted.add(item.id); // A sync error cannot tell us whether Word performed the write.
-        try {
-          matches.items[0].insertText(item.to, "Replace").select();
-          await context.sync();
-          const afterText = readText(paragraph.getRange("Content"));
-          const changes = paragraph.getTrackedChanges();
-          changes.load("items/type,items/text,items/author");
-          await context.sync();
-          const after = afterText();
-          const revisions = changes.items.map(change => ({type: change.type, text: change.text, author: change.author}));
-          const expected = item.paragraph.replace(item.from, () => item.to);
-          const confirmed = after.original === before.original && after.current === expected &&
-                            revisions.some(r => r.type === "Added") && revisions.some(r => r.type === "Deleted");
-          showEvidence({ target: describe(item), before, beforeRevisionCount: 0, after, revisions });
-          message(confirmed ? "已在目标段落回读到新增和删除。请在 Word 中核对标记、分页并保存。"
-                            : "Word 已执行替换，回读未能确认完整增删。请在「所有标记」中核对，保留两份副本验证。");
-        } catch (error) {
-          throw new Error("已向 Word 提交替换，结果待核对。请先查看原页或读取修订。 " + (error.code || error.message));
-        }
-      });
+      context.document.load("isReadOnly,protectionType,changeTrackingMode");
+      await context.sync();
+      if (context.document.isReadOnly !== false || context.document.protectionType !== "NoProtection") {
+        throw new Error("文档只读或已受保护，建议已保留。");
+      }
+    }
+
+    async function apply(item) {
+      const result = await window.aeWordRevisions.applyOne(item);
+      if (result.evidence) showEvidence(result.evidence);
+      message(result.message);
     }
 
     byId("inspect").addEventListener("click", () => run(async () => {

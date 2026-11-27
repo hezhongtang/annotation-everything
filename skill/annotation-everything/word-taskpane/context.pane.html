@@ -13,12 +13,22 @@ function clearWordPreview() {
 }
 
 // Read only word/document.xml from the selected range's Flat OPC. The package never leaves Word.
-function xmlPassage(xml) {
+function xmlPassage(xml, strict = false) {
   const w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
   const doc = new DOMParser().parseFromString(xml, "application/xml");
   const body = doc.getElementsByTagNameNS(w, "body")[0];
   const paragraphs = body && body.getElementsByTagNameNS(w, "p");
   if (!paragraphs || paragraphs.length !== 1) return null;
+  if (strict) {
+    const ns = "http://schemas.microsoft.com/office/2006/xmlPackage";
+    const part = Array.from(doc.getElementsByTagNameNS(ns, "part")).find(el => el.getAttributeNS(ns, "name") === "/word/document.xml");
+    if (!part || part.getElementsByTagNameNS(w, "body")[0] !== body) return null;
+    const unsupported = new Set(["hyperlink", "bookmarkStart", "bookmarkEnd", "fldSimple", "customXml", "smartTag",
+      "sdt", "math", "delInstrText", "permStart", "permEnd", "pict", "vanish", "webHidden", "footnoteReference",
+      "endnoteReference", "altChunk", "br", "cr", "ptab", "drawing", "object", "sym"]);
+    const nodes = Array.from(paragraphs[0].getElementsByTagNameNS("*", "*"));
+    if (nodes.some(el => el.namespaceURI !== w || unsupported.has(el.localName) || /Change$|^move/.test(el.localName))) return null;
+  }
   const result = {original: "", current: "", revisions: []};
   const nodes = Array.from(paragraphs[0].getElementsByTagNameNS(w, "*"));
   if (nodes.some(n => ["drawing","object","fldChar","instrText","moveFrom","moveTo","sdt","sym","AlternateContent"].includes(n.localName))) return null;
@@ -27,6 +37,7 @@ function xmlPassage(xml) {
     const kind = node.localName;
     if (kind === "del" || kind === "ins") {
       const change = {type: kind === "del" ? "Deleted" : "Added", author: node.getAttributeNS(w, "author") || "", text: ""};
+      if (strict) Object.assign(change, {start: result.current.length, date: node.getAttributeNS(w, "date") || ""});
       groups.set(node, change);
       result.revisions.push(change);
       continue;
@@ -158,24 +169,7 @@ async function refreshWordList() {
 }
 
 async function locateWordSuggestion(item) {
-  await checkDocument();
-  const {suggestion} = await request("/api/suggestion", binding.token,
-      {documentKey: binding.key, reviewId: binding.reviewId, id: item.id});
-  if (suggestion.status === "needs-relocation") throw new Error("建议保留，需重新定位到原段落。");
-  await Word.run(async context => {
-    const paragraph = await targetParagraph(context, suggestion);
-    const range = paragraph.getRange("Content");
-    const read = readText(range);
-    const matches = range.search(suggestion.from || suggestion.selection, {matchCase: true, matchWildcards: false});
-    matches.load("items/text");
-    await context.sync();
-    if (read().current !== suggestion.paragraph || matches.items.length !== 1 ||
-        matches.items[0].text !== (suggestion.from || suggestion.selection))
-      throw new Error("原段落已改或同文多处匹配，建议保留，请重新定位。");
-    await checkDocument();
-    (suggestion.from ? matches.items[0] : matches.items[0].getRange(suggestion.edge)).select();
-    await context.sync();
-  });
+  await window.aeWordRevisions.locate(item);
   message("已定位到建议引用处。");
 }
 
@@ -194,6 +188,10 @@ function addWordSuggestionControls(entry, item) {
       entry.append(warning);
       throw new Error(warning.textContent + "。" + error.message);
     }
+  }));
+  entry.append(actionButton("用当前选区重新定位", async () => {
+    await window.aeWordRevisions.relocate(item);
+    message("已核对新选区。点击「写为修订」后才会修改文字。");
   }));
   if (item.sourceBatch) entry.append(actionButton("撤回建议", async () => {
     await checkDocument(); await wordApi("withdraw", {id: item.id}); await refreshWordList();

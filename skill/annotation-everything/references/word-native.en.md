@@ -44,3 +44,12 @@ python3 "$S/word_context.py" return "$REVIEW" --batch 1 --input suggestions.json
 ```
 
 Refresh the connection to see the original wording, suggestion, reason and source batch. Choose **在 Word 定位** to select the passage in Word. A reviewer can recall a pending batch or withdraw a returned suggestion. Changed paragraphs and repeated matches require verification. Select the intended text and submit a fresh batch.
+
+
+## Write a suggestion as a Word revision
+
+Use **Locate in Word** to inspect the source. To disambiguate a match, select the exact original words in the same paragraph or cell, then choose **Relocate to current selection**. For an insertion, select the submitted quotation. The suggestion specifies its start or end.
+
+**Write as revision** checks document protection, tracking, the paragraph and the selection. Native revision writes require WordApiDesktop 1.4. When tracking is off, choose **Enable Word change tracking** first. Suggestions touching an existing comment, revision or its boundary stay pending for review in Word. Existing revisions elsewhere in the paragraph can remain independent.
+
+The pane reports a write to the open Word document after reading the revised text, the recoverable original and the native author at that location. Use **Review → All Markup** to inspect line and page breaks, then save in Word. If the result needs checking, inspect the original page and read back the revisions. Word reports the save state.

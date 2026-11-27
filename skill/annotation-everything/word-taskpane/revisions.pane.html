@@ -1,0 +1,249 @@
+<script>
+(() => {
+  "use strict";
+  const fieldNames = ["id", "n", "from", "to", "paragraph", "bodyParagraph", "table", "row", "column", "digest",
+                      "fp", "selection", "edge", "reason", "sourceBatch", "status", "writeRestriction"];
+  const unknownMessage = "结果需核对。请在 Word 原页检查修订及作者。";
+  const identity = item => binding.key + "/" + binding.reviewId + "/" + item.id;
+  const paragraphKey = item => Number.isInteger(item.table)
+    ? ["cell", item.table, item.row, item.column].join("/") : "body/" + item.bodyParagraph;
+  const tracked = doc => ["TrackAll", "TrackMineOnly"].includes(doc.changeTrackingMode);
+  const ensure = (condition, message) => { if (!condition) throw new Error(message); };
+
+  async function latest(item) {
+    await checkDocument();
+    const bound = binding;
+    const result = await request("/api/suggestion", bound.token, {
+      documentKey: bound.key, reviewId: bound.reviewId, id: item.id
+    });
+    await checkDocument();
+    ensure(binding === bound && result.reviewId === bound.reviewId && result.suggestion &&
+      fieldNames.every(k => result.suggestion[k] === item[k]), "建议或绑定已改变，请刷新后核对。");
+    ensure(!item.writeRestriction, item.writeRestriction);
+    ensure(Number.isInteger(item.bodyParagraph) || [item.table, item.row, item.column].every(Number.isInteger),
+      "无法核对原正文段或普通表格位置，请在 Word 原页处理。");
+    ensure(typeof item.from === "string" && typeof item.to === "string" && item.from !== item.to &&
+      !/[\u0000-\u001f\u007f\u2028\u2029]/.test(item.from + item.to) &&
+      (item.from || (item.selection && ["Start", "End"].includes(item.edge))),
+      "仅支持单段普通文字和已确认的插入边界。");
+  }
+
+  async function snapshot(context, paragraph) {
+    const range = paragraph.getRange("Content");
+    const read = readText(range);
+    const raw = range.getOoxml();
+    const changes = paragraph.getTrackedChanges();
+    changes.load("items/type,items/author,items/text");
+    await context.sync();
+    const xml = xmlPassage(raw.value, true);
+    const live = read();
+    ensure(xml && live.original === xml.original && (live.current === xml.current || live.text === xml.current),
+      "Word 段落包含复杂结构或无法核对改前、改后文字，请在原页处理。");
+    const ranges = changes.items.map(c => c.getRange());
+    const reads = ranges.map(readText);
+    if (ranges.length) await context.sync();
+    const native = changes.items.map((c, i) => {
+      const text = c.type === "Added" ? reads[i]().current : reads[i]().original;
+      ensure(c.author && ["Added", "Deleted"].includes(c.type), "无法核对 Word 原生修订或署名。");
+      return {type: c.type, text: text || c.text, author: c.author};
+    });
+    // Word can expose adjacent revisions as one range. Confirm each author's complete text in both views.
+    const signed = revisions => {
+      const groups = new Map();
+      for (const r of revisions) {
+        const key = JSON.stringify([r.type, r.author]);
+        groups.set(key, (groups.get(key) || "") + r.text);
+      }
+      return JSON.stringify(Array.from(groups).sort());
+    };
+    ensure(xml.revisions.every(r => r.author && r.text) && signed(native) === signed(xml.revisions),
+      "Word 修订范围的文字与署名未能互证。");
+    return {value: xml, ranges};
+  }
+
+  function baseFor(item, previousPlans) {
+    const manual = binding.relocations?.get(item.id);
+    let current = manual ? manual.current : item.paragraph;
+    let offset = manual?.offset;
+    for (const prior of previousPlans) {
+      if (prior.paragraphKey !== paragraphKey(item)) continue;
+      ensure(prior.before.current === current, "同段前序修订需重新核对。");
+      if (offset !== undefined && prior.end <= offset) offset += prior.expected.length - current.length;
+      current = prior.expected;
+    }
+    return {current, offset};
+  }
+
+  async function resolve(context, item, previousPlans, manual = false) {
+    const paragraph = await targetParagraph(context, item);
+    const whole = paragraph.getRange("Content");
+    const {value: before, ranges} = await snapshot(context, paragraph);
+    const baseline = baseFor(item, previousPlans);
+    const needle = item.from || item.selection;
+    const matches = whole.search(needle, {matchCase: true, matchWildcards: false});
+    matches.load("items/text");
+    await context.sync();
+    // Confirm Word's returned range against the current-view offset and, for relocation, the actual selection.
+    const selected = manual ? context.document.getSelection() : null;
+    const candidates = matches.items.filter(m => m.text === needle).map(match => ({
+      match,
+      prefix: whole.getRange("Start").expandTo(match.getRange("Start")).load("text"),
+      relation: selected && match.compareLocationWith(selected)
+    }));
+    await context.sync();
+    const options = candidates.filter(c => before.current.slice(c.prefix.text.length, c.prefix.text.length + needle.length) === needle &&
+      (manual ? c.relation.value === "Equal" : baseline.offset === undefined || baseline.offset === c.prefix.text.length));
+    ensure(options.length === 1, "原词未能唯一定位。请在原段选中引用的原词，再重新定位。");
+    const {match, prefix} = options[0];
+    if (!manual) ensure(before.current === baseline.current &&
+      (item.status !== "needs-relocation" || baseline.offset !== undefined),
+      "原段或上下文已改变。请在原段核对原文并重新定位。");
+    const offset = prefix.text.length;
+    if (item.selection && item.from) {
+      const at = item.selection.indexOf(item.from);
+      ensure(at >= 0, "建议超出送审选区。");
+      // For a partial selection, require the submitted surrounding words at the target.
+      if (item.selection !== item.paragraph && !previousPlans.length) {
+        let inside = false;
+        for (let i = at; i >= 0; i = item.selection.indexOf(item.from, i + 1)) {
+          if (offset >= i && before.current.slice(offset - i, offset - i + item.selection.length) === item.selection) {
+            inside = true; break;
+          }
+        }
+        ensure(inside, "目标与送审选区的上下文不符，请核对原选区。");
+      }
+    }
+    const start = offset + (!item.from && item.edge === "End" ? needle.length : 0);
+    const end = start + item.from.length;
+    const target = item.from ? match : match.getRange(item.edge);
+    return {paragraph, target, ranges, offset, plan: {id: item.id, documentKey: binding.key, reviewId: binding.reviewId, paragraphKey: paragraphKey(item), start, end, before,
+      expected: before.current.slice(0, start) + item.to + before.current.slice(end)}};
+  }
+
+  async function prepare(context, item, previousPlans) {
+    await checkRevisionPermission(context);
+    ensure(tracked(context.document), "跟踪已关闭。请点击「启用 Word 修订跟踪」，再写入建议。");
+    const resolved = await resolve(context, item, previousPlans);
+    const relations = resolved.ranges.map(range => resolved.target.compareLocationWith(range));
+    await context.sync();
+    ensure(relations.every(r => ["Before", "After"].includes(r.value)),
+      "目标与旧修订重叠或紧邻其边界，建议已保留，请在 Word 原页核对。");
+    await protectCommentThreads(context, resolved.target);
+    return resolved;
+  }
+
+  function confirmed(plan, after) {
+    const {before, expected, start, end} = plan;
+    if (after.original !== before.original || after.current !== expected) return false;
+    const delta = expected.length - before.current.length;
+    const fresh = [...after.revisions];
+    for (const old of before.revisions) {
+      const position = old.start + (old.start >= end ? delta : 0);
+      const index = fresh.findIndex(r => r.start === position && r.author === old.author && r.type === old.type &&
+        r.text === old.text && r.date === old.date);
+      if (index < 0) return false;
+      fresh.splice(index, 1);
+    }
+    if (!fresh.length || new Set(fresh.map(r => r.author)).size !== 1) return false;
+    // Reject only the newly observed runs in memory. Their location, author, accepted and rejected
+    // texts must all agree; Word may split a replacement or keep a shared prefix or suffix.
+    let rejected = after.current;
+    const limit = end + delta;
+    for (const r of fresh.reverse()) {
+      if (!r.author || !r.text || r.start < start || r.start > limit) return false;
+      if (r.type === "Deleted") rejected = rejected.slice(0, r.start) + r.text + rejected.slice(r.start);
+      else if (r.type === "Added" && r.start + r.text.length <= limit &&
+               rejected.slice(r.start, r.start + r.text.length) === r.text)
+        rejected = rejected.slice(0, r.start) + rejected.slice(r.start + r.text.length);
+      else return false;
+    }
+    return rejected === before.current;
+  }
+
+  async function readInContext(context, item, plan) {
+    ensure(plan.documentKey === binding.key && plan.reviewId === binding.reviewId &&
+      plan.id === item.id && plan.paragraphKey === paragraphKey(item), "回读位置与建议不符。");
+    const after = (await snapshot(context, await targetParagraph(context, item))).value;
+    await checkDocument();
+    const written = confirmed(plan, after);
+    return {status: written ? "written" : "unknown", evidence: {target: describe(item), before: plan.before, after},
+      message: written ? "已写入当前 Word 文档并回读修订署名。请用「所有标记」查看分页，并在 Word 中保存。" : unknownMessage};
+  }
+
+  async function readback(item, plan) {
+    try {
+      await checkDocument();
+      return await Word.run(context => readInContext(context, item, plan));
+    } catch (error) { return {status: "unknown", message: unknownMessage + " " + error.message}; }
+  }
+
+  async function preflight(item, {previousPlans = []} = {}) {
+    await latest(item);
+    return Word.run(async context => (await prepare(context, item, previousPlans)).plan);
+  }
+
+  async function applyOne(item, {beforeWrite, previousPlans = []} = {}) {
+    await latest(item);
+    const key = identity(item);
+    ensure(!attempted.has(key), "本次已向 Word 提交此建议，请先核对修订。");
+    return Word.run(async context => {
+      const {target, plan} = await prepare(context, item, previousPlans);
+      target.select();
+      await context.sync();
+      const selection = context.document.getSelection();
+      const selected = target.compareLocationWith(selection);
+      await context.sync();
+      ensure(selected.value === "Equal", "当前 Word 选区已改变，建议已保留。");
+      await latest(item);
+      if (beforeWrite) await beforeWrite(plan);
+      const checked = await prepare(context, item, previousPlans);
+      const finalSelection = checked.target.compareLocationWith(context.document.getSelection());
+      await context.sync();
+      ensure(finalSelection.value === "Equal" && JSON.stringify(checked.plan) === JSON.stringify(plan),
+        "写入前的选区或段落已改变，建议已保留。");
+      await checkDocument();
+      ensure(!attempted.has(key), "此建议已有写入操作，请先核对。");
+      attempted.add(key);
+      try {
+        if (!item.to) checked.target.delete();
+        else checked.target.insertText(item.to, item.from ? "Replace" : "Start");
+        await context.sync();
+        return await readInContext(context, item, plan);
+      } catch (error) { return {status: "unknown", message: unknownMessage + " " + error.message}; }
+    });
+  }
+
+  async function point(item, manual) {
+    await latest(item);
+    await Word.run(async context => {
+      const {target, offset, plan} = await resolve(context, item, [], manual);
+      await checkDocument();
+      if (manual) {
+        if (!binding.relocations) binding.relocations = new Map();
+        binding.relocations.set(item.id, {current: plan.before.current, offset});
+      } else {
+        target.select();
+        await context.sync();
+      }
+    });
+  }
+
+  byId("enable-tracking").addEventListener("click", () => run(async () => {
+    await refreshConnection();
+    await Word.run(async context => {
+      await checkRevisionPermission(context);
+      if (!tracked(context.document)) {
+        ensure(context.document.changeTrackingMode === "Off", "无法核对跟踪模式，请在 Word 中处理。");
+        await checkDocument();
+        context.document.changeTrackingMode = "TrackAll";
+        await context.sync();
+        context.document.load("changeTrackingMode");
+        await context.sync();
+        ensure(tracked(context.document), "Word 未启用跟踪，建议已保留。");
+      }
+    });
+    message("修订跟踪已启用。请选中建议后写入，并在「审阅」中选择「所有标记」。");
+  }));
+  window.aeWordRevisions = {preflight, applyOne, readback, locate: item => point(item, false), relocate: item => point(item, true)};
+})();
+</script>

@@ -173,6 +173,11 @@ def suggestions(binding):
             n = item["n"]
             location = binding.locations.get(n)
             paragraph = binding.paragraphs[n].text if location else ""
+            restriction = ""
+            if item["fp"] != binding.fingerprint:
+                restriction = "原建议属于另一版本的文档，请重新送审。"
+            elif not location or binding.restrictions.get(n, set()) - {"revision"}:
+                restriction = "原段落包含不支持的结构，请在 Word 原页处理。"
             valid = (
                 location
                 and item["fp"] == binding.fingerprint
@@ -183,6 +188,7 @@ def suggestions(binding):
                 {
                     **item,
                     **(location or {}),
+                    **({"writeRestriction": restriction} if restriction else {}),
                     "paragraph": paragraph,
                     "status": item["status"] if valid else "needs-relocation",
                 }

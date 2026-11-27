@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,30 @@ class WordContextTests(unittest.TestCase):
             ],
             "threads": [],
         }
+
+    def test_relocation_cannot_authorize_a_replaced_document_or_complex_paragraph(self):
+        seq = word_context.submit(self.review, self.receiver, self.fp, [self.para], "word-review", lambda: None)
+        notes_store.handoff_claim(self.review, seq=seq)
+        word_context.return_suggestions(
+            self.review,
+            seq,
+            [{"n": 3, "from": "编号", "to": "序号", "reason": "与清单一致。"}],
+            "Codex",
+            "synthetic-session",
+        )
+        bound = SimpleNamespace(
+            review=self.review,
+            fingerprint=self.fp,
+            locations={3: {"bodyParagraph": 3}},
+            paragraphs={3: SimpleNamespace(text="共同登记样机编号。")},
+            restrictions={3: {"revision"}},
+        )
+        self.assertNotIn("writeRestriction", word_context.suggestions(bound)[0])
+        bound.fingerprint = "0" * 64
+        self.assertIn("文档", word_context.suggestions(bound)[0]["writeRestriction"])
+        bound.fingerprint = self.fp
+        bound.restrictions = {3: {"revision", "field"}}
+        self.assertIn("结构", word_context.suggestions(bound)[0]["writeRestriction"])
 
     def test_receiver_claim_contains_only_selected_word_material(self):
         notes_store.handoff_submit(self.review, "浏览器私有旧批次")
