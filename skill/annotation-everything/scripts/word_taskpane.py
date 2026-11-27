@@ -24,6 +24,7 @@ import notes_store
 import review_stop
 import serve
 import wakeup
+import word_comments
 
 PORT = 43821
 ASSETS = Path(__file__).resolve().parents[1] / "word-taskpane"
@@ -174,6 +175,13 @@ class Binding:
         return result
 
 
+def index_page():
+    html = (ASSETS / "index.html").read_text(encoding="utf-8")
+    fragments = (ASSETS / name for name in ("context.pane.html", "comments.pane.html"))
+    inline = "\n".join(file.read_text(encoding="utf-8") for file in fragments if file.exists())
+    return html.replace("<!-- AE-PANE-FRAGMENTS -->", inline).encode()
+
+
 class TaskpaneServer(ThreadingHTTPServer):
     def __init__(self, review, document, tls, *, port=PORT):
         self.binding = Binding(review, document)
@@ -216,9 +224,14 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
             resource_path = self.path.partition("?")[0]
             if self.command in ("GET", "HEAD") and resource_path in RESOURCES:
                 name, mime = RESOURCES[resource_path]
-                self.send_payload(200, (ASSETS / name).read_bytes(), mime)
+                self.send_payload(200, index_page() if name == "index.html" else (ASSETS / name).read_bytes(), mime)
                 return
-            if self.command != "POST" or self.path not in ("/api/bind", "/api/status", "/api/suggestion"):
+            if self.command != "POST" or self.path not in (
+                "/api/bind",
+                "/api/status",
+                "/api/suggestion",
+                *word_comments.REQUEST_FIELDS,
+            ):
                 raise Refused(404, "not-found")
             if self.headers.get_all("Origin") != ["https://" + host] or self.headers.get(
                 "Sec-Fetch-Site", "same-origin"
@@ -244,6 +257,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
             except (ValueError, RecursionError):
                 raise Refused(400, "bad-json") from None
             fields = {
+                **word_comments.REQUEST_FIELDS,
                 "/api/bind": {"documentKey"},
                 "/api/status": {"documentKey", "reviewId"},
                 "/api/suggestion": {"documentKey", "reviewId", "id"},
@@ -255,7 +269,9 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 raise Refused(409, "bad-binding")
             live = binding.check_live()
             binding.verified_bytes()
-            if self.path == "/api/status":
+            if self.path in word_comments.REQUEST_FIELDS:
+                self.send_payload(200, word_comments.handle(binding, self.path, body))
+            elif self.path == "/api/status":
                 self.send_payload(200, binding.status(live))
             elif self.path == "/api/bind":
                 self.send_payload(200, {**binding.status(live), "suggestions": binding.suggestions()})
@@ -264,7 +280,7 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
                 if suggestion is None:
                     raise Refused(404, "no-suggestion")
                 self.send_payload(200, {"reviewId": binding.rid, "suggestion": suggestion})
-        except Refused as exc:
+        except (Refused, word_comments.CommentError) as exc:
             self.send_payload(exc.status, {"error": exc.code})
         except (OSError, ValueError, BuildError, ledger.LedgerError, TypeError, KeyError, AttributeError):
             self.send_payload(409, {"error": "review-unavailable"})
