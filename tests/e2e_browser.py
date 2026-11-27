@@ -5644,6 +5644,74 @@ for n in (1, 2):
         stop(server)
 
 
+def word_pane_launch_checks(browser, tmp: Path):
+    pane = SCRIPTS.parent / "word-taskpane" / "index.html"
+    origin = "https://127.0.0.1:43821"
+    office = """
+        window.Office = {
+          PlatformType: {PC: "PC", Mac: "Mac"}, HostType: {Word: "Word"}, AsyncResultStatus: {Succeeded: "ok"},
+          onReady(callback) { callback({host: "Word", platform: "PC"}); },
+          context: {
+            platform: "PC", requirements: { isSetSupported() { return window.supported; } },
+            document: {getFilePropertiesAsync(done) {done({status: "ok", value: {url: window.docUrl}});}}
+          }
+        };
+    """
+    with browser.new_context() as context:
+        page = context.new_page()
+        has_office = True
+        sent = []
+
+        def route_resource(route):
+            url = route.request.url
+            if url == origin + "/index.html":
+                route.fulfill(path=pane, content_type="text/html")
+            elif url == "https://appsforoffice.microsoft.com/lib/1/hosted/office.js" and has_office:
+                route.fulfill(content_type="application/javascript", body=office)
+            elif url == origin + "/api/bind":
+                sent.append(route.request.post_data_json)
+                route.fulfill(status=409, content_type="application/json", body='{"error":"bad-binding"}')
+            else:
+                route.abort()
+
+        page.route("**/*", route_resource)
+        page.goto(origin + "/index.html")
+        ok(
+            page.locator("#bind").is_disabled() and "WordApi" in page.inner_text("#status"),
+            "缺少 WordApi 时提示并禁止绑定",
+        )
+        has_office = False
+        page.reload()
+        ok(
+            page.locator("#bind").is_disabled() and "Office.js" in page.inner_text("#status"),
+            "Office.js 不可用时提示并禁止绑定",
+        )
+        has_office = True
+        page.add_init_script("window.supported = true")
+        expected = hashlib.sha256(r"C:\合同 A\review.docx".encode()).hexdigest()
+        for source in (r"C:\合同 A\review.docx", "file:///c:/%E5%90%88%E5%90%8C%20A/review.docx"):
+            page.reload()
+            page.evaluate("value => { window.docUrl = value; }", source)
+            page.fill("#token", "synthetic")
+            with page.expect_response(origin + "/api/bind"):
+                page.click("#bind")
+            ok(sent[-1] == {"documentKey": expected}, "盘符路径与等价 file URI 发送同一原件的完整路径摘要")
+
+        bound_count = len(sent)
+        for source in (
+            "",
+            "https://example.invalid/review.docx",
+            r"\\server\share\review.docx",
+            "file://server/share/review.docx",
+        ):
+            page.reload()
+            page.evaluate("value => { window.docUrl = value; }", source)
+            page.fill("#token", "synthetic")
+            page.click("#bind")
+            page.wait_for_function("() => document.getElementById('status').textContent.includes('已保存到本机')")
+            ok(len(sent) == bound_count, "未保存、云端与共享路径在提交绑定前被拒绝")
+
+
 def docx_review_checks(browser, tmp: Path):
     """场景 docx-review：DOCX 直接审阅（详见 e2e_scenarios 注册表）。
 
@@ -10996,6 +11064,7 @@ SCENARIO_RUNNERS = {
     "review-overview-stop-scope": review_overview_stop_scope_checks,
     "css-fidelity": css_fidelity_checks,
     "pptx-review": pptx_review_checks,
+    "word-pane-launch": word_pane_launch_checks,
     "docx-review": docx_review_checks,
     "video-review": video_review_checks,
     "server-mode": server_mode_checks,

@@ -270,6 +270,13 @@ SCENARIOS: list[Scenario] = [
         "再服务模式（服务用后回收）",
     ),
     Scenario(
+        id="word-pane-launch",
+        title="Word 侧栏启动：桌面宿主要求集、Office.js 不可用、Windows 本机路径及 file URI 绑定",
+        fixture="随技能安装的真实窗格页面，合成 Word 文件属性与绑定接口回执",
+        isolation="独立浏览器上下文，拦截 Office.js 和全部请求，仅使用合成路径",
+        parallel_safe=True,
+    ),
+    Scenario(
         id="docx-review",
         title="DOCX 直接审阅：Word 原分页与横向页按原比例显示、verified 横幅与限制清单、"
         "页眉页脚按实际页码、正文可拖选、点标注与快捷删除在 DOCX 页可用、"

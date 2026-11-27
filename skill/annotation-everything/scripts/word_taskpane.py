@@ -9,9 +9,11 @@ import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+import os
 from pathlib import Path
 import secrets
 import ssl
+import subprocess
 import sys
 import unicodedata
 import zipfile
@@ -73,7 +75,14 @@ class Binding:
             alias = Path("/") / self.document.relative_to("/private")
             if alias.resolve() == self.document:
                 paths.add(alias)
-        self.document_keys = {hashlib.sha256(unicodedata.normalize("NFC", str(p)).encode()).hexdigest() for p in paths}
+        if sys.platform == "win32":
+            if len(self.document.drive) != 2 or not self.document.drive.endswith(":"):
+                raise Refused(409, "local-drive-required")
+            # NTFS can distinguish Unicode forms and case in directory components.
+            keys = [self.document.drive.upper() + str(self.document)[2:]]
+        else:
+            keys = [unicodedata.normalize("NFC", str(p)) for p in paths]
+        self.document_keys = {hashlib.sha256(key.encode()).hexdigest() for key in keys}
         manifest = ledger.read_manifest(self.review)
         self.rid = manifest.get("reviewId")
         if not isinstance(self.rid, str) or not ledger.RID.fullmatch(self.rid):
@@ -187,6 +196,21 @@ class TaskpaneServer(ThreadingHTTPServer):
             self.server_close()
             raise
 
+    def handle_error(self, request, client_address):
+        error = sys.exc_info()[1]
+        if isinstance(error, ssl.SSLError) and error.reason in {
+            "TLSV1_ALERT_UNKNOWN_CA",
+            "SSLV3_ALERT_CERTIFICATE_UNKNOWN",
+            "SSLV3_ALERT_CERTIFICATE_EXPIRED",
+            "SSLV3_ALERT_BAD_CERTIFICATE",
+        }:
+            print(
+                "Client rejected the TLS certificate. Check system trust, expiration and IP SAN 127.0.0.1.",
+                file=sys.stderr,
+            )
+            return
+        super().handle_error(request, client_address)
+
 
 class TaskpaneHandler(BaseHTTPRequestHandler):
     timeout = 8
@@ -272,20 +296,51 @@ class TaskpaneHandler(BaseHTTPRequestHandler):
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = dispatch
 
 
+def open_in_word(document):
+    """Open the verified original with the named desktop Word application."""
+    if sys.platform == "darwin":
+        opened = subprocess.run(["/usr/bin/open", "-b", "com.microsoft.Word", str(document)], capture_output=True)
+        if opened.returncode == 0:
+            return
+    elif sys.platform == "win32":
+        import winreg
+
+        app_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\WINWORD.EXE"
+        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            for view in (winreg.KEY_WOW64_64KEY, winreg.KEY_WOW64_32KEY):
+                try:
+                    with winreg.OpenKey(hive, app_key, 0, winreg.KEY_READ | view) as key:
+                        registered, _ = winreg.QueryValueEx(key, "")
+                    exe = Path(os.path.expandvars(registered).strip('"'))
+                    if exe.is_absolute() and exe.name.upper() == "WINWORD.EXE" and exe.is_file():
+                        subprocess.Popen([str(exe), str(document)])
+                        return
+                except OSError:
+                    continue
+    raise ValueError(
+        "Cannot open Microsoft Word. Check that desktop Word is installed, "
+        "or start the pane without --open-word and open the document in Word manually."
+    )
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("review", type=Path)
     parser.add_argument("--document", required=True, type=Path)
     parser.add_argument("--cert", required=True, type=Path, help="Trusted local certificate chain (PEM)")
     parser.add_argument("--key", required=True, type=Path, help="Private key (PEM)")
+    parser.add_argument("--open-word", action="store_true", help="Open the verified local DOCX in desktop Word")
     args = parser.parse_args(argv)
     try:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.minimum_version = ssl.TLSVersion.TLSv1_2
         tls.load_cert_chain(args.cert, args.key)
-        with TaskpaneServer(args.review, args.document, tls) as server:
+        with TaskpaneServer(args.review, args.document, tls, port=PORT) as server:
             print(f"https://127.0.0.1:{PORT}/index.html  review={server.binding.rid}", flush=True)
             print(f"Browser viewer: http://127.0.0.1:{server.binding.port}/", flush=True)
+            if args.open_word:
+                open_in_word(server.binding.document)
+            print("In Word, choose Home → 打开审阅 to open the task pane.", flush=True)
             print(f"Binding token: {server.token}", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

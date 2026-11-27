@@ -61,6 +61,7 @@ FULL_ORDER = (
     "review-overview-stop-scope",
     "css-fidelity",
     "pptx-review",
+    "word-pane-launch",
     "docx-review",
     "video-review",
     "server-mode",

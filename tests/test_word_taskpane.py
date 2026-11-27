@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import closing, redirect_stderr, redirect_stdout
 import hashlib
+import io
 import http.client
 import json
 import os
@@ -63,6 +65,7 @@ class TaskpaneTests(unittest.TestCase):
             check=True,
             timeout=10,
         )
+        cls.cert, cls.private_key = cert, key
         cls.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         cls.tls.load_cert_chain(cert, key)
         cls.client_tls = ssl.create_default_context(cafile=str(cert))
@@ -118,6 +121,44 @@ class TaskpaneTests(unittest.TestCase):
 
     def key(self, path):
         return hashlib.sha256(str(path).encode()).hexdigest()
+
+    def test_client_requires_trust_for_the_loopback_certificate(self):
+        port = self.server.server_port
+        client_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        with self.assertRaises(ssl.SSLCertVerificationError):
+            with closing(http.client.HTTPSConnection("127.0.0.1", port, context=client_tls, timeout=3)) as client:
+                client.request("GET", "/index.html")
+        client_tls.load_verify_locations(cafile=self.cert)
+        with closing(http.client.HTTPSConnection("127.0.0.1", port, context=client_tls, timeout=3)) as client:
+            client.request("GET", "/index.html")
+            self.assertEqual(client.getresponse().status, 200)
+
+    def test_open_word_failure_identifies_word_and_preserves_the_browser_review(self):
+        import word_taskpane
+
+        command = [
+            str(self.review),
+            "--document",
+            str(self.file),
+            "--cert",
+            str(self.cert),
+            "--key",
+            str(self.private_key),
+            "--open-word",
+        ]
+        errors, output = io.StringIO(), io.StringIO()
+        with (
+            patch.object(word_taskpane, "PORT", 0),
+            patch.object(sys, "platform", "darwin"),
+            patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1)) as launch,
+            redirect_stderr(errors),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(word_taskpane.main(command), 2)
+        self.assertEqual(launch.call_args.args[0], ["/usr/bin/open", "-b", "com.microsoft.Word", str(self.file)])
+        self.assertIn("Microsoft Word", errors.getvalue())
+        self.assertIn(f"http://127.0.0.1:{ledger.get(self.rid)['port']}/", output.getvalue())
+        self.assertNotIn("Binding token", output.getvalue())
 
     def test_binds_one_live_docx_and_uses_its_table_suggestion(self):
         key = self.key(self.file)
