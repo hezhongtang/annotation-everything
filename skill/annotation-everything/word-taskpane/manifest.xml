@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xsi:type="TaskPaneApp">
+  <Id>98f89524-3bf2-46b6-875b-c40567019b8c</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>annotation-everything</ProviderName>
+  <DefaultLocale>zh-CN</DefaultLocale>
+  <DisplayName DefaultValue="AE 本机审阅"/>
+  <Description DefaultValue="将一份本机合成审阅绑定到当前 Word 文档，试用原生修订。"/>
+  <IconUrl DefaultValue="https://127.0.0.1:43821/api/icon/32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://127.0.0.1:43821/api/icon/80.png"/>
+  <SupportUrl DefaultValue="https://github.com/hezhongtang/annotation-everything/issues/214"/>
+  <Hosts><Host Name="Document"/></Hosts>
+  <DefaultSettings><SourceLocation DefaultValue="https://127.0.0.1:43821/index.html"/></DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Document">
+        <DesktopFormFactor>
+          <FunctionFile resid="Pane.Url"/>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="ReviewGroup">
+                <Label resid="Group.Label"/>
+                <Icon>
+                  <bt:Image size="16" resid="Icon16"/>
+                  <bt:Image size="32" resid="Icon32"/>
+                  <bt:Image size="80" resid="Icon80"/>
+                </Icon>
+                <Control xsi:type="Button" id="OpenReview">
+                  <Label resid="Pane.Label"/>
+                  <Supertip><Title resid="Pane.Label"/><Description resid="Pane.Description"/></Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon16"/>
+                    <bt:Image size="32" resid="Icon32"/>
+                    <bt:Image size="80" resid="Icon80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ReviewPane</TaskpaneId>
+                    <SourceLocation resid="Pane.Url"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon16" DefaultValue="https://127.0.0.1:43821/api/icon/16.png"/>
+        <bt:Image id="Icon32" DefaultValue="https://127.0.0.1:43821/api/icon/32.png"/>
+        <bt:Image id="Icon80" DefaultValue="https://127.0.0.1:43821/api/icon/80.png"/>
+      </bt:Images>
+      <bt:Urls><bt:Url id="Pane.Url" DefaultValue="https://127.0.0.1:43821/index.html"/></bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Group.Label" DefaultValue="AE 本机审阅"/>
+        <bt:String id="Pane.Label" DefaultValue="打开审阅"/>
+      </bt:ShortStrings>
+      <bt:LongStrings><bt:String id="Pane.Description" DefaultValue="连接已启动的本机审阅，在当前文档中应用一条建议。"/></bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

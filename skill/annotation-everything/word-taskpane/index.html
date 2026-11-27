@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AE 本机审阅</title>
+  <style>
+    :root { color-scheme: light dark; font: 15px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; }
+    body { margin: 0 auto; padding: 20px 16px; max-width: 32rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+    h2 { font-size: 1.1rem; margin: 1rem 0 .35rem; }
+    p { margin: .65rem 0; overflow-wrap: anywhere; }
+    label { display: block; }
+    input, button { box-sizing: border-box; font: inherit; padding: .45rem .6rem; }
+    input { width: 100%; margin: .25rem 0 .6rem; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; }
+    ul { padding: 0; list-style: none; }
+    li { padding: .7rem 0; border-top: 1px solid #9999; overflow-wrap: anywhere; }
+    li p { margin: .25rem 0; }
+    .note, #reviewId { font-size: .88rem; }
+    pre { overflow-wrap: anywhere; white-space: pre-wrap; font-size: .82rem; }
+  </style>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</head>
+<body>
+  <main>
+    <h1>AE 本机审阅</h1>
+    <form id="connect">
+      <label for="token">启动命令显示的绑定码</label>
+      <input id="token" type="password" autocomplete="off" spellcheck="false" required disabled>
+      <button id="bind" type="submit" disabled>绑定当前文档</button>
+    </form>
+    <p id="status" role="status" aria-live="polite">正在等待 Office.js 和 Word 建立连接。</p>
+    <section id="review" hidden>
+      <h2 id="title"></h2>
+      <p id="reviewId"></p>
+      <p>在 Word「审阅」中打开「修订」，选择「所有标记」，再应用建议。</p>
+      <ul id="suggestions" aria-label="文字建议"></ul>
+      <button id="inspect" type="button">读取选区与正文修订</button>
+      <p class="note">可在 Word 中选中已有修订的整段，再读取原文、改后文字和作者。读数只显示在本窗格。</p>
+      <details id="evidence" hidden>
+        <summary>Word API 回读</summary>
+        <pre id="output"></pre>
+      </details>
+    </section>
+  </main>
+  <script>
+    "use strict";
+
+    const byId = id => document.getElementById(id);
+    let wordReady = false;
+    let busy = false;
+    let binding = null;
+    const attempted = new Set();
+
+    function message(text) {
+      byId("status").textContent = text;
+    }
+
+    function refreshControls() {
+      byId("bind").disabled = !wordReady || busy || Boolean(binding);
+      byId("token").disabled = byId("bind").disabled;
+      byId("inspect").disabled = busy || !binding;
+      for (const button of byId("suggestions").querySelectorAll("button")) {
+        button.disabled = busy || attempted.has(button.dataset.id);
+      }
+    }
+
+    async function run(action) {
+      if (busy) return;
+      busy = true;
+      refreshControls();
+      try {
+        await action();
+      } catch (error) {
+        message(error.message || String(error));
+      } finally {
+        busy = false;
+        refreshControls();
+      }
+    }
+
+    async function documentKey() {
+      const fileUrl = await new Promise((resolve, reject) => {
+        Office.context.document.getFilePropertiesAsync(result => {
+          if (result.status === Office.AsyncResultStatus.Succeeded) resolve(result.value.url);
+          else reject(new Error("Word 无法读取当前文档的位置。"));
+        });
+      });
+      let path = fileUrl || "";
+      if (/^file:\/\//i.test(path)) {
+        const url = new URL(path);
+        if (url.hostname || url.search || url.hash) throw new Error("请打开已保存到本机的合成 DOCX。");
+        path = decodeURIComponent(url.pathname);
+      }
+      if (!path.startsWith("/") || path.startsWith("//")) throw new Error("请打开已保存到本机的合成 DOCX。");
+      const bytes = new TextEncoder().encode(path.normalize("NFC"));
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+    }
+
+    async function request(path, token, body) {
+      const response = await fetch(path, {
+        method: "POST", mode: "same-origin", credentials: "omit", redirect: "error", cache: "no-store",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify(body)
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error("审阅服务拒绝请求（" + (result.error || response.status) + "）。请核对绑定码、文档和审阅服务。");
+      return result;
+    }
+
+    async function checkDocument() {
+      if (await documentKey() !== binding.key) throw new Error("当前文档与绑定时不同。请在原文档中打开窗格。");
+    }
+
+    const fields = ["id", "from", "to", "paragraph", "table", "row", "column", "bodyParagraph"];
+
+    function describe(item) {
+      if (Number.isInteger(item.table)) {
+        return "表 " + (item.table + 1) + "，第 " + (item.row + 1) + " 行，第 " + (item.column + 1) + " 列";
+      }
+      return "正文第 " + (item.bodyParagraph + 1) + " 段";
+    }
+
+    function displaySuggestions(items) {
+      for (const item of items) {
+        const entry = document.createElement("li");
+        const location = document.createElement("strong");
+        location.textContent = describe(item);
+        const text = document.createElement("p");
+        text.textContent = item.from + " → " + item.to;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "应用这条修订";
+        button.dataset.id = item.id;
+        button.addEventListener("click", () => run(() => apply(item)));
+        entry.append(location, text, button);
+        byId("suggestions").append(entry);
+      }
+    }
+
+    byId("connect").addEventListener("submit", event => {
+      event.preventDefault();
+      run(async () => {
+        const token = byId("token").value.trim();
+        const key = await documentKey();
+        const result = await request("/api/bind", token, { documentKey: key });
+        if (await documentKey() !== key) throw new Error("绑定期间文档已更换。请重新绑定。");
+        binding = { token, key, reviewId: result.reviewId };
+        byId("token").value = "";
+        byId("connect").hidden = true;
+        byId("title").textContent = result.title;
+        byId("reviewId").textContent = "审阅标识 " + result.reviewId;
+        displaySuggestions(result.suggestions);
+        byId("review").hidden = false;
+        message("已绑定当前文档。");
+      });
+    });
+
+    async function targetParagraph(context, item) {
+      const body = context.document.body;
+      if (!Number.isInteger(item.table)) {
+        const paragraphs = body.paragraphs;
+        paragraphs.load("items");
+        await context.sync();
+        const paragraph = paragraphs.items[item.bodyParagraph];
+        if (!paragraph) throw new Error("原定位的正文段落已不存在。");
+        return paragraph;
+      }
+      const tables = body.tables;
+      tables.load("items");
+      await context.sync();
+      const table = tables.items[item.table];
+      if (!table) throw new Error("原定位的表格已不存在。");
+      const paragraphs = table.getCell(item.row, item.column).body.paragraphs;
+      paragraphs.load("items");
+      await context.sync();
+      if (paragraphs.items.length !== 1) throw new Error("目标单元格的段落结构已改变。");
+      return paragraphs.items[0];
+    }
+
+    // Queue all three observations together so that Word uses the same range.
+    function readText(range) {
+      range.load("text");
+      const original = range.getReviewedText("Original");
+      const current = range.getReviewedText("Current");
+      return () => ({ text: range.text, original: original.value, current: current.value });
+    }
+
+    function showEvidence(data) {
+      const host = Office.context.diagnostics;
+      byId("output").textContent = JSON.stringify({
+        reviewId: binding.reviewId,
+        observedAt: new Date().toISOString(),
+        host: { name: host.host, platform: host.platform, version: host.version },
+        ...data
+      }, null, 2);
+      byId("evidence").hidden = false;
+      byId("evidence").open = true;
+    }
+
+    async function apply(item) {
+      if (attempted.has(item.id)) throw new Error("本次已向 Word 提交此建议。请先核对修订。");
+      await checkDocument();
+      const result = await request("/api/suggestion", binding.token, {
+        documentKey: binding.key, reviewId: binding.reviewId, id: item.id
+      });
+      if (result.reviewId !== binding.reviewId || !result.suggestion ||
+          fields.some(key => item[key] !== result.suggestion[key])) {
+        throw new Error("绑定时显示的建议已改变，请关闭窗格后重新绑定。");
+      }
+      await Word.run(async context => {
+        const paragraph = await targetParagraph(context, item);
+        const range = paragraph.getRange("Content");
+        const beforeText = readText(range);
+        const oldChanges = paragraph.getTrackedChanges();
+        oldChanges.load("items/type");
+        const matches = range.search(item.from, { matchCase: true, matchWildcards: false });
+        matches.load("items/text");
+        context.document.load("changeTrackingMode");
+        await context.sync();
+        const before = beforeText();
+        if (!["TrackAll", "TrackMineOnly"].includes(context.document.changeTrackingMode)) {
+          throw new Error("请先在 Word「审阅」中打开修订。");
+        }
+        if (oldChanges.items.length || before.original !== item.paragraph || before.current !== item.paragraph ||
+            before.text !== item.paragraph || matches.items.length !== 1 || matches.items[0].text !== item.from) {
+          throw new Error("目标段落含已有修订、原文已变或原词定位不唯一。请在 Word 中核对。");
+        }
+        await checkDocument();
+        attempted.add(item.id); // A sync error cannot tell us whether Word performed the write.
+        try {
+          matches.items[0].insertText(item.to, "Replace").select();
+          await context.sync();
+          const afterText = readText(paragraph.getRange("Content"));
+          const changes = paragraph.getTrackedChanges();
+          changes.load("items/type,items/text,items/author");
+          await context.sync();
+          const after = afterText();
+          const revisions = changes.items.map(change => ({type: change.type, text: change.text, author: change.author}));
+          const expected = item.paragraph.replace(item.from, () => item.to);
+          const confirmed = after.original === before.original && after.current === expected &&
+                            revisions.some(r => r.type === "Added") && revisions.some(r => r.type === "Deleted");
+          showEvidence({ target: describe(item), before, beforeRevisionCount: 0, after, revisions });
+          message(confirmed ? "已在目标段落回读到新增和删除。请在 Word 中核对标记、分页并保存。"
+                            : "Word 已执行替换，回读未能确认完整增删。请在「所有标记」中核对，保留两份副本验证。");
+        } catch (error) {
+          throw new Error("已向 Word 提交替换，结果待核对。请先查看原页或读取修订。 " + (error.code || error.message));
+        }
+      });
+    }
+
+    byId("inspect").addEventListener("click", () => run(async () => {
+      await checkDocument();
+      // Confirm the local service still recognizes this review before displaying document data.
+      const result = await request("/api/bind", binding.token, { documentKey: binding.key });
+      if (result.reviewId !== binding.reviewId) throw new Error("绑定审阅已更换。");
+      await checkDocument();
+      await Word.run(async context => {
+        const selected = context.document.getSelection();
+        const selectionText = readText(selected);
+        const bodyText = readText(context.document.body.getRange());
+        const changes = context.document.body.getTrackedChanges();
+        changes.load("items/author,items/date,items/text,items/type");
+        context.document.load("changeTrackingMode");
+        await context.sync();
+        const evidence = {
+          tracking: context.document.changeTrackingMode, selection: selectionText(), body: bodyText(), revisions: []
+        };
+        for (const change of changes.items) {
+          const entry = {type: change.type, author: change.author, date: change.date, text: change.text};
+          try {
+            const range = change.getRange();
+            const details = readText(range);
+            const relation = range.compareLocationWith(selected);
+            await context.sync();
+            entry.range = details();
+            entry.relationToSelection = relation.value;
+          } catch (error) {
+            entry.rangeError = error.code || error.message;
+          }
+          evidence.revisions.push(entry);
+        }
+        showEvidence(evidence);
+        message("已读取当前选区和正文修订。请在 Word 原页核对实际显示。");
+      });
+    }));
+
+    if (window.Office) {
+      const waiting = setTimeout(() => message("Word 尚未就绪。请检查桌面宿主、网络和 Office.js 加载状态。"), 12000);
+      Office.onReady(info => {
+        clearTimeout(waiting);
+        wordReady = info.host === Office.HostType.Word && Office.context.requirements.isSetSupported("WordApi", "1.6");
+        message(wordReady ? "请打开目标合成文档，输入对应的绑定码。"
+                          : "请使用支持 WordApi 1.6 的桌面 Word 打开此窗格。");
+        refreshControls();
+      });
+    } else {
+      message("Office.js 未加载。首次使用需要连接微软 CDN，恢复网络后请重新打开窗格。");
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,226 @@
+"""Word 原型的 HTTPS 接口：两份同名合成 DOCX 与独立审阅台账。"""
+
+from __future__ import annotations
+
+import hashlib
+import http.client
+import json
+import os
+from pathlib import Path
+import shutil
+import ssl
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path[:0] = [str(ROOT / "skill/annotation-everything/scripts"), str(ROOT / "fixtures/docx")]
+os.environ["AE_HOME"] = tempfile.mkdtemp(prefix="ae-test-home-")
+
+import ledger
+import make_word_native
+import notes_store
+import serve
+
+
+@unittest.skipUnless(shutil.which("openssl"), "HTTPS test certificate requires openssl")
+class TaskpaneTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        temp = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(temp.cleanup)
+        cert, key = (Path(temp.name) / name for name in ("cert.pem", "key.pem"))
+        config = Path(temp.name) / "openssl.cnf"
+        config.write_text(
+            "[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=server\n[dn]\nCN=127.0.0.1\n"
+            "[server]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n"
+            "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
+            encoding="ascii",
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-days",
+                "1",
+                "-config",
+                str(config),
+                "-out",
+                str(cert),
+                "-keyout",
+                str(key),
+            ],
+            capture_output=True,
+            check=True,
+            timeout=10,
+        )
+        cls.tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        cls.tls.load_cert_chain(cert, key)
+        cls.client_tls = ssl.create_default_context(cafile=str(cert))
+
+    def setUp(self):
+        import word_taskpane
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        env = patch.dict(os.environ, {"AE_HOME": str(self.root / "ledger")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.review, self.file, self.rid, self.nid = self.review_fixture("a")
+        self.other, self.other_file, self.other_id, self.other_note = self.review_fixture("b")
+        self.server = word_taskpane.TaskpaneServer(self.review, self.file, self.tls, port=0)
+        self.start(self.server)
+
+    def start(self, server):
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+    def review_fixture(self, letter):
+        label = letter.upper()
+        file = make_word_native.build(self.root / label / "contract.docx", label)
+        review = make_word_native.prepare_review(file, label)
+        rid = ledger.read_manifest(review)["reviewId"]
+        nid = notes_store.load(review)["notes"][0]["id"]
+        server = serve.ReviewServer(review, 0, log_to_file=False)
+        ledger.claim_port(rid, review, server.port)
+        serve.write_status(server)
+        self.start(server)
+        return review, file, rid, nid
+
+    def request(self, path, body, *, token=None, headers=None, method="POST"):
+        port = self.server.server_port
+        connection = http.client.HTTPSConnection("127.0.0.1", port, context=self.client_tls, timeout=3)
+        self.addCleanup(connection.close)
+        request_headers = {
+            "Host": f"127.0.0.1:{port}",
+            "Origin": f"https://127.0.0.1:{port}",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + (self.server.token if token is None else token),
+        }
+        connection.request(method, path, body=json.dumps(body).encode(), headers={**request_headers, **(headers or {})})
+        response = connection.getresponse()
+        self.assertIsNone(response.getheader("Access-Control-Allow-Origin"))
+        return response.status, json.loads(response.read())
+
+    def key(self, path):
+        return hashlib.sha256(str(path).encode()).hexdigest()
+
+    def test_binds_one_live_docx_and_uses_its_table_suggestion(self):
+        key = self.key(self.file)
+        code, bound = self.request("/api/bind", {"documentKey": key})
+        self.assertEqual(code, 200, bound)
+        expected = {
+            "id": self.nid,
+            "from": "五日",
+            "to": "七日",
+            "paragraph": "应于五日内回复",
+            "table": 0,
+            "row": 0,
+            "column": 1,
+        }
+        self.assertEqual(bound["reviewId"], self.rid)
+        self.assertEqual(bound["title"], "合成合同 A")
+        table, tail = bound["suggestions"]
+        self.assertEqual(table, expected)
+        self.assertEqual(
+            (tail["from"], tail["paragraph"], tail["bodyParagraph"]), ("签收即生效", "本合同自签收即生效。", 27)
+        )
+        self.assertTrue(tail["to"].endswith("各存一份"))
+        self.assertNotIn("table", tail)
+        self.assertEqual(
+            self.request("/api/suggestion", {"documentKey": key, "reviewId": self.rid, "id": self.nid}),
+            (200, {"reviewId": self.rid, "suggestion": expected}),
+        )
+
+    def test_file_replaced_after_binding_cannot_receive_the_cached_suggestion(self):
+        body = {"documentKey": self.key(self.file)}
+        self.assertEqual(self.request("/api/bind", body)[0], 200)
+        self.file.write_bytes(b"updated synthetic document")
+        self.assertEqual(
+            self.request("/api/suggestion", {**body, "reviewId": self.rid, "id": self.nid}),
+            (409, {"error": "document-changed"}),
+        )
+
+    def test_second_live_review_cannot_be_selected_by_identity_document_or_note(self):
+        key = self.key(self.file)
+        self.assertEqual(self.request("/api/bind", {"documentKey": self.key(self.other_file)})[0], 409)
+        self.assertEqual(self.request("/api/bind", {"documentKey": key}, token="invalid")[0], 403)
+        for rid, nid, status in ((self.other_id, self.other_note, 409), (self.rid, self.other_note, 404)):
+            with self.subTest(rid=rid):
+                self.assertEqual(
+                    self.request("/api/suggestion", {"documentKey": key, "reviewId": rid, "id": nid})[0], status
+                )
+        self.assertEqual(self.request("/api/bind", {"documentKey": key, "url": "synthetic"})[0], 400)
+
+    def test_only_same_origin_json_and_explicit_resources_are_served(self):
+        body = {"documentKey": self.key(self.file)}
+        for header, status in (
+            ({"Host": "localhost"}, 421),
+            ({"Origin": "null"}, 403),
+            ({"Sec-Fetch-Site": "cross-site"}, 403),
+            ({"Content-Type": "text/plain"}, 415),
+        ):
+            with self.subTest(headers=header):
+                self.assertEqual(self.request("/api/bind", body, headers=header)[0], status)
+        for path in ("/", "/review.json", "/api/notes", "/api/overview/start", "/api/health", "/manifest.xml"):
+            with self.subTest(path=path):
+                self.assertEqual(self.request(path, {}, method="GET")[0], 404)
+
+    def test_stopped_review_and_reused_port_invalidate_binding(self):
+        key = self.key(self.file)
+        body = {"reviewId": self.rid, "id": self.nid, "documentKey": key}
+        real_status = ledger.status_file(self.review).read_bytes()
+        ledger.status_file(self.review).write_bytes(ledger.status_file(self.other).read_bytes())
+        self.assertEqual(self.request("/api/suggestion", body), (409, {"error": "review-unavailable"}))
+        ledger.status_file(self.review).write_bytes(real_status)
+        import review_stop
+
+        review_stop.begin(self.review)
+        self.assertEqual(self.request("/api/suggestion", body), (409, {"error": "review-unavailable"}))
+
+    def test_reserved_port_is_left_available_for_its_existing_owner(self):
+        import word_taskpane
+
+        reserved = ledger.assign_overview_port(prefer=self.server.server_port)
+        with self.assertRaisesRegex(ValueError, "port-reserved"):
+            with word_taskpane.TaskpaneServer(self.review, self.file, self.tls, port=reserved):
+                pass
+
+    @unittest.skipUnless(sys.platform == "darwin", "Word file URL aliases are macOS-specific")
+    def test_word_can_reopen_the_same_file_through_macos_system_aliases(self):
+        import word_taskpane
+
+        for alias in ("tmp", "var"):
+            base = "/private/tmp" if alias == "tmp" else "/private/var/tmp"
+            with self.subTest(alias=alias), tempfile.TemporaryDirectory(dir=base) as temp:
+                self.root = Path(temp).resolve()
+                review, document, rid, _ = self.review_fixture("alias")
+                other_path = document.parent.parent / "other" / document.name
+                server = word_taskpane.TaskpaneServer(review, document, self.tls, port=0)
+                self.start(server)
+                self.server = server
+                alias_path = Path("/") / document.relative_to("/private")
+                self.assertEqual(alias_path.parts[1], alias)
+                self.assertEqual(
+                    self.request("/api/bind", {"documentKey": self.key(alias_path)})[1].get("reviewId"), rid
+                )
+                self.assertEqual(self.request("/api/bind", {"documentKey": self.key(other_path)})[0], 409)
+
+    def test_office_can_supply_its_host_information_when_opening_the_static_pane(self):
+        port = self.server.server_port
+        connection = http.client.HTTPSConnection("127.0.0.1", port, context=self.client_tls, timeout=3)
+        self.addCleanup(connection.close)
+        connection.request("GET", "/index.html?_host_Info=Word%24Mac")
+        response = connection.getresponse()
+        self.assertEqual(response.status, 200)
+        self.assertIn(b"appsforoffice.microsoft.com", response.read())
