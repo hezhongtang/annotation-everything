@@ -1,18 +1,26 @@
 # Connect a review in Word
 
-When the reviewer chooses desktop Word, confirm the full path of the saved local DOCX. The connection was exercised on Word for Mac 16.115.2 and requires WordApi 1.6. Give the reviewer the review’s browser URL as well. They can use it on other hosts, when Office.js is unavailable, or for signed or protected files.
+Use a saved local DOCX, desktop Microsoft Word with WordApi 1.6, and its running AE review. Development sideloading was verified on macOS 26.7.3 with Word 16.115.2. The Windows launcher and instructions are available for testing, with desktop verification pending. Give the reviewer the review’s browser URL as well, including for signed or protected files. In the commands below, set `$S` to the installed skill’s `scripts` directory.
+
+## Enable the add-in once
+
+- **Mac development sideload.** In Finder, use Go to Folder to open `~/Library/Containers/com.microsoft.Word/Data/Documents/`. Create `wef` there if needed. Copy the installed skill’s `word-taskpane/manifest.xml` into it. Finder can perform the copy when macOS denies container access to the terminal. Save work and quit Word completely. After opening the document below, choose **Home → Add-ins → Developer Add-ins → AE 本机审阅**. [Microsoft’s Mac sideloading instructions](https://learn.microsoft.com/en-us/office/dev/add-ins/testing/sideload-an-office-add-in-on-mac)
+- **Windows development sideload, awaiting desktop verification.** Place only `manifest.xml` in a test shared folder you can access. In Word, open **File → Options → Trust Center → Trust Center Settings → Trusted Add-in Catalogs**. Add the share’s UNC path and select **Show in Menu**. Save work and restart Word. Choose **Home → Add-ins → Advanced → Shared Folder → AE 本机审阅 → Add**. Keep the DOCX on a local drive. Ask the administrator to evaluate device policies if shares or loopback access are restricted. [Microsoft’s Windows sideloading instructions](https://learn.microsoft.com/en-us/office/dev/add-ins/testing/create-a-network-shared-folder-catalog-for-task-pane-and-content-add-ins)
+- **Certificate.** Supply a locally trusted server certificate whose SAN includes IP address `127.0.0.1`, and its matching PEM key. Keep the key on the device. The Mac test used a one-day self-signed leaf with SSL trust scoped to this IP in the current user’s login keychain. On managed devices, obtain a certificate and confirm trust with the administrator.
 
 ## Start or reconnect
 
 1. **Select the review.** For a new review, run `python3 "$S/build_viewer.py" --report "$DOCX" --out "$REVIEW" --name "$NAME" --locale en`. For an existing review, use `python3 "$S/serve.py" list --json` to match its name, ID and directory, then check the registered source path. Reuse its directory to retain batches and annotations. For files with the same name, compare both the directory and an identifier inside the document.
 2. **Check the receiver.** Follow [Receiver binding and transfer](receiver-binding.en.md). Start or reuse `python3 "$S/serve.py" "$REVIEW" --no-open` and record its browser URL. An unbound legacy review can be opened for inspection. Sending work to a receiving session requires a binding. Explicitly transfer the binding before restarting the dedicated service for the new receiver.
-3. **Start the pane service.** Use a trusted certificate with IP address 127.0.0.1 in its SAN. Keep its private key local. Run the command in a persistent terminal. Give the reviewer the new binding code directly from that terminal. Keep it out of review materials and submission records.
+3. **Start the pane and open the original.** The `--open-word` option opens the registered file in Microsoft Word after checking the running review and document fingerprint. Run the command in a persistent terminal. Give the reviewer the new binding code directly from that terminal. Keep it out of review materials and submission records.
 
    ```sh
-   python3 "$S/word_taskpane.py" "$REVIEW" --document "$DOCX" --cert "$CERT" --key "$KEY"
+   python3 "$S/word_taskpane.py" "$REVIEW" --document "$DOCX" --cert "$CERT" --key "$KEY" --open-word
    ```
 
-4. **Open Word.** On first use, copy the installed skill’s `$S/../word-taskpane/manifest.xml` into `~/Library/Containers/com.microsoft.Word/Data/Documents/wef/` using Finder. Save work, quit Word completely and reopen the selected document. Under **Home → Add-ins → Developer Add-ins**, select **AE 本机审阅**. On later visits, select **打开审阅** on Home. To reload, choose **Reload** on the pane menu. Office.js requires access to Microsoft’s CDN on first load.
+   In Windows PowerShell, set the same path variables and run `py -3 "$S/word_taskpane.py" "$REVIEW" --document "$DOCX" --cert "$CERT" --key "$KEY" --open-word`. Omit `--open-word` to open the original yourself in Word.
+
+4. **Open the pane.** Choose **Home → 打开审阅**. Choose **Reload** from the pane menu when needed. Word can auto-open a designated pane when the document carries an auto-open setting, the add-in is already installed, and the distribution channel supports the feature. AE provides the ribbon button and leaves the setting out of delivery documents. Recipients can open the documents normally in Word. [Auto-open conditions](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/automatically-open-a-task-pane-with-a-document)
 5. **Verify the connection.** Enter the code, select **绑定当前文档**, and check the displayed file path, review name and ID, current batch and receiver. Use **刷新连接状态** to see a new batch. Opening and reconnecting read the document. Applying a suggestion is a separate reviewer action.
 
 ## Post and manage native Word comments
@@ -53,3 +61,14 @@ Use **Locate in Word** to inspect the source. To disambiguate a match, select th
 **Write as revision** checks document protection, tracking, the paragraph and the selection. Native revision writes require WordApiDesktop 1.4. When tracking is off, choose **Enable Word change tracking** first. Suggestions touching an existing comment, revision or its boundary stay pending for review in Word. Existing revisions elsewhere in the paragraph can remain independent.
 
 The pane reports a write to the open Word document after reading the revised text, the recoverable original and the native author at that location. Use **Review → All Markup** to inspect line and page breaks, then save in Word. If the result needs checking, inspect the original page and read back the revisions. Word reports the save state.
+
+## Troubleshooting and distribution
+
+| Symptom | Check and recovery |
+| --- | --- |
+| Microsoft Word cannot open the file | Check that desktop Word opens. Select the same full path under **File → Open** and restart the pane service without `--open-word`. If Word is unavailable, use the dedicated browser URL printed in the terminal. |
+| `Fixed port 43821 is already in use` or `port-reserved` | Check the original pane terminal and `serve.py list --json`. Only stop your own pane service with Ctrl+C when switching. Keep any existing port reservations and use the browser review while the port is occupied. |
+| Word cannot reach the add-in | While the service runs, try `/usr/bin/curl --fail https://127.0.0.1:43821/index.html` on Mac or `curl.exe --fail https://127.0.0.1:43821/index.html` on Windows. Check the service output for connection failures. For a TLS error, check expiration, IP SAN and system trust for the chain. On Mac, run `security verify-cert -c "$CERT" -p ssl -s 127.0.0.1`. Reload in Word after fixing the cause and check the binding. |
+| WordApi 1.6 missing or Office.js unavailable | Update desktop Word or restore HTTPS access to `appsforoffice.microsoft.com`, then reload. In Mac Word, blocking Office.js for the pane displayed a recovery message and disabled binding. After restoring the normal pane and selecting Reload in Word, Office.js became ready and the reviewer bound a new synthetic document. The device stayed online. Cold-cache, disconnected device and offline reopen behavior still need verification. [Office.js download and cache behavior](https://learn.microsoft.com/en-us/office/dev/add-ins/develop/referencing-the-javascript-api-for-office-library-from-its-cdn) |
+
+Sideloading covers development. For internal distribution, an administrator can evaluate the Microsoft 365 **Integrated apps** portal, provision the local service and certificate on pilot devices, and verify that the manifest, loopback URL and ribbon button work under tenant policies. A public Marketplace listing also requires certification across supported platforms. Neither production route has been qualified for this loopback manifest. [Distribution channels](https://learn.microsoft.com/en-us/office/dev/add-ins/publish/publish) · [Certification requirements](https://learn.microsoft.com/en-us/legal/marketplace/certification-policies#1120-office-add-ins-word-excel-powerpoint-and-outlook)

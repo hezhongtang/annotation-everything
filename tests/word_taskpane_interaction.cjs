@@ -57,9 +57,10 @@ async function applyInWord({ fileChanged = false, direct = false, relations = []
     createElement: element
   };
   const office = {
-    HostType: { Word: "Word" }, PlatformType: { Mac: "Mac" }, AsyncResultStatus: { Succeeded: "ok" },
+    HostType: { Word: "Word" }, PlatformType: { Mac: "Mac", PC: "PC" }, AsyncResultStatus: { Succeeded: "ok" },
     onReady: callback => callback({host: "Word", platform: "Mac"}),
     context: {
+      platform: "Mac",
       requirements: {isSetSupported: () => true}, diagnostics: {},
       document: {getFilePropertiesAsync: callback => callback({status: "ok", value: {url: file}})}
     }

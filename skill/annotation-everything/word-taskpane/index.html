@@ -106,13 +106,21 @@
           else reject(new Error("Word 无法读取当前文档的位置。"));
         });
       });
+      const localFileRequired = "请打开已保存到本机的 DOCX。";
       let path = fileUrl || "";
-      if (/^file:\/\//i.test(path)) {
+      const fileUri = /^file:\/\//i.test(path);
+      if (fileUri) {
         const url = new URL(path);
-        if (url.hostname || url.search || url.hash) throw new Error("请打开已保存到本机的 DOCX。");
+        if (url.hostname || url.search || url.hash || /%2f|%5c/i.test(url.pathname)) throw new Error(localFileRequired);
         path = decodeURIComponent(url.pathname);
       }
-      if (!path.startsWith("/") || path.startsWith("//")) throw new Error("请打开已保存到本机的 DOCX。");
+      if (Office.context.platform === Office.PlatformType.PC) {
+        if (fileUri && /^\/[a-z]:\//i.test(path)) path = path.slice(1);
+        if (!/^[a-z]:[\\/]/i.test(path)) throw new Error(localFileRequired);
+        // Match the server's resolved drive path; keep the full directory and exact file name.
+        return path[0].toUpperCase() + path.slice(1).replace(/\//g, "\\");
+      }
+      if (!path.startsWith("/") || path.startsWith("//")) throw new Error(localFileRequired);
       return path.normalize("NFC");
     }
 
@@ -408,10 +416,13 @@
       const waiting = setTimeout(() => message("Word 尚未就绪。请检查桌面宿主、网络和 Office.js 加载状态。"), 12000);
       Office.onReady(info => {
         clearTimeout(waiting);
-        wordReady = info.host === Office.HostType.Word && info.platform === Office.PlatformType.Mac &&
-                    Office.context.requirements.isSetSupported("WordApi", "1.6");
-        message(wordReady ? "未绑定。请打开目标文档，输入对应的绑定码。"
-                          : "当前宿主未验证或缺少 WordApi 1.6。可在支持该接口的 macOS Word 中连接，或使用浏览器对照页。");
+        const desktop = info.host === Office.HostType.Word &&
+                        [Office.PlatformType.Mac, Office.PlatformType.PC].includes(info.platform);
+        wordReady = desktop && Office.context.requirements.isSetSupported("WordApi", "1.6");
+        if (!desktop) message("请从 macOS 或 Windows 桌面 Word 打开侧栏，或使用浏览器对照页。");
+        else if (!wordReady) message("这版 Word 缺少 WordApi 1.6。请更新 Word，或使用浏览器对照页。");
+        else if (info.platform === Office.PlatformType.PC) message("Windows 实机验收待完成。要试用，请核对文档并输入绑定码。");
+        else message("未绑定。请打开目标文档，输入对应的绑定码。");
         refreshControls();
       });
     } else {
