@@ -51,7 +51,7 @@ def validate_threads(threads):
                 string(entry["id"], 512)
                 and bool(entry["id"])
                 and string(entry["authorName"], 512)
-                and string(entry["creationDate"], 128)
+                and (entry["creationDate"] is None or string(entry["creationDate"], 128))
                 and string(entry["content"])
             )
         require(all(keys(reply, "id authorName creationDate content") for reply in thread["replies"]))
