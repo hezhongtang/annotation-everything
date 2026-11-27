@@ -45,4 +45,4 @@ A、B、C 都有同一处表格“五日”、乙的批注、甲在该线程的�
 
 2026-11-27 确认的验收口径为：与原线程交叠的建议保留在侧栏，写入前提示冲突；正常写入另用无批注覆盖的文字验收。Word 的评论接口可以回读锚点、作者、线程标识和回复，未提供可将既有线程迁至另一正文范围的操作。[Word.Comment](https://learn.microsoft.com/en-us/javascript/api/word/word.comment) · [可更新的评论属性](https://learn.microsoft.com/en-us/javascript/api/word/word.interfaces.commentupdatedata)
 
-Windows 版桌面 Word 独立验收留待后续。组织分发和 Marketplace 审核均未在本轮执行。
+九项标准的逐条状态、同一份样本与收件人操作见[桌面 Word 收件人验收](word-recipient-acceptance.md)。Windows 版桌面 Word 独立验收留待后续。组织分发和 Marketplace 审核均未在本轮执行。
